@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -6,6 +7,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 import {
+  bar,
   claudeHeader,
   codexWrapperScript,
   installClaudeStatusline,
@@ -19,6 +21,7 @@ import {
 } from "../bin/ai-battery.js";
 
 const CLI_PATH = fileURLToPath(new URL("../bin/ai-battery.js", import.meta.url));
+const HUD_SH_PATH = fileURLToPath(new URL("../bin/ai-battery-hud", import.meta.url));
 
 function withEnv(values, callback) {
   const previous = new Map();
@@ -83,6 +86,112 @@ test("CLI entrypoint treats npm bin symlinks as direct execution", (t) => {
   }
 
   assert.equal(sameFilePath(CLI_PATH, linkPath), true);
+});
+
+test("legacy HUD launcher delegates to the macOS-capable JS entrypoint", { skip: process.platform !== "darwin" }, (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const result = spawnSync(HUD_SH_PATH, ["--once"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: tmpDir,
+      CODEX_HOME: path.join(tmpDir, ".codex"),
+      AI_BATTERY_STATE_DIR: path.join(tmpDir, "state")
+    },
+    timeout: 5000
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stderr, /powershell\.exe is required/i);
+  assert.doesNotMatch(result.stdout.trim(), /\b(Cx|Cl)\b/);
+  assert.match(result.stdout.trim(), /^(AI --|◎|✳)/);
+});
+
+test("menu bar image renderer writes an SVG with provider icons", (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const result = spawnSync(process.execPath, [CLI_PATH, "--menu-bar-image"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: tmpDir,
+      CODEX_HOME: path.join(tmpDir, ".codex"),
+      AI_BATTERY_STATE_DIR: path.join(tmpDir, "state")
+    },
+    timeout: 5000
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const imagePath = result.stdout.trim();
+  const svg = fs.readFileSync(imagePath, "utf8");
+  assert.match(svg, /^<svg /);
+  if (process.platform === "darwin" && fs.existsSync("/Applications/Codex.app/Contents/Resources/app.asar")) {
+    assert.match(svg, /<image\b/);
+    assert.match(svg, /data:image\/png;base64/);
+  } else {
+    assert.doesNotMatch(svg, /<image\b/);
+    assert.match(svg, /fill="#315CFF"/);
+  }
+  assert.match(svg, /fill="#D97706"/);
+  assert.match(svg, /stroke="#FFFFFF"/);
+  assert.match(svg, /fill="#FFFFFF"/);
+  assert.doesNotMatch(svg, /fill="#111111"/);
+  assert.doesNotMatch(svg, /\b(Cx|Cl)\b/);
+});
+
+test("menu detail image renderer writes connected color bars", (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const stateDir = path.join(tmpDir, "state");
+  fs.mkdirSync(stateDir, { recursive: true });
+  const resetAt = Math.floor((Date.now() + (90 * 60 * 1000)) / 1000);
+  fs.writeFileSync(path.join(stateDir, "claude-statusline.json"), `${JSON.stringify({
+    version: 1,
+    provider: "claude",
+    sourceType: "statusline",
+    capturedAt: new Date().toISOString(),
+    rateLimits: {
+      fiveHour: {
+        used_percentage: 60,
+        remaining_percentage: 40,
+        resets_at: resetAt,
+        window_minutes: 300
+      },
+      sevenDay: {
+        used_percentage: 37,
+        remaining_percentage: 63,
+        resets_at: resetAt,
+        window_minutes: 10080
+      }
+    }
+  })}\n`);
+
+  const result = spawnSync(process.execPath, [CLI_PATH, "--provider", "claude", "--menu-detail-image"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: tmpDir,
+      CODEX_HOME: path.join(tmpDir, ".codex"),
+      AI_BATTERY_STATE_DIR: stateDir
+    },
+    timeout: 5000
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const imagePath = result.stdout.trim();
+  const svg = fs.readFileSync(imagePath, "utf8");
+  assert.match(svg, /^<svg /);
+  assert.doesNotMatch(svg, /#1C1C1E/);
+  assert.match(svg, /rx="4"/);
+  assert.match(svg, /stroke-opacity="0\.14"/);
+  assert.match(svg, /<rect x="86" y="22" width="120" height="8"/);
+  assert.match(svg, /<text x="14" y="30"/);
+  assert.doesNotMatch(svg, /[█░▰▱]/);
+  assert.match(svg, /#FF9F0A/);
+  assert.match(svg, /5h [0-9:-]+ · 7d 63%/);
 });
 
 test("managed shell PATH block removal preserves surrounding rc content", () => {
@@ -290,4 +399,42 @@ test("Claude statusLine from another tool is skipped by default and restored aft
     assert.equal(removed.restored, true);
     assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, "utf8")).statusLine, externalStatusLine);
   });
+});
+
+test("colored battery bar uses one tall glyph for fill and track so heights match on macOS", () => {
+  // Regression: pairing the fill glyph with the light-shade glyph rendered the
+  // two halves at different heights under macOS terminal fonts. Both halves
+  // must be the SAME glyph and be separated only by ANSI color.
+  const glyph = "▮";
+  const rendered = bar(50, 10, "green", "ansi");
+  const plain = rendered.replace(/\x1b\[[0-9;]*m/g, "");
+  assert.equal(plain, glyph.repeat(10), "colored bar should be one uniform glyph");
+  assert.doesNotMatch(rendered, /[▆░▒▓]/, "no lower block or shade glyphs in colored output");
+  assert.match(rendered, /\x1b\[32m▮+\x1b\[0m/, "fill segment carries the charge color");
+  assert.match(rendered, /\x1b\[90m▮+\x1b\[0m/, "track segment is gray, not the fill color");
+});
+
+test("plain battery bar keeps distinct glyphs when there is no color", () => {
+  assert.equal(bar(50, 10, "green", "plain"), "▮▮▮▮▮░░░░░");
+});
+
+test("narrow statusline keeps every provider instead of truncating the tail", () => {
+  const snapshot = JSON.parse(spawnSync(process.execPath, [CLI_PATH, "--json"], {
+    encoding: "utf8",
+    timeout: 5000
+  }).stdout);
+  const providers = snapshot.results.map((entry) => entry.provider);
+  // Only meaningful when both providers report on this machine.
+  if (!(providers.includes("codex") && providers.includes("claude"))) return;
+
+  const narrow = spawnSync(process.execPath, [
+    CLI_PATH,
+    "--ansi",
+    "--bar-width", "10",
+    "--max-width", "40",
+    "--provider", "all"
+  ], { encoding: "utf8", timeout: 5000 });
+  const plain = narrow.stdout.replace(/\x1b\[[0-9;]*m/g, "");
+  assert.match(plain, /Codex/, "codex core survives narrow width");
+  assert.match(plain, /Claude/, "claude core survives narrow width instead of being cut off");
 });

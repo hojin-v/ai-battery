@@ -197,7 +197,8 @@ function macCommands(options) {
   const providerArgs = macProviderArgs(options.provider);
   const envPrefix = relevantEnvPrefix();
   return {
-    title: `${envPrefix} ${node} ${batteryJs} --menu-bar${providerArgs} 2>/dev/null`,
+    title: `${envPrefix} ${node} ${batteryJs} --menu-bar-image${providerArgs} 2>/dev/null`,
+    detailImage: `${envPrefix} ${node} ${batteryJs} --menu-detail-image${providerArgs} 2>/dev/null`,
     detail: `${envPrefix} ${node} ${batteryJs} --no-color${providerArgs} 2>/dev/null`
   };
 }
@@ -331,6 +332,7 @@ function runMacHud(cliArgs) {
   const osascriptArgs = [
     macStatusPath,
     commands.title,
+    commands.detailImage,
     commands.detail,
     String(options.interval)
   ];

@@ -239,7 +239,7 @@ Claude가 한 번 이상 statusLine payload를 전달해야 Claude의 사용량 
 
 ## Desktop HUD
 
-일반 터미널 위에 외부 프로세스가 안전하게 status line을 덧그리는 방식은 안정적이지 않습니다. 그래서 Windows에서는 floating overlay를, macOS에서는 상단 menu bar status item을 제공합니다. Windows native에서는 WSL 없이 PowerShell/WinForms로 바로 실행되고, WSL에서는 `powershell.exe`를 통해 같은 HUD를 띄웁니다. macOS에서는 메뉴바 두께에 맞춰 `Cx 75% | Cl 4%`처럼 한 줄 요약만 표시하고, 클릭하면 자세한 상태를 볼 수 있습니다.
+일반 터미널 위에 외부 프로세스가 안전하게 status line을 덧그리는 방식은 안정적이지 않습니다. 그래서 Windows에서는 floating overlay를, macOS에서는 상단 menu bar status item을 제공합니다. Windows native에서는 WSL 없이 PowerShell/WinForms로 바로 실행되고, WSL에서는 `powershell.exe`를 통해 같은 HUD를 띄웁니다. macOS에서는 투명 배경의 작은 SVG 이미지로 Codex와 Claude 로고, 짧은 미터, 퍼센트만 표시하고, 클릭하면 자세한 상태를 볼 수 있습니다.
 
 ```bash
 ai-battery hud

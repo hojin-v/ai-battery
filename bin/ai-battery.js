@@ -34,6 +34,14 @@ const CODEX_WRAPPER_MARKER = "AI_BATTERY_MANAGED_CODEX_WRAPPER";
 const CODEX_PREFERRED_BACKUP_SUFFIX = ".ai-battery-original-link";
 const CODEX_TIMESTAMP_BACKUP_MARKER = ".ai-battery-backup-";
 const DEFAULT_STATUSLINE_HEADER_COLUMN_GUARD = 2;
+const CODEX_MENU_BAR_COLOR = "#315CFF";
+const CLAUDE_MENU_BAR_COLOR = "#D97706";
+const MENU_BAR_WHITE = "#FFFFFF";
+const MENU_DETAIL_GREEN = "#30D158";
+const MENU_BAR_WARNING = "#FF9F0A";
+const MENU_BAR_DANGER = "#FF453A";
+const MENU_BAR_OUTLINE_OPACITY = "0.42";
+const MENU_DETAIL_OUTLINE_OPACITY = "0.14";
 
 function parseArgs(argv) {
   const args = {
@@ -49,6 +57,8 @@ function parseArgs(argv) {
     activeProvider: null,
     showPaths: false,
     menuBar: false,
+    menuBarImage: false,
+    menuDetailImage: false,
     silent: false,
     force: false,
     header: true,
@@ -106,6 +116,12 @@ function parseArgs(argv) {
       args.showPaths = true;
     } else if (arg === "--menu-bar") {
       args.menuBar = true;
+      args.style = "plain";
+    } else if (arg === "--menu-bar-image") {
+      args.menuBarImage = true;
+      args.style = "plain";
+    } else if (arg === "--menu-detail-image") {
+      args.menuDetailImage = true;
       args.style = "plain";
     } else if (arg === "--version" || arg === "-v") {
       args.version = true;
@@ -2373,17 +2389,31 @@ function statusColorize(data, text, args) {
   return colorize(text, activityColor(data), args.style);
 }
 
-function bar(percent, width) {
-  if (typeof percent !== "number") return "─".repeat(width);
+// The colored bar uses one glyph for both filled and empty halves, separated
+// only by color. ▮ is slightly shorter than a full block while still reading as
+// a tall, connected bar, and avoids the macOS font fallback issue where mixing
+// block glyphs with shade glyphs such as ░ made the two halves render at
+// different heights.
+const BAR_GLYPH = "▮";
+// Plain (--no-color / non-TTY) has no color to tell the halves apart, so it
+// falls back to a distinct empty glyph. This path is opt-in and not the TUI.
+const BAR_EMPTY_PLAIN_GLYPH = "░";
 
-  // Whole cells only: eighth-width partial blocks (▏▎▍…) leave the rest of
-  // their cell as bare background, which reads as a hole between the solid
-  // fill and the ░ shade, and they render inconsistently across terminal
-  // fonts. Rounding keeps both provider bars visually identical in style.
+function bar(percent, width, chargeColor = "green", style) {
+  if (typeof percent !== "number") return colorize("─".repeat(width), "gray", style);
+
   const exact = (clamp(percent, 0, 100) / 100) * width;
   let full = Math.round(exact);
   if (percent > 0 && full === 0) full = 1;
-  return `${"█".repeat(full)}${"░".repeat(width - full)}`;
+  if (full > width) full = width;
+
+  const fill = BAR_GLYPH.repeat(full);
+  const empty = width - full;
+
+  if (style === "plain") {
+    return `${fill}${BAR_EMPTY_PLAIN_GLYPH.repeat(empty)}`;
+  }
+  return `${colorize(fill, chargeColor, style)}${empty ? colorize(BAR_GLYPH.repeat(empty), "gray", style) : ""}`;
 }
 
 function duration(seconds) {
@@ -2723,17 +2753,21 @@ function formatCodex(data, args) {
   const primary = data.primary;
   const secondary = data.secondary;
   const bits = [
-    `${statusColorize(data, "Codex ", args)}${colorize(bar(data.percentRemaining, args.barWidth), batteryColor, args.style)}${statusColorize(data, ` ${data.percentRemaining}%`, args)}`
+    `${statusColorize(data, "Codex ", args)}${bar(data.percentRemaining, args.barWidth, batteryColor, args.style)}${statusColorize(data, ` ${data.percentRemaining}%`, args)}`
   ];
 
-  const primaryReset = limitResetText(primary);
-  if (primaryReset) {
-    bits.push(divider(args));
-    bits.push(statusColorize(data, primaryReset, args));
-  }
-  if (secondary) {
-    bits.push(divider(args));
-    bits.push(statusColorize(data, weekText(secondary), args));
+  // Compact drops the reset/week detail so the core "Codex ▓ 51%" survives a
+  // terminal too narrow to hold both providers in full (see render()).
+  if (!args.compact) {
+    const primaryReset = limitResetText(primary);
+    if (primaryReset) {
+      bits.push(divider(args));
+      bits.push(statusColorize(data, primaryReset, args));
+    }
+    if (secondary) {
+      bits.push(divider(args));
+      bits.push(statusColorize(data, weekText(secondary), args));
+    }
   }
   if (data.reachedType) {
     bits.push(statusColorize(data, `limit ${data.reachedType}`, args));
@@ -2753,16 +2787,18 @@ function formatClaude(data, args) {
   if (data.sourceType === "statusline") {
     const batteryColor = remainingColor(data.percentRemaining);
     const bits = [
-      `${statusColorize(data, "Claude ", args)}${colorize(bar(data.percentRemaining, args.barWidth), batteryColor, args.style)}${statusColorize(data, ` ${data.percentRemaining}%`, args)}`
+      `${statusColorize(data, "Claude ", args)}${bar(data.percentRemaining, args.barWidth, batteryColor, args.style)}${statusColorize(data, ` ${data.percentRemaining}%`, args)}`
     ];
-    const primaryReset = limitResetText(data.primary);
-    if (primaryReset) {
-      bits.push(divider(args));
-      bits.push(statusColorize(data, primaryReset, args));
-    }
-    if (data.secondary) {
-      bits.push(divider(args));
-      bits.push(statusColorize(data, weekText(data.secondary), args));
+    if (!args.compact) {
+      const primaryReset = limitResetText(data.primary);
+      if (primaryReset) {
+        bits.push(divider(args));
+        bits.push(statusColorize(data, primaryReset, args));
+      }
+      if (data.secondary) {
+        bits.push(divider(args));
+        bits.push(statusColorize(data, weekText(data.secondary), args));
+      }
     }
     if (args.showPaths) {
       const seen = ageText(data.ageSeconds);
@@ -2773,12 +2809,12 @@ function formatClaude(data, args) {
   }
 
   const bits = [
-    `${statusColorize(data, "Claude ", args)}${colorize(bar(null, args.barWidth), "gray", args.style)}${statusColorize(data, " --%", args)}`,
-    divider(args),
-    statusColorize(data, "5h --:--", args),
-    divider(args),
-    statusColorize(data, "7d ---%", args)
+    `${statusColorize(data, "Claude ", args)}${bar(null, args.barWidth, "gray", args.style)}${statusColorize(data, " --%", args)}`
   ];
+  if (!args.compact) {
+    bits.push(divider(args), statusColorize(data, "5h --:--", args));
+    bits.push(divider(args), statusColorize(data, "7d ---%", args));
+  }
 
   if (args.showPaths) bits.push(statusColorize(data, data.source, args));
   return bits.join(" ");
@@ -2818,14 +2854,383 @@ function renderLine(snapshot, args) {
 }
 
 function renderMenuBar(snapshot) {
+  const marks = {
+    codex: "◎",
+    claude: "✳"
+  };
+  const meter = (percent) => {
+    if (typeof percent !== "number") return "";
+    const width = 3;
+    const exact = (clamp(percent, 0, 100) / 100) * width;
+    let full = Math.round(exact);
+    if (percent > 0 && full === 0) full = 1;
+    return `${"▰".repeat(full)}${"▱".repeat(width - full)}`;
+  };
+
   const parts = snapshot.results
     .map((result) => {
-      const label = result.provider === "codex" ? "Cx" : "Cl";
-      if (!result.ok || typeof result.percentRemaining !== "number") return `${label} --`;
-      return `${label} ${result.percentRemaining}%`;
+      const mark = marks[result.provider] || "?";
+      if (!result.ok || typeof result.percentRemaining !== "number") return `${mark} --`;
+      return `${mark}${meter(result.percentRemaining)} ${result.percentRemaining}%`;
     })
     .filter(Boolean);
-  return parts.length ? parts.join(" | ") : "AI --";
+  return parts.length ? parts.join("  ") : "AI --";
+}
+
+function svgEscape(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+const MENU_BAR_BRAND_ICONS = {
+  // Fallback OpenAI SVG path from Wikimedia Commons ChatGPT-Logo.svg.
+  codex: {
+    viewBox: 320,
+    color: CODEX_MENU_BAR_COLOR,
+    path: "m297.06 130.97c7.26-21.79 4.76-45.66-6.85-65.48-17.46-30.4-52.56-46.04-86.84-38.68-15.25-17.18-37.16-26.95-60.13-26.81-35.04-.08-66.13 22.48-76.91 55.82-22.51 4.61-41.94 18.7-53.31 38.67-17.59 30.32-13.58 68.54 9.92 94.54-7.26 21.79-4.76 45.66 6.85 65.48 17.46 30.4 52.56 46.04 86.84 38.68 15.24 17.18 37.16 26.95 60.13 26.8 35.06.09 66.16-22.49 76.94-55.86 22.51-4.61 41.94-18.7 53.31-38.67 17.57-30.32 13.55-68.51-9.94-94.51zm-120.28 168.11c-14.03.02-27.62-4.89-38.39-13.88.49-.26 1.34-.73 1.89-1.07l63.72-36.8c3.26-1.85 5.26-5.32 5.24-9.07v-89.83l26.93 15.55c.29.14.48.42.52.74v74.39c-.04 33.08-26.83 59.9-59.91 59.97zm-128.84-55.03c-7.03-12.14-9.56-26.37-7.15-40.18.47.28 1.3.79 1.89 1.13l63.72 36.8c3.23 1.89 7.23 1.89 10.47 0l77.79-44.92v31.1c.02.32-.13.63-.38.83l-64.41 37.19c-28.69 16.52-65.33 6.7-81.92-21.95zm-16.77-139.09c7-12.16 18.05-21.46 31.21-26.29 0 .55-.03 1.52-.03 2.2v73.61c-.02 3.74 1.98 7.21 5.23 9.06l77.79 44.91-26.93 15.55c-.27.18-.61.21-.91.08l-64.42-37.22c-28.63-16.58-38.45-53.21-21.95-81.89zm221.26 51.49-77.79-44.92 26.93-15.54c.27-.18.61-.21.91-.08l64.42 37.19c28.68 16.57 38.51 53.26 21.94 81.94-7.01 12.14-18.05 21.44-31.2 26.28v-75.81c.03-3.74-1.96-7.2-5.2-9.06zm26.8-40.34c-.47-.29-1.3-.79-1.89-1.13l-63.72-36.8c-3.23-1.89-7.23-1.89-10.47 0l-77.79 44.92v-31.1c-.02-.32.13-.63.38-.83l64.41-37.16c28.69-16.55 65.37-6.7 81.91 22 6.99 12.12 9.52 26.31 7.15 40.1zm-168.51 55.43-26.94-15.55c-.29-.14-.48-.42-.52-.74v-74.39c.02-33.12 26.89-59.96 60.01-59.94 14.01 0 27.57 4.92 38.34 13.88-.49.26-1.33.73-1.89 1.07l-63.72 36.8c-3.26 1.85-5.26 5.31-5.24 9.06l-.04 89.79zm14.63-31.54 34.65-20.01 34.65 20v40.01l-34.65 20-34.65-20z"
+  },
+  claude: {
+    viewBox: 24,
+    color: CLAUDE_MENU_BAR_COLOR,
+    path: "m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"
+  }
+};
+
+const CODEX_MACOS_APP_ASAR = "/Applications/Codex.app/Contents/Resources/app.asar";
+const CODEX_MENU_BAR_PNG_ASSET_RE = /^webview\/assets\/codex-app-ga-logo--[^/]+\.png$/;
+const CODEX_MENU_BAR_SYMBOL_ASSET_RE = /^webview\/assets\/codex--[^/]+\.js$/;
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+let codexMenuBarPngIconPathCache;
+let codexMenuBarSvgIconCache;
+
+function readExactSync(fd, length, position) {
+  const buffer = Buffer.alloc(length);
+  let offset = 0;
+  while (offset < length) {
+    const bytesRead = fs.readSync(fd, buffer, offset, length - offset, position + offset);
+    if (bytesRead === 0) throw new Error("Unexpected EOF");
+    offset += bytesRead;
+  }
+  return buffer;
+}
+
+function findAsarFile(node, matcher, prefix = "") {
+  if (!node?.files || typeof node.files !== "object") return null;
+  for (const [name, entry] of Object.entries(node.files)) {
+    const filePath = prefix ? `${prefix}/${name}` : name;
+    if (entry?.files) {
+      const found = findAsarFile(entry, matcher, filePath);
+      if (found) return found;
+    } else if (matcher(filePath, entry)) {
+      return { filePath, entry };
+    }
+  }
+  return null;
+}
+
+function readAsarAssetBuffer(asarPath, matcher, maxSize = 128 * 1024) {
+  if (!fs.existsSync(asarPath)) return null;
+
+  let fd = null;
+  try {
+    fd = fs.openSync(asarPath, "r");
+    const prefix = readExactSync(fd, 16, 0);
+    const headerSize = prefix.readUInt32LE(4);
+    const headerLength = prefix.readUInt32LE(12);
+    if (headerLength <= 0 || headerLength > headerSize || headerLength > 16 * 1024 * 1024) return null;
+
+    const header = JSON.parse(readExactSync(fd, headerLength, 16).toString("utf8"));
+    const found = findAsarFile(header, matcher);
+    if (!found) return null;
+
+    const offset = Number(found.entry.offset);
+    const size = Number(found.entry.size);
+    if (
+      !Number.isSafeInteger(offset)
+      || !Number.isSafeInteger(size)
+      || offset < 0
+      || size <= 0
+      || size > maxSize
+    ) {
+      return null;
+    }
+
+    return readExactSync(fd, size, 8 + headerSize + offset);
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // Ignore close errors while falling back to the bundled SVG path.
+      }
+    }
+  }
+}
+
+function readAsarAsset(asarPath, matcher, maxSize) {
+  const buffer = readAsarAssetBuffer(asarPath, matcher, maxSize);
+  return buffer ? buffer.toString("utf8") : null;
+}
+
+function isPngBuffer(buffer) {
+  return Buffer.isBuffer(buffer)
+    && buffer.length >= PNG_SIGNATURE.length
+    && buffer.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE);
+}
+
+function codexMenuBarPngIconPath() {
+  if (codexMenuBarPngIconPathCache !== undefined) return codexMenuBarPngIconPathCache;
+  codexMenuBarPngIconPathCache = null;
+
+  if (process.env.AI_BATTERY_CODEX_ICON && fs.existsSync(process.env.AI_BATTERY_CODEX_ICON)) {
+    codexMenuBarPngIconPathCache = process.env.AI_BATTERY_CODEX_ICON;
+    return codexMenuBarPngIconPathCache;
+  }
+  if (process.platform !== "darwin") return codexMenuBarPngIconPathCache;
+
+  const sourceStat = safeStat(CODEX_MACOS_APP_ASAR);
+  if (!sourceStat) return codexMenuBarPngIconPathCache;
+
+  for (const root of [stateDir(), path.join(os.tmpdir(), "ai-battery")]) {
+    const outputPath = path.join(root, "codex-menu-bar-transparent.png");
+    try {
+      const outputStat = safeStat(outputPath);
+      if (outputStat && outputStat.mtimeMs >= sourceStat.mtimeMs && outputStat.size > 0) {
+        codexMenuBarPngIconPathCache = outputPath;
+        return codexMenuBarPngIconPathCache;
+      }
+    } catch {
+      // Try extracting a fresh copy below.
+    }
+  }
+
+  const icon = readAsarAssetBuffer(CODEX_MACOS_APP_ASAR, (filePath) => CODEX_MENU_BAR_PNG_ASSET_RE.test(filePath), 1024 * 1024);
+  if (!isPngBuffer(icon)) return codexMenuBarPngIconPathCache;
+
+  for (const root of [stateDir(), path.join(os.tmpdir(), "ai-battery")]) {
+    const outputPath = path.join(root, "codex-menu-bar-transparent.png");
+    try {
+      fs.mkdirSync(path.dirname(outputPath), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(outputPath, icon);
+      fs.utimesSync(outputPath, sourceStat.atime, sourceStat.mtime);
+      codexMenuBarPngIconPathCache = outputPath;
+      return codexMenuBarPngIconPathCache;
+    } catch {
+      // Fall back to the next writable location, then to the inline SVG path.
+    }
+  }
+
+  return codexMenuBarPngIconPathCache;
+}
+
+function extractCodexMenuBarSvgIcon(source) {
+  const matches = [...String(source || "").matchAll(/(?:(fillRule:`evenodd`,clipRule:`evenodd`,))?d:`([^`]+)`,fill:`currentColor`/g)];
+  if (matches.length < 3) return null;
+  return {
+    viewBox: 20,
+    color: CODEX_MENU_BAR_COLOR,
+    paths: matches.slice(0, 3).map((match) => ({
+      d: match[2],
+      fillRule: match[1] ? "evenodd" : null,
+      clipRule: match[1] ? "evenodd" : null
+    }))
+  };
+}
+
+function codexMenuBarSvgIcon() {
+  if (codexMenuBarSvgIconCache !== undefined) return codexMenuBarSvgIconCache;
+  codexMenuBarSvgIconCache = null;
+  if (process.platform !== "darwin") return codexMenuBarSvgIconCache;
+
+  const source = readAsarAsset(CODEX_MACOS_APP_ASAR, (filePath) => CODEX_MENU_BAR_SYMBOL_ASSET_RE.test(filePath));
+  const icon = extractCodexMenuBarSvgIcon(source);
+  if (icon) codexMenuBarSvgIconCache = icon;
+  return codexMenuBarSvgIconCache;
+}
+
+function imageDataUri(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  const mime = ext === ".svg" ? "image/svg+xml" : "image/png";
+  return `data:${mime};base64,${fs.readFileSync(filePath).toString("base64")}`;
+}
+
+function menuBarBatteryColor(percent) {
+  if (typeof percent !== "number") return MENU_BAR_WHITE;
+  if (percent <= 20) return MENU_BAR_DANGER;
+  if (percent <= 40) return MENU_BAR_WARNING;
+  return MENU_BAR_WHITE;
+}
+
+function menuDetailBatteryColor(percent) {
+  if (typeof percent !== "number") return "none";
+  if (percent <= 20) return MENU_BAR_DANGER;
+  if (percent <= 40) return MENU_BAR_WARNING;
+  return MENU_DETAIL_GREEN;
+}
+
+function renderMenuBarSvgIcon(icon, x, y, height) {
+  const scale = height / icon.viewBox;
+  const paths = icon.paths || [{ d: icon.path }];
+  const renderedPaths = paths.map((iconPath) => {
+    const ruleAttrs = [
+      iconPath.fillRule ? ` fill-rule="${iconPath.fillRule}"` : "",
+      iconPath.clipRule ? ` clip-rule="${iconPath.clipRule}"` : ""
+    ].join("");
+    return `<path d="${iconPath.d}" fill="${icon.color}"${ruleAttrs}/>`;
+  }).join("");
+  return `<g transform="translate(${x} ${y}) scale(${scale})">${renderedPaths}</g>`;
+}
+
+function menuBarImageIcon(provider, x, y) {
+  const height = provider === "codex" ? 19 : 17;
+  const iconY = provider === "codex" ? y - 0.5 : y;
+  if (provider === "codex") {
+    const pngIconPath = codexMenuBarPngIconPath();
+    if (pngIconPath) {
+      return `<image x="${x}" y="${iconY}" width="${height}" height="${height}" href="${imageDataUri(pngIconPath)}"/>`;
+    }
+  }
+
+  const icon = provider === "codex"
+    ? (codexMenuBarSvgIcon() || MENU_BAR_BRAND_ICONS.codex)
+    : (MENU_BAR_BRAND_ICONS[provider] || MENU_BAR_BRAND_ICONS.codex);
+  return renderMenuBarSvgIcon(icon, x, iconY, height);
+}
+
+function renderMenuBarImage(snapshot) {
+  const startX = 0;
+  const endPadding = 0;
+  const providerWidth = 56;
+  const providerContentWidth = 48;
+  const height = 24;
+  const visibleResults = snapshot.results.filter(Boolean);
+  const width = visibleResults.length
+    ? startX + ((visibleResults.length - 1) * providerWidth) + providerContentWidth + endPadding
+    : 54;
+  const items = [];
+
+  visibleResults.forEach((result, index) => {
+    const x = startX + (index * providerWidth);
+    const percent = typeof result.percentRemaining === "number" ? clamp(result.percentRemaining, 0, 100) : null;
+    const meterX = x + 23;
+    const meterY = 3;
+    const meterWidth = 24;
+    const meterHeight = 5;
+    const meterStroke = 1.1;
+    const meterInnerX = meterX + 2;
+    const meterInnerY = meterY + 1.7;
+    const meterInnerWidth = meterWidth - 4;
+    const meterInnerHeight = meterHeight - 3.4;
+    const fillWidth = percent === null ? 0 : Math.max(percent > 0 ? 2 : 0, Math.round((percent / 100) * meterInnerWidth));
+    const fill = menuBarBatteryColor(percent);
+    const label = percent === null ? "--" : `${Math.round(percent)}%`;
+    const labelX = meterX + (meterWidth / 2);
+
+    items.push(menuBarImageIcon(result.provider, x, 3));
+    items.push(`<rect x="${meterX}" y="${meterY}" width="${meterWidth}" height="${meterHeight}" rx="2.5" fill="none" stroke="${MENU_BAR_WHITE}" stroke-opacity="${MENU_BAR_OUTLINE_OPACITY}" stroke-width="${meterStroke}"/>`);
+    if (fillWidth > 0) {
+      items.push(`<rect x="${meterInnerX}" y="${meterInnerY}" width="${fillWidth}" height="${meterInnerHeight}" rx="0.8" fill="${fill}"/>`);
+    }
+    items.push(`<text x="${labelX}" y="21" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="9.5" font-weight="650" fill="${MENU_BAR_WHITE}">${svgEscape(label)}</text>`);
+  });
+
+  if (!items.length) {
+    items.push(`<text x="9" y="16" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="11" font-weight="650" fill="${MENU_BAR_WHITE}">AI --</text>`);
+  }
+
+  const svg = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+    ...items,
+    "</svg>",
+    ""
+  ].join("\n");
+
+  for (const root of [stateDir(), path.join(os.tmpdir(), "ai-battery")]) {
+    const filePath = path.join(root, "macos-menu-bar.svg");
+    try {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(filePath, svg, "utf8");
+      return filePath;
+    } catch {
+      // Fall back to the next writable location.
+    }
+  }
+  throw new Error("Could not write macOS menu bar image");
+}
+
+function menuDetailLimitText(limit) {
+  if (!limit) return null;
+  const label = shortWindow(limit.windowMinutes);
+  if (label === "5h") return `${label} ${resetClock(limit)}`;
+  if (typeof limit.remainingPercent === "number") return `${label} ${limit.remainingPercent}%`;
+  return `${label} ${resetClock(limit)}`;
+}
+
+function menuDetailMetaText(result) {
+  const parts = [
+    menuDetailLimitText(result.primary),
+    menuDetailLimitText(result.secondary)
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
+
+function renderMenuDetailImage(snapshot) {
+  const visibleResults = snapshot.results.filter(Boolean);
+  const rows = visibleResults.length ? visibleResults : [{ provider: "ai", ok: false }];
+  const width = 392;
+  const rowHeight = 36;
+  const verticalPadding = 8;
+  const height = (rows.length * rowHeight) + (verticalPadding * 2);
+  const barX = 86;
+  const barWidth = 120;
+  const barHeight = 8;
+  const items = [];
+
+  rows.forEach((result, index) => {
+    const y = verticalPadding + (index * rowHeight);
+    const baseline = y + 22;
+    const provider = result.provider === "codex" ? "Codex" : result.provider === "claude" ? "Claude" : "AI";
+    const percent = typeof result.percentRemaining === "number" ? clamp(result.percentRemaining, 0, 100) : null;
+    const fillWidth = percent === null ? 0 : Math.max(percent > 0 ? 3 : 0, Math.round((percent / 100) * barWidth));
+    const fill = menuDetailBatteryColor(percent);
+    const percentText = percent === null ? "--%" : `${Math.round(percent)}%`;
+    const metaText = result.ok ? menuDetailMetaText(result) : "unavailable";
+    const barY = baseline - barHeight;
+
+    items.push(`<text x="14" y="${baseline}" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="13" font-weight="650" fill="#F5F5F7">${svgEscape(provider)}</text>`);
+    items.push(`<rect x="${barX}" y="${barY}" width="${barWidth}" height="${barHeight}" rx="4" fill="#FFFFFF" fill-opacity="0.10" stroke="#FFFFFF" stroke-opacity="${MENU_DETAIL_OUTLINE_OPACITY}" stroke-width="1"/>`);
+    if (fillWidth > 0) {
+      items.push(`<rect x="${barX}" y="${barY}" width="${fillWidth}" height="${barHeight}" rx="4" fill="${fill}"/>`);
+    }
+    items.push(`<text x="${barX + barWidth + 12}" y="${baseline}" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="13" font-weight="700" fill="#F5F5F7">${svgEscape(percentText)}</text>`);
+    if (metaText) {
+      items.push(`<text x="${width - 14}" y="${baseline}" text-anchor="end" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="13" font-weight="550" fill="#A1A1AA">${svgEscape(metaText)}</text>`);
+    }
+  });
+
+  const svg = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`,
+    ...items,
+    "</svg>",
+    ""
+  ].join("\n");
+
+  for (const root of [stateDir(), path.join(os.tmpdir(), "ai-battery")]) {
+    const filePath = path.join(root, "macos-menu-detail.svg");
+    try {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+      fs.writeFileSync(filePath, svg, "utf8");
+      return filePath;
+    } catch {
+      // Fall back to the next writable location.
+    }
+  }
+  throw new Error("Could not write macOS menu detail image");
 }
 
 function applyLeftPadding(output, args) {
@@ -2840,6 +3245,8 @@ function applyLeftPadding(output, args) {
 
 function render(snapshot, args) {
   if (args.json) return JSON.stringify(snapshot, null, 2);
+  if (args.menuBarImage) return renderMenuBarImage(snapshot);
+  if (args.menuDetailImage) return renderMenuDetailImage(snapshot);
   if (args.menuBar) return renderMenuBar(snapshot);
 
   const maxWidth = args.maxWidth
@@ -2847,11 +3254,19 @@ function render(snapshot, args) {
     : null;
 
   if (args.maxWidth) {
-    for (let width = args.barWidth; width >= 4; width -= 1) {
-      const trialArgs = { ...args, barWidth: width };
-      const line = renderLine(snapshot, trialArgs);
-      if (visibleWidth(line) <= maxWidth || width === 4) return applyLeftPadding(line, args);
+    // First shrink the bars. If the line still overflows at the minimum bar
+    // width, switch to compact (drop the reset/week detail) and shrink again,
+    // so a narrow terminal keeps every provider's core reading instead of
+    // hard-truncating the tail — which would silently drop the last provider.
+    let lastLine = null;
+    for (const compact of [false, true]) {
+      for (let width = args.barWidth; width >= 4; width -= 1) {
+        const trialArgs = { ...args, barWidth: width, compact };
+        lastLine = renderLine(snapshot, trialArgs);
+        if (visibleWidth(lastLine) <= maxWidth) return applyLeftPadding(lastLine, args);
+      }
     }
+    return applyLeftPadding(lastLine, args);
   }
 
   return applyLeftPadding(renderLine(snapshot, args), args);
@@ -3130,6 +3545,7 @@ async function main() {
 }
 
 export {
+  bar,
   claudeHeader,
   codexWrapperScript,
   firstPercentValue,
