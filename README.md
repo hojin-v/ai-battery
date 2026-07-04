@@ -51,7 +51,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | `ai-battery --watch` | 지원 | 지원 | 지원 | 지원 | 터미널 안에서 주기적으로 갱신합니다. |
 | Claude statusLine | 지원 | 지원 | 지원 | 지원 | Claude Code `statusLine`에 `node <script>` 명령을 저장합니다. |
 | Codex terminal row | 지원 | 지원 | 지원 | 지원 | Windows는 `node-pty`/ConPTY가 있으면 reserved row, 없으면 overlay fallback을 사용합니다. WSL/Linux/macOS는 POSIX PTY와 `python3`를 사용합니다. |
-| `ai-battery setup codex` | 지원 | 지원 | 지원 | 지원 | Windows는 `codex.cmd` wrapper, WSL/Linux/macOS는 POSIX shell wrapper를 설치합니다. |
+| `ai-battery setup codex` | 지원 | 지원 | 지원 | 지원 | Codex `[tui].status_line`을 맞추고, Windows는 `codex.cmd` wrapper, WSL/Linux/macOS는 POSIX shell wrapper를 설치합니다. |
 | `ai-battery hud` | 지원 | 지원 | 미지원 | 지원 | Windows/WSL은 PowerShell/WinForms HUD, macOS는 menu bar status item입니다. |
 
 실행 중 감지(흰색/회색 표시)는 Linux/WSL은 `/proc`, macOS는 `ps`, Windows는 PowerShell 프로세스 목록을 사용합니다.
@@ -141,7 +141,7 @@ ai-battery uninstall claude
 ai-battery uninstall hud
 ```
 
-이 명령은 AI Battery가 관리 마커를 넣은 Codex wrapper, Claude `statusLine`, HUD/menu bar autostart와 실행 중인 HUD를 정리합니다. 다른 도구가 만든 `codex` 파일이나 Claude `statusLine`은 건드리지 않습니다. 이전 버전이나 `--force`로 기존 파일을 백업한 경우에는 가능한 한 원래 파일/symlink를 복원합니다. 현재 이미 AI Battery wrapper 안에서 실행 중인 Codex 세션의 terminal row는 그 세션을 종료해야 사라집니다.
+이 명령은 AI Battery가 관리 마커를 넣은 Codex wrapper, Codex `[tui].status_line`, Claude `statusLine`, HUD/menu bar autostart와 실행 중인 HUD를 정리합니다. 다른 도구가 만든 `codex` 파일이나 Claude `statusLine`은 건드리지 않습니다. Codex config가 setup 이후 사용자가 수정한 상태라면 안전하게 그대로 둡니다. 이전 버전이나 `--force`로 기존 파일을 백업한 경우에는 가능한 한 원래 파일/symlink를 복원합니다. 현재 이미 AI Battery wrapper 안에서 실행 중인 Codex 세션의 terminal row는 그 세션을 종료해야 사라집니다.
 
 최신 npm은 패키지의 uninstall lifecycle을 실행하지 않기 때문에 `npm uninstall ai-battery` 또는 `npm uninstall -g ai-battery`만으로는 외부 통합 지점을 자동 정리할 수 없습니다. 완전히 제거하려면 npm 패키지를 지우기 전에 먼저 실행하세요.
 
@@ -150,11 +150,11 @@ ai-battery uninstall
 npm uninstall -g ai-battery
 ```
 
-이미 npm 패키지를 먼저 지운 뒤라면, 다시 설치한 다음 `ai-battery uninstall`을 실행하거나 아래 항목을 직접 확인해 제거해야 합니다: AI Battery가 만든 Codex wrapper, shell rc의 `# >>> ai-battery setup >>>` block, Claude `statusLine`, HUD/menu bar autostart.
+이미 npm 패키지를 먼저 지운 뒤라면, 다시 설치한 다음 `ai-battery uninstall`을 실행하거나 아래 항목을 직접 확인해 제거해야 합니다: AI Battery가 만든 Codex wrapper, shell rc의 `# >>> ai-battery setup >>>` block, Codex `~/.codex/config.toml`의 `[tui].status_line`, Claude `statusLine`, HUD/menu bar autostart.
 
 ## Setup
 
-`setup`은 한 번만 실행합니다. Claude Code에는 statusLine hook을 설치하고, Codex에는 platform wrapper를 설치해서 이후에는 추가 명령 없이 원래처럼 실행하게 합니다.
+`setup`은 한 번만 실행합니다. Claude Code에는 statusLine hook을 설치하고, Codex에는 기본 status line 구성과 platform wrapper를 설치해서 이후에는 추가 명령 없이 원래처럼 실행하게 합니다.
 
 ```bash
 ai-battery setup
@@ -167,7 +167,7 @@ ai-battery setup claude
 ai-battery setup codex
 ```
 
-Codex wrapper는 기존 `codex` 명령을 직접 덮어쓰지 않습니다. `~/.local/bin`이 이미 PATH에서 원본 `codex`보다 앞에 있고 `~/.local/bin/codex`가 비어 있거나 AI Battery 관리 파일이면 그 위치에 wrapper를 둬서 바로 잡히게 합니다. 그렇지 않으면 `~/.local/share/ai-battery/bin/codex`에 관리형 wrapper를 만들고, 필요한 경우 셸 설정에 이 디렉터리를 PATH 앞쪽으로 추가합니다. `~/.local/bin/codex` 같은 공용 위치에 이미 다른 파일이 있으면 덮어쓰지 않습니다. 새 터미널부터 `codex`가 자동으로 AI Battery 하단 행과 함께 실행됩니다. 같은 터미널에서 이미 `codex`를 실행한 적이 있으면 셸 캐시 때문에 `hash -r`이 한 번 필요할 수 있고, PATH 추가가 필요한 경우에는 `setup` 출력에 표시되는 `source ...` 명령을 실행하세요.
+Codex setup은 `~/.codex/config.toml`의 `[tui]`에 `model-with-reasoning`, `current-dir`, `git-branch` status line을 설정합니다. 기존 값이 있으면 uninstall 복구용으로 백업합니다. Codex wrapper는 기존 `codex` 명령을 직접 덮어쓰지 않습니다. `~/.local/bin`이 이미 PATH에서 원본 `codex`보다 앞에 있고 `~/.local/bin/codex`가 비어 있거나 AI Battery 관리 파일이면 그 위치에 wrapper를 둬서 바로 잡히게 합니다. 그렇지 않으면 `~/.local/share/ai-battery/bin/codex`에 관리형 wrapper를 만들고, 필요한 경우 셸 설정에 이 디렉터리를 PATH 앞쪽으로 추가합니다. `~/.local/bin/codex` 같은 공용 위치에 이미 다른 파일이 있으면 덮어쓰지 않습니다. 새 터미널부터 `codex`가 자동으로 AI Battery 하단 행과 함께 실행됩니다. 같은 터미널에서 이미 `codex`를 실행한 적이 있으면 셸 캐시 때문에 `hash -r`이 한 번 필요할 수 있고, PATH 추가가 필요한 경우에는 `setup` 출력에 표시되는 `source ...` 명령을 실행하세요.
 
 Windows native `cmd`/PowerShell에서는 `codex.cmd` wrapper가 Windows runner를 실행합니다. `node-pty`가 설치되어 있으면 ConPTY로 Codex 화면을 한 줄 짧게 띄워 하단 row를 예약하고, `node-pty`가 없거나 로드되지 않으면 같은 콘솔의 하단에 overlay row를 다시 그리는 fallback을 사용합니다. Claude statusLine은 일반 `cmd`/PowerShell 프롬프트가 아니라 Claude Code 안에서만 표시됩니다.
 
@@ -192,7 +192,7 @@ ai-battery on all
 
 ## Codex Terminal Row
 
-Codex 자체 status line은 수정하지 않습니다. `ai-battery setup`은 `codex` wrapper를 설치해서 사용자가 원래처럼 `codex`만 입력해도 `ai-battery-run`이 내부에서 Codex를 한 줄 짧은 PTY 안에서 실행하도록 합니다.
+`ai-battery setup`은 Codex 자체 status line을 `모델/추론강도 · 워크스페이스 · git branch` 구성으로 맞춥니다. 사용량 표시는 별도의 `codex` wrapper가 담당하므로, 사용자는 원래처럼 `codex`만 입력하면 `ai-battery-run`이 내부에서 Codex를 한 줄 짧은 PTY 안에서 실행합니다.
 
 ```bash
 codex

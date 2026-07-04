@@ -9,15 +9,18 @@ import { fileURLToPath } from "node:url";
 import {
   bar,
   claudeHeader,
+  codexStatusLineMatches,
   codexWrapperScript,
   installClaudeStatusline,
+  installCodexStatusLine,
   installCodexWrapper,
   normalizeLimit,
   removeAiBatteryShellPathBlock,
   removeOrRestoreCodexWrapper,
   sameFilePath,
   visibleWidth,
-  uninstallClaudeStatusline
+  uninstallClaudeStatusline,
+  uninstallCodexWrapper
 } from "../bin/ai-battery.js";
 import {
   parseArgs as parseWindowsRunnerArgs,
@@ -406,6 +409,110 @@ test("setup prefers empty ~/.local/bin when it is already before codex on PATH",
   if (process.platform === "win32") {
     assert.match(fs.readFileSync(localCodex, "utf8"), /--left-padding 2 --/);
   }
+});
+
+test("setup codex configures Codex built-in status_line and uninstall restores it", (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const homeDir = path.join(tmpDir, "home");
+  const stateDir = path.join(tmpDir, "state");
+  const dataDir = path.join(tmpDir, "data");
+  const codexHome = path.join(homeDir, ".codex");
+  const shimDir = path.join(tmpDir, "shim");
+  const originalDir = path.join(tmpDir, "original");
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.mkdirSync(originalDir, { recursive: true });
+
+  const originalCodex = path.join(originalDir, CODEX_BIN_NAME);
+  const originalCodexText = process.platform === "win32"
+    ? "@echo off\r\necho original codex\r\n"
+    : "#!/bin/sh\necho original codex\n";
+  fs.writeFileSync(originalCodex, originalCodexText, { mode: 0o755 });
+
+  const configToml = path.join(codexHome, "config.toml");
+  const originalToml = [
+    'model = "gpt-5"',
+    "",
+    "[tui]",
+    'status_line = ["model-with-reasoning", "current-dir", "git-branch", "context-remaining"]',
+    "status_line_use_colors = true",
+    ""
+  ].join("\n");
+  fs.writeFileSync(configToml, originalToml);
+
+  const env = {
+    ...process.env,
+    HOME: homeDir,
+    CODEX_HOME: codexHome,
+    XDG_STATE_HOME: stateDir,
+    XDG_DATA_HOME: dataDir,
+    AI_BATTERY_SHIM_DIR: shimDir,
+    AI_BATTERY_SKIP_WINDOWS_PATH_WRITE: "1",
+    AI_BATTERY_RC: path.join(tmpDir, "shellrc"),
+    PATH: `${originalDir}${path.delimiter}${process.env.PATH || ""}`
+  };
+
+  const setup = spawnSync(process.execPath, [CLI_PATH, "setup", "codex", "--json"], {
+    encoding: "utf8",
+    env,
+    timeout: 5000
+  });
+
+  assert.equal(setup.status, 0, setup.stderr);
+  const setupJson = JSON.parse(setup.stdout);
+  assert.equal(setupJson.codex.statusLine.changed, true);
+  const configuredToml = fs.readFileSync(configToml, "utf8");
+  assert.equal(codexStatusLineMatches(configuredToml), true);
+  assert.doesNotMatch(configuredToml, /context-remaining/);
+
+  const uninstall = spawnSync(process.execPath, [CLI_PATH, "uninstall", "codex", "--json"], {
+    encoding: "utf8",
+    env,
+    timeout: 5000
+  });
+
+  assert.equal(uninstall.status, 0, uninstall.stderr);
+  const uninstallJson = JSON.parse(uninstall.stdout);
+  assert.equal(uninstallJson.results.codex.statusLine.restored, true);
+  assert.equal(fs.readFileSync(configToml, "utf8"), originalToml);
+});
+
+test("uninstall leaves Codex config untouched after user edits", (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const homeDir = path.join(tmpDir, "home");
+  const stateDir = path.join(tmpDir, "state");
+  const dataDir = path.join(tmpDir, "data");
+  const codexHome = path.join(homeDir, ".codex");
+  fs.mkdirSync(codexHome, { recursive: true });
+  const configToml = path.join(codexHome, "config.toml");
+  fs.writeFileSync(configToml, [
+    "[tui]",
+    'status_line = ["context-remaining"]',
+    ""
+  ].join("\n"));
+
+  withEnv({
+    HOME: homeDir,
+    CODEX_HOME: codexHome,
+    XDG_STATE_HOME: stateDir,
+    XDG_DATA_HOME: dataDir,
+    AI_BATTERY_RC: path.join(tmpDir, "shellrc"),
+    PATH: ""
+  }, () => {
+    const installed = installCodexStatusLine();
+    assert.equal(installed.changed, true);
+    fs.appendFileSync(configToml, "extra_status_hint = true\n");
+
+    const removed = uninstallCodexWrapper();
+
+    assert.equal(removed.statusLine.skipped, true);
+    const currentToml = fs.readFileSync(configToml, "utf8");
+    assert.match(currentToml, /extra_status_hint = true/);
+    assert.equal(codexStatusLineMatches(currentToml), true);
+  });
 });
 
 test("Claude statusLine header places context left at the terminal right edge", () => {

@@ -33,6 +33,7 @@ const TEARDOWN_TARGETS = ["codex", "claude", "hud"];
 const CODEX_WRAPPER_MARKER = "AI_BATTERY_MANAGED_CODEX_WRAPPER";
 const CODEX_PREFERRED_BACKUP_SUFFIX = ".ai-battery-original-link";
 const CODEX_TIMESTAMP_BACKUP_MARKER = ".ai-battery-backup-";
+const CODEX_STATUS_LINE = ["model-with-reasoning", "current-dir", "git-branch"];
 const DEFAULT_STATUSLINE_HEADER_COLUMN_GUARD = 2;
 const CODEX_MENU_BAR_COLOR = "#315CFF";
 const CLAUDE_MENU_BAR_COLOR = "#D97706";
@@ -257,6 +258,7 @@ function defaultConfig() {
       claude: true
     },
     codexWrapper: null,
+    codexStatusLineBackup: null,
     claudeStatusLineBackup: null
   };
 }
@@ -925,6 +927,305 @@ function nextCodexBackupPath(wrapperPath) {
   return `${wrapperPath}${CODEX_TIMESTAMP_BACKUP_MARKER}${Date.now()}`;
 }
 
+function codexHomeRoots() {
+  return (process.env.CODEX_HOME || homePath(".codex"))
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => entry.replace(/^~(?=$|[\\/])/, userHome()));
+}
+
+function codexConfigTomlPath() {
+  return path.join(codexHomeRoots()[0] || homePath(".codex"), "config.toml");
+}
+
+function tomlLineEnding(text) {
+  return String(text).includes("\r\n") ? "\r\n" : "\n";
+}
+
+function splitTomlLines(text) {
+  const source = String(text ?? "");
+  const newline = tomlLineEnding(source);
+  const body = source.endsWith("\n") ? source.replace(/\r?\n$/, "") : source;
+  return {
+    lines: body ? body.split(/\r?\n/) : [],
+    newline
+  };
+}
+
+function joinTomlLines(lines, newline) {
+  return `${lines.join(newline)}${newline}`;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function tomlSectionBounds(lines, sectionName) {
+  const sectionPattern = new RegExp(`^\\s*\\[${escapeRegExp(sectionName)}\\]\\s*(?:#.*)?$`);
+  const anySectionPattern = /^\s*\[[^\]]+\]\s*(?:#.*)?$/;
+  const start = lines.findIndex((line) => sectionPattern.test(line));
+  if (start < 0) return null;
+  let end = lines.length;
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (anySectionPattern.test(lines[index])) {
+      end = index;
+      break;
+    }
+  }
+  return { start, end };
+}
+
+function tomlKeyLine(key, value) {
+  return `${key} = ${value}`;
+}
+
+function codexStatusLineTomlValue() {
+  return `[${CODEX_STATUS_LINE.map((item) => `"${item}"`).join(", ")}]`;
+}
+
+function codexStatusLineSettings() {
+  return [
+    ["status_line", codexStatusLineTomlValue()],
+    ["status_line_use_colors", "false"]
+  ];
+}
+
+function tomlLineKey(line, keys) {
+  for (const key of keys) {
+    const pattern = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=`);
+    if (pattern.test(line)) return key;
+  }
+  return null;
+}
+
+function upsertTomlSectionKeys(text, sectionName, settings) {
+  const { lines, newline } = splitTomlLines(text);
+  const bounds = tomlSectionBounds(lines, sectionName);
+
+  if (!bounds) {
+    const next = [...lines];
+    if (next.length && next[next.length - 1] !== "") next.push("");
+    next.push(`[${sectionName}]`);
+    for (const [key, value] of settings) next.push(tomlKeyLine(key, value));
+    return joinTomlLines(next, newline);
+  }
+
+  const settingsByKey = new Map(settings);
+  const settingKeys = settings.map(([key]) => key);
+  const before = lines.slice(0, bounds.start + 1);
+  const sectionLines = lines.slice(bounds.start + 1, bounds.end);
+  const after = lines.slice(bounds.end);
+  const nextSection = [];
+  const seen = new Set();
+
+  for (const line of sectionLines) {
+    const key = tomlLineKey(line, settingKeys);
+    if (!key) {
+      nextSection.push(line);
+      continue;
+    }
+    if (seen.has(key)) continue;
+    nextSection.push(tomlKeyLine(key, settingsByKey.get(key)));
+    seen.add(key);
+  }
+
+  for (const [key, value] of settings) {
+    if (!seen.has(key)) nextSection.push(tomlKeyLine(key, value));
+  }
+
+  return joinTomlLines([...before, ...nextSection, ...after], newline);
+}
+
+function removeTomlSectionKeys(text, sectionName, keys) {
+  const { lines, newline } = splitTomlLines(text);
+  const bounds = tomlSectionBounds(lines, sectionName);
+  if (!bounds) return joinTomlLines(lines, newline);
+
+  const before = lines.slice(0, bounds.start);
+  const sectionHeader = lines[bounds.start];
+  const sectionLines = lines
+    .slice(bounds.start + 1, bounds.end)
+    .filter((line) => !tomlLineKey(line, keys));
+  const after = lines.slice(bounds.end);
+  const hasMeaningfulSectionLine = sectionLines.some((line) => {
+    const trimmed = line.trim();
+    return trimmed && !trimmed.startsWith("#");
+  });
+  const next = hasMeaningfulSectionLine
+    ? [...before, sectionHeader, ...sectionLines, ...after]
+    : [...before, ...after];
+  return joinTomlLines(next, newline);
+}
+
+function tomlSectionValue(text, sectionName, key) {
+  const { lines } = splitTomlLines(text);
+  const bounds = tomlSectionBounds(lines, sectionName);
+  if (!bounds) return null;
+  const pattern = new RegExp(`^\\s*${escapeRegExp(key)}\\s*=\\s*(.*?)\\s*(?:#.*)?$`);
+  for (const line of lines.slice(bounds.start + 1, bounds.end)) {
+    const match = line.match(pattern);
+    if (match) return match[1].trim();
+  }
+  return null;
+}
+
+function parseTomlStringArray(value) {
+  if (!value) return [];
+  return [...String(value).matchAll(/"((?:\\.|[^"\\])*)"/g)]
+    .map((match) => match[1].replace(/\\"/g, "\""));
+}
+
+function codexStatusLineMatches(text) {
+  const statusLine = parseTomlStringArray(tomlSectionValue(text, "tui", "status_line"));
+  const useColors = String(tomlSectionValue(text, "tui", "status_line_use_colors") || "").toLowerCase();
+  return statusLine.length === CODEX_STATUS_LINE.length
+    && statusLine.every((item, index) => item === CODEX_STATUS_LINE[index])
+    && useColors === "false";
+}
+
+function managedCodexStatusLineText(text) {
+  return upsertTomlSectionKeys(text || "", "tui", codexStatusLineSettings());
+}
+
+function installCodexStatusLine() {
+  const configPath = codexConfigTomlPath();
+  try {
+    const config = readConfig();
+    const existed = fs.existsSync(configPath);
+    const existingText = existed ? fs.readFileSync(configPath, "utf8") : "";
+    const nextText = managedCodexStatusLineText(existingText);
+
+    if (codexStatusLineMatches(existingText) && nextText === existingText) {
+      return {
+        ok: true,
+        changed: false,
+        alreadyConfigured: true,
+        configPath
+      };
+    }
+
+    let backedUp = false;
+    if (!config.codexStatusLineBackup) {
+      config.codexStatusLineBackup = {
+        configPath,
+        text: existed ? existingText : null,
+        savedAt: new Date().toISOString()
+      };
+      writeConfig(config);
+      backedUp = true;
+    }
+
+    writeTextAtomic(configPath, nextText);
+    return {
+      ok: true,
+      changed: nextText !== existingText,
+      backedUp,
+      configPath
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      changed: false,
+      configPath,
+      error: error.message
+    };
+  }
+}
+
+function restoreCodexStatusLine(config) {
+  const backup = config.codexStatusLineBackup;
+  const configPath = backup?.configPath || codexConfigTomlPath();
+  if (!backup) {
+    return {
+      changed: false,
+      configPath,
+      reason: "No Codex status_line backup found"
+    };
+  }
+
+  try {
+    if (!fs.existsSync(configPath)) {
+      config.codexStatusLineBackup = null;
+      return {
+        changed: false,
+        clearedBackup: true,
+        configPath,
+        reason: "Codex config file is already missing"
+      };
+    }
+
+    const currentText = fs.readFileSync(configPath, "utf8");
+    if (backup.text === null) {
+      if (!codexStatusLineMatches(currentText)) {
+        return {
+          changed: false,
+          skipped: true,
+          configPath,
+          reason: "Codex config changed after AI Battery setup; left it untouched"
+        };
+      }
+      const nextText = removeTomlSectionKeys(currentText, "tui", ["status_line", "status_line_use_colors"]);
+      if (nextText.trim()) {
+        writeTextAtomic(configPath, nextText);
+      } else {
+        fs.rmSync(configPath, { force: true });
+      }
+      config.codexStatusLineBackup = null;
+      return {
+        changed: true,
+        removed: true,
+        clearedBackup: true,
+        configPath
+      };
+    }
+
+    const managedText = managedCodexStatusLineText(backup.text);
+    if (currentText !== managedText) {
+      return {
+        changed: false,
+        skipped: true,
+        configPath,
+        reason: "Codex config changed after AI Battery setup; left it untouched"
+      };
+    }
+
+    writeTextAtomic(configPath, backup.text);
+    config.codexStatusLineBackup = null;
+    return {
+      changed: true,
+      restored: true,
+      clearedBackup: true,
+      configPath
+    };
+  } catch (error) {
+    return {
+      changed: false,
+      configPath,
+      error: error.message
+    };
+  }
+}
+
+function diagnoseCodexStatusLine() {
+  const configPath = codexConfigTomlPath();
+  try {
+    const text = fs.existsSync(configPath) ? fs.readFileSync(configPath, "utf8") : "";
+    return {
+      configPath,
+      configured: codexStatusLineMatches(text),
+      backupAvailable: Boolean(readConfig().codexStatusLineBackup)
+    };
+  } catch (error) {
+    return {
+      configPath,
+      configured: false,
+      backupAvailable: Boolean(readConfig().codexStatusLineBackup),
+      error: error.message
+    };
+  }
+}
+
 function sameOrInsidePath(childPath, parentPath) {
   const child = path.resolve(childPath);
   const parent = path.resolve(parentPath);
@@ -971,6 +1272,7 @@ function removeOrRestoreCodexWrapper(wrapperPath, config) {
 
 function uninstallCodexWrapper() {
   const config = readConfig();
+  const statusLine = restoreCodexStatusLine(config);
   const candidates = codexWrapperCandidates(config);
   const unmanaged = [];
   const skippedWrappers = [];
@@ -997,15 +1299,18 @@ function uninstallCodexWrapper() {
   const hadConfig = Boolean(config.codexWrapper);
   if (hadConfig) {
     config.codexWrapper = null;
+  }
+  if (hadConfig || statusLine.clearedBackup) {
     writeConfig(config);
   }
 
   return {
-    changed: Boolean(removedWrappers.length || restoredWrappers.length || rcPaths.length || hadConfig),
+    changed: Boolean(removedWrappers.length || restoredWrappers.length || rcPaths.length || hadConfig || statusLine.changed || statusLine.clearedBackup),
     wrapperPath: restoredWrappers[0]?.wrapperPath || removedWrappers[0] || null,
     removedWrappers,
     restoredWrappers,
     skippedWrappers,
+    statusLine,
     rcPaths,
     configPath: hadConfig ? configPath() : null,
     unmanaged,
@@ -1118,6 +1423,7 @@ function diagnoseCodex() {
   const originalExists = configuredOriginal ? fs.existsSync(configuredOriginal) : false;
   const runnerPath = codexRunnerPath();
   const runnerExists = codexRunnerExists(runnerPath);
+  const statusLine = diagnoseCodexStatusLine();
   const python3 = findCommand("python3");
   const providerEnabled = providerVisible("codex");
   const notes = [];
@@ -1127,6 +1433,9 @@ function diagnoseCodex() {
   }
   if (!wrapperInstalled) {
     notes.push("Codex wrapper is not installed. Run: ai-battery setup codex");
+  }
+  if (!statusLine.configured) {
+    notes.push("Codex status_line is not configured. Run: ai-battery setup codex");
   }
   if (activeIsWrapper && !wrapperInstalled) {
     notes.push("Plain \"codex\" still resolves to an AI Battery wrapper outside the configured shim. Run: ai-battery uninstall codex");
@@ -1162,6 +1471,7 @@ function diagnoseCodex() {
     wrapperInstalled,
     runnerPath,
     runnerExists,
+    statusLine,
     python3,
     originalCommand: configuredOriginal,
     originalExists: configuredOriginal ? originalExists : null,
@@ -1205,7 +1515,11 @@ function runSetup(args) {
     results.claude = installClaudeStatusline(args);
   }
   if (targets.includes("codex")) {
-    results.codex = installCodexWrapper(args);
+    const statusLine = installCodexStatusLine(args);
+    results.codex = {
+      ...installCodexWrapper(args),
+      statusLine
+    };
   }
   return results;
 }
@@ -1531,6 +1845,13 @@ function writeJsonAtomic(filePath, data) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
   const tempPath = `${filePath}.${process.pid}.tmp`;
   fs.writeFileSync(tempPath, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
+  fs.renameSync(tempPath, filePath);
+}
+
+function writeTextAtomic(filePath, text, mode = 0o600) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  const tempPath = `${filePath}.${process.pid}.tmp`;
+  fs.writeFileSync(tempPath, text, { mode });
   fs.renameSync(tempPath, filePath);
 }
 
@@ -3383,6 +3704,18 @@ function printTeardownResult(result) {
     for (const rcPath of codex.rcPaths || []) {
       console.log(`Removed shell PATH block: ${rcPath}`);
     }
+    if (codex.statusLine) {
+      if (codex.statusLine.error) {
+        console.log(`Codex status_line error: ${codex.statusLine.error}`);
+      } else if (codex.statusLine.restored) {
+        console.log(`Restored Codex status_line: ${codex.statusLine.configPath}`);
+      } else if (codex.statusLine.removed) {
+        console.log(`Removed Codex status_line: ${codex.statusLine.configPath}`);
+      } else if (codex.statusLine.skipped) {
+        console.log(`Left Codex status_line untouched: ${codex.statusLine.configPath}`);
+        console.log(`Reason: ${codex.statusLine.reason}`);
+      }
+    }
     if (codex.configPath) console.log(`Updated ${codex.configPath}`);
     for (const wrapperPath of codex.unmanaged || []) {
       console.log(`Skipped unmanaged codex command: ${wrapperPath}`);
@@ -3455,6 +3788,16 @@ async function main() {
       } else if (result.codex?.skipped) {
         console.log(`Codex wrapper skipped: ${result.codex.reason}`);
       }
+      if (result.codex?.statusLine) {
+        if (result.codex.statusLine.error) {
+          console.log(`Codex status_line error: ${result.codex.statusLine.error}`);
+        } else if (result.codex.statusLine.changed) {
+          console.log(`Codex status_line configured: ${result.codex.statusLine.configPath}`);
+          if (result.codex.statusLine.backedUp) console.log("Backed up previous Codex status_line for uninstall restore.");
+        } else if (result.codex.statusLine.alreadyConfigured) {
+          console.log(`Codex status_line already configured: ${result.codex.statusLine.configPath}`);
+        }
+      }
       if (process.platform === "win32" && result.codex) {
         console.log("Windows terminal note: Codex uses a native Windows runner. It reserves the row with node-pty/ConPTY when available and falls back to an overlay row otherwise. Open a new cmd/PowerShell after setup.");
       }
@@ -3501,6 +3844,7 @@ async function main() {
       console.log(`Codex provider: ${result.codex.providerEnabled ? "on" : "off"}`);
       console.log(`Codex on PATH: ${result.codex.activeCodex || "not found"}`);
       console.log(`Codex wrapper: ${result.codex.wrapperInstalled ? "installed" : "missing"} (${result.codex.wrapperPath})`);
+      console.log(`Codex status_line: ${result.codex.statusLine.configured ? "configured" : "missing"} (${result.codex.statusLine.configPath})`);
       console.log(`AI Battery runner: ${result.codex.runnerExists ? "found" : "missing"} (${result.codex.runnerPath})`);
       console.log(`python3: ${result.codex.python3 || "not found"}`);
       console.log(`PATH uses wrapper: ${result.codex.activeIsWrapper ? "yes" : "no"}`);
@@ -3635,9 +3979,11 @@ async function main() {
 export {
   bar,
   claudeHeader,
+  codexStatusLineMatches,
   codexWrapperScript,
   firstPercentValue,
   installClaudeStatusline,
+  installCodexStatusLine,
   installCodexWrapper,
   normalizeLimit,
   removeOrRestoreCodexWrapper,
@@ -3645,7 +3991,8 @@ export {
   percentValue,
   sameFilePath,
   visibleWidth,
-  uninstallClaudeStatusline
+  uninstallClaudeStatusline,
+  uninstallCodexWrapper
 };
 
 function sameFilePath(leftPath, rightPath) {
