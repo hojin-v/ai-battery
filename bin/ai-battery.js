@@ -2435,10 +2435,24 @@ async function main() {
 export {
   firstPercentValue,
   normalizeLimit,
-  percentValue
+  percentValue,
+  sameFilePath
 };
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+function sameFilePath(leftPath, rightPath) {
+  try {
+    return fs.realpathSync(leftPath) === fs.realpathSync(rightPath);
+  } catch {
+    return pathToFileURL(leftPath).href === pathToFileURL(rightPath).href;
+  }
+}
+
+function isDirectRun() {
+  if (!process.argv[1]) return false;
+  return sameFilePath(fileURLToPath(import.meta.url), process.argv[1]);
+}
+
+if (isDirectRun()) {
   main().catch((error) => {
     console.error(`ai-battery: ${error.message}`);
     process.exit(1);
