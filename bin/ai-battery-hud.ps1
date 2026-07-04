@@ -246,7 +246,16 @@ public struct AiBatteryMonitorInfo {
   public AiBatteryRect Work;
   public int Flags;
 }
+[StructLayout(LayoutKind.Sequential)]
+public struct AiBatteryPowerThrottlingState {
+  public uint Version;
+  public uint ControlMask;
+  public uint StateMask;
+}
 public static class AiBatteryNative {
+  public const int ProcessPowerThrottling = 4;
+  public const uint PROCESS_POWER_THROTTLING_CURRENT_VERSION = 1;
+  public const uint PROCESS_POWER_THROTTLING_EXECUTION_SPEED = 0x1;
   public const int GWL_EXSTYLE = -20;
   public const int WS_EX_TRANSPARENT = 0x20;
   public const int WS_EX_TOOLWINDOW = 0x80;
@@ -277,6 +286,10 @@ public static class AiBatteryNative {
   public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
   [DllImport("dwmapi.dll")]
   public static extern int DwmGetWindowAttribute(IntPtr hWnd, int dwAttribute, out int pvAttribute, int cbAttribute);
+  [DllImport("kernel32.dll")]
+  public static extern IntPtr GetCurrentProcess();
+  [DllImport("kernel32.dll", SetLastError=true)]
+  public static extern bool SetProcessInformation(IntPtr hProcess, int ProcessInformationClass, ref AiBatteryPowerThrottlingState ProcessInformation, int ProcessInformationSize);
   [DllImport("user32.dll", CharSet=CharSet.Auto)]
   public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
   [DllImport("user32.dll", CharSet=CharSet.Auto)]
@@ -292,6 +305,26 @@ public static class AiBatteryNative {
 }
 "@
 Add-Type -TypeDefinition $nativeCode
+
+function Disable-ProcessPowerThrottling {
+  # When a fullscreen app is in the foreground, Windows applies EcoQoS power
+  # throttling to background processes like this HUD, which stretches the
+  # WinForms timer from 250ms out to several seconds. That made the HUD linger
+  # over a fullscreen window for 3-5s before hiding (while unhide, which happens
+  # after throttling lifts, stayed instant). Opt the process out so the
+  # fullscreen check keeps firing on time even while backgrounded.
+  try {
+    $state = New-Object AiBatteryPowerThrottlingState
+    $state.Version = [AiBatteryNative]::PROCESS_POWER_THROTTLING_CURRENT_VERSION
+    $state.ControlMask = [AiBatteryNative]::PROCESS_POWER_THROTTLING_EXECUTION_SPEED
+    $state.StateMask = 0
+    $size = [System.Runtime.InteropServices.Marshal]::SizeOf([type][AiBatteryPowerThrottlingState])
+    [AiBatteryNative]::SetProcessInformation([AiBatteryNative]::GetCurrentProcess(), [AiBatteryNative]::ProcessPowerThrottling, [ref]$state, $size) | Out-Null
+  } catch {
+    # Older Windows builds lack ProcessPowerThrottling; the HUD still works.
+  }
+}
+Disable-ProcessPowerThrottling
 
 function Invoke-AiBatteryJson {
   if ($UseWsl) {
@@ -1362,17 +1395,12 @@ function Test-FullscreenOnHudMonitor {
         ($script:hudSkipWindowClasses -notcontains (Get-WindowClassName $handle))) {
       $windowRect = Get-WindowRectObject $handle
       if ($windowRect -and $windowRect.Width -gt 0 -and $windowRect.Height -gt 0) {
-        $covers = Test-RectCoversMonitor $windowRect $monitorRect
-        if ($env:AI_BATTERY_HUD_DEBUG_FS) {
-          $script:fsDecision = "class=$(Get-WindowClassName $handle) rect=($($windowRect.Left),$($windowRect.Top),$($windowRect.Right),$($windowRect.Bottom)) mon=($($monitorRect.Left),$($monitorRect.Top),$($monitorRect.Right),$($monitorRect.Bottom)) covers=$covers scanned=$scanned"
-        }
-        return $covers
+        return (Test-RectCoversMonitor $windowRect $monitorRect)
       }
     }
     $handle = $next
   }
 
-  if ($env:AI_BATTERY_HUD_DEBUG_FS) { $script:fsDecision = "no-deciding-window scanned=$scanned" }
   return $false
 }
 
@@ -1520,13 +1548,7 @@ function Set-HudHiddenForFullscreen([bool]$Hidden) {
 
 function Update-HudVisibilityForFullscreen {
   if (-not $form -or $form.IsDisposed) { return }
-  $fullscreen = Test-FullscreenOnHudMonitor
-  if ($env:AI_BATTERY_HUD_DEBUG_FS) {
-    try {
-      Add-Content -LiteralPath $env:AI_BATTERY_HUD_DEBUG_FS -Value ("{0:HH:mm:ss.fff} fs={1} hidden={2} | {3}" -f [datetime]::Now, $fullscreen, $script:hudHiddenForFullscreen, $script:fsDecision)
-    } catch { }
-  }
-  if ($fullscreen) {
+  if (Test-FullscreenOnHudMonitor) {
     Set-HudHiddenForFullscreen $true
     return
   }
@@ -1849,32 +1871,22 @@ function Update-HudFromSnapshot($Snapshot) {
 function Invoke-HudPump {
   # Everything here must return quickly: this runs on the UI thread, and the
   # actual data fetch happens on a background runspace.
-  $dbg = [bool]$env:AI_BATTERY_HUD_DEBUG_FS
-  $sw = if ($dbg) { [Diagnostics.Stopwatch]::StartNew() } else { $null }
-  function _lap([string]$what) {
-    if (-not $dbg) { return }
-    Add-Content -LiteralPath $env:AI_BATTERY_HUD_DEBUG_FS -Value ("{0:HH:mm:ss.fff} PUMP {1} +{2}ms" -f [datetime]::Now, $what, $sw.ElapsedMilliseconds)
-  }
   if ($script:fetchPowerShell -and -not $script:fetchHandle.IsCompleted -and
       ([datetime]::UtcNow - $script:lastFetchStartUtc).TotalSeconds -gt 30) {
     Stop-SnapshotFetch
   }
 
   $fresh = Complete-SnapshotFetch
-  _lap "complete"
   if ($fresh) {
     $merged = Merge-HudSnapshot $fresh $script:latestSnapshot
     $script:latestSnapshot = $merged
     Write-HudSnapshot $merged
-    _lap "merge+write"
     Update-HudFromSnapshot $merged
-    _lap "update-hud"
 
     $missingWeekly = @($merged.results | Where-Object { $_.ok -and $null -ne $_.percentRemaining -and $null -eq $_.secondary })
     if ($missingWeekly.Count -gt 0 -and $script:weeklyRetryCount -lt 6) {
       $script:weeklyRetryCount += 1
       Start-SnapshotFetch
-      _lap "start-fetch(retry)"
       return
     }
     $script:weeklyRetryCount = 0
@@ -1884,7 +1896,6 @@ function Invoke-HudPump {
   if (-not $script:fetchPowerShell -and
       ([datetime]::UtcNow - $script:lastFetchStartUtc).TotalSeconds -ge [math]::Max(1, $Interval)) {
     Start-SnapshotFetch
-    _lap "start-fetch"
   }
 }
 
