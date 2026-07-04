@@ -1752,12 +1752,6 @@ function formatCodex(data, args) {
     bits.push(divider(args));
     bits.push(statusColorize(data, weekText(secondary), args));
   }
-  if (data.running && data.mode) {
-    // Codex's current approval mode, like Claude's own auto-mode line. Only
-    // meaningful while Codex is running; an old session's mode is noise.
-    bits.push(divider(args));
-    bits.push(statusColorize(data, data.mode, args));
-  }
   if (data.reachedType) {
     bits.push(statusColorize(data, `limit ${data.reachedType}`, args));
   }
