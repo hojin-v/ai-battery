@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# npm artifacts
+*.tgz
+npm-debug.log*
+
+# Runtime logs
+*.log
+
+# Environment files
+.env
+.env.*
+
+# Coverage and caches
+coverage/
+.nyc_output/
+.cache/
+__pycache__/
+*.py[cod]
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

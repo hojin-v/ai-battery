@@ -1,0 +1,47 @@
+{
+  "name": "ai-battery",
+  "version": "0.1.0",
+  "description": "Tiny terminal battery meter for local Codex and Claude Code usage.",
+  "type": "module",
+  "keywords": [
+    "ai",
+    "battery",
+    "codex",
+    "claude",
+    "statusline",
+    "tui",
+    "usage"
+  ],
+  "bin": {
+    "ai-battery": "bin/ai-battery.js",
+    "ai-battery-hud": "bin/ai-battery-hud.js",
+    "ai-battery-run": "bin/ai-battery-run",
+    "claudex-battery": "bin/ai-battery.js",
+    "claudex-battery-hud": "bin/ai-battery-hud.js",
+    "claudex-battery-run": "bin/ai-battery-run"
+  },
+  "files": [
+    "bin/ai-battery.js",
+    "bin/ai-battery-run",
+    "bin/ai-battery-hud",
+    "bin/ai-battery-hud.js",
+    "bin/ai-battery-hud.ps1",
+    "README.md"
+  ],
+  "scripts": {
+    "start": "node ./bin/ai-battery.js",
+    "check": "node --check ./bin/ai-battery.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hojin-v/ai-battery.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hojin-v/ai-battery/issues"
+  },
+  "homepage": "https://github.com/hojin-v/ai-battery#readme"
+}

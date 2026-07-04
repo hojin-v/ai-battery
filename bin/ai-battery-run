@@ -1,0 +1,344 @@
+#!/usr/bin/env python3
+import os
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+if os.name == "nt":
+    print(
+        "ai-battery-run requires a POSIX PTY and is supported in WSL, Linux, and macOS, not native Windows.",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+
+import errno
+import fcntl
+import pty
+import select
+import struct
+import termios
+import tty
+
+
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+BATTERY_BIN = os.environ.get("AI_BATTERY_BIN") or os.environ.get("CLAUDEX_BATTERY_BIN", os.path.join(SCRIPT_DIR, "ai-battery.js"))
+ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+
+
+def battery_command_base():
+    # Running the .js file directly depends on its exec bit and shebang;
+    # prefer an explicit node invocation when node is available.
+    if BATTERY_BIN.endswith(".js"):
+        node = shutil.which("node")
+        if node:
+            return [node, BATTERY_BIN]
+    return [BATTERY_BIN]
+DEFAULT_COLUMN_GUARD = 4
+DEFAULT_LEFT_PADDING = 2
+
+
+def usage():
+    print(
+        "Usage: ai-battery-run [--interval SECONDS] [--bar-width N] [--provider auto|all|codex|claude] [--layout auto|overlay|reserve] [--left-padding N] -- COMMAND [ARGS...]\n"
+        "       ai-battery-run [--interval SECONDS] [--bar-width N] [--provider auto|all|codex|claude] [--layout auto|overlay|reserve] [--left-padding N] COMMAND [ARGS...]\n\n"
+        "Runs COMMAND in a PTY and keeps AI Battery on\n"
+        "the terminal's bottom row. Example:\n"
+        "  ai-battery-run codex\n"
+        "  ai-battery-run --provider codex codex\n"
+    )
+
+
+def parse_args(argv):
+    interval = float(os.environ.get("AI_BATTERY_INTERVAL") or os.environ.get("CLAUDEX_BATTERY_INTERVAL", "10"))
+    bar_width = os.environ.get("AI_BATTERY_BAR_WIDTH") or os.environ.get("CLAUDEX_BATTERY_BAR_WIDTH", "10")
+    provider = os.environ.get("AI_BATTERY_PROVIDER") or os.environ.get("CLAUDEX_BATTERY_PROVIDER", "auto")
+    layout = os.environ.get("AI_BATTERY_LAYOUT") or os.environ.get("CLAUDEX_BATTERY_LAYOUT", "auto")
+    left_padding = os.environ.get("AI_BATTERY_LEFT_PADDING") or os.environ.get("CLAUDEX_BATTERY_LEFT_PADDING", str(DEFAULT_LEFT_PADDING))
+    command = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in ("-h", "--help"):
+            usage()
+            sys.exit(0)
+        if arg == "--interval":
+            i += 1
+            if i >= len(argv):
+                raise SystemExit("--interval requires a value")
+            interval = max(0.5, float(argv[i]))
+        elif arg == "--bar-width":
+            i += 1
+            if i >= len(argv):
+                raise SystemExit("--bar-width requires a value")
+            bar_width = argv[i]
+        elif arg == "--provider":
+            i += 1
+            if i >= len(argv):
+                raise SystemExit("--provider requires a value")
+            provider = argv[i]
+            if provider not in ("auto", "all", "codex", "claude"):
+                raise SystemExit("--provider must be one of: auto, all, codex, claude")
+        elif arg == "--layout":
+            i += 1
+            if i >= len(argv):
+                raise SystemExit("--layout requires a value")
+            layout = argv[i]
+            if layout not in ("auto", "overlay", "reserve"):
+                raise SystemExit("--layout must be one of: auto, overlay, reserve")
+        elif arg == "--left-padding":
+            i += 1
+            if i >= len(argv):
+                raise SystemExit("--left-padding requires a value")
+            left_padding = argv[i]
+        elif arg == "--":
+            command = argv[i + 1 :]
+            break
+        else:
+            command = argv[i:]
+            break
+        i += 1
+
+    if not command:
+        usage()
+        raise SystemExit(2)
+    if layout not in ("auto", "overlay", "reserve"):
+        raise SystemExit("--layout must be one of: auto, overlay, reserve")
+    try:
+        left_padding = min(20, max(0, int(float(left_padding))))
+    except ValueError:
+        left_padding = DEFAULT_LEFT_PADDING
+    return interval, bar_width, provider, layout, left_padding, command
+
+
+def infer_provider(command):
+    joined = " ".join(command).lower()
+    names = [os.path.basename(part).lower() for part in command]
+    if any("codex" in name for name in names) or "@openai/codex" in joined:
+        return "codex"
+    if any("claude" in name for name in names) or "@anthropic-ai/claude-code" in joined:
+        return "claude"
+    return "all"
+
+
+def resolve_layout(layout, command_provider):
+    if layout != "auto":
+        return layout
+    return "reserve"
+
+
+def term_size():
+    try:
+        size = os.get_terminal_size(sys.stdout.fileno())
+        return max(20, size.columns or 80), max(1, size.lines or 24)
+    except OSError:
+        return 80, 24
+
+
+def set_winsize(fd, rows, cols):
+    packed = struct.pack("HHHH", max(1, rows), max(1, cols), 0, 0)
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, packed)
+
+
+def child_rows_for(layout, rows):
+    if layout == "overlay":
+        return max(1, rows)
+    return max(1, rows - 1)
+
+
+def strip_ansi(text):
+    return ANSI_RE.sub("", text)
+
+
+def column_guard():
+    raw = os.environ.get("AI_BATTERY_COLUMN_GUARD") or os.environ.get("CLAUDEX_BATTERY_COLUMN_GUARD")
+    try:
+        return min(20, max(0, int(float(raw)))) if raw is not None else DEFAULT_COLUMN_GUARD
+    except ValueError:
+        return DEFAULT_COLUMN_GUARD
+
+
+def fit_ansi(text, width, pad=True):
+    plain = strip_ansi(text)
+    if len(plain) <= width:
+        return text + (" " * (width - len(plain)) if pad else "")
+    suffix = " " if pad else ""
+    return plain[: max(0, width - len(suffix))] + suffix
+
+
+class StatusLine:
+    def __init__(self, interval, bar_width, provider, left_padding, active_provider):
+        self.interval = interval
+        self.bar_width = bar_width
+        self.provider = provider
+        self.left_padding = left_padding
+        self.active_provider = active_provider
+        self.next_fetch = 0.0
+        self.last_draw = 0.0
+        self.text = "AI Battery starting..."
+        self.last_line = None
+        self.cols, self.rows = term_size()
+
+    def resize(self):
+        self.cols, self.rows = term_size()
+
+    def refresh(self, force=False):
+        now = time.monotonic()
+        if not force and now < self.next_fetch:
+            return False
+        self.next_fetch = now + self.interval
+        previous = self.text
+        max_width = max(20, self.cols - column_guard())
+        try:
+            battery_command = battery_command_base() + [
+                "--muted",
+                "--bar-width",
+                str(self.bar_width),
+                "--max-width",
+                str(max_width),
+                "--left-padding",
+                str(self.left_padding),
+            ]
+            if self.active_provider in ("codex", "claude"):
+                battery_command.extend(["--active-provider", self.active_provider])
+            if self.provider != "all":
+                battery_command.extend(["--provider", self.provider])
+            output = subprocess.check_output(
+                battery_command,
+                stderr=subprocess.DEVNULL,
+                timeout=1.5,
+            )
+            text = output.decode("utf-8", errors="replace").rstrip("\r\n")
+            if text:
+                self.text = text
+        except Exception:
+            self.text = "AI Battery unavailable"
+        return self.text != previous
+
+    def refresh_due(self):
+        return time.monotonic() >= self.next_fetch
+
+    def seconds_until_refresh(self):
+        return max(0.0, self.next_fetch - time.monotonic())
+
+    def draw(self, force=False, dirty=False):
+        now = time.monotonic()
+        if not force and now - self.last_draw < 0.15:
+            return
+        self.refresh(force)
+        paint_width = max(1, self.cols - 1)
+        line = fit_ansi(self.text, paint_width, pad=True)
+        if not force and not dirty and line == self.last_line:
+            return
+        self.last_draw = now
+        self.last_line = line
+        payload = (
+            "\x1b7"
+            "\x1b[0m"
+            f"\x1b[{self.rows};1H"
+            "\r\x1b[1G"
+            f"{line}"
+            "\x1b[K"
+            "\x1b[0m"
+            "\x1b8"
+        )
+        os.write(sys.stdout.fileno(), payload.encode("utf-8", errors="replace"))
+
+    def clear(self):
+        payload = "\x1b7" "\x1b[0m" f"\x1b[{self.rows};1H" "\r\x1b[1G" "\x1b[2K" "\x1b8"
+        os.write(sys.stdout.fileno(), payload.encode("ascii"))
+
+
+def main():
+    interval, bar_width, provider, layout, left_padding, command = parse_args(sys.argv[1:])
+    command_provider = infer_provider(command)
+    if provider == "auto":
+        provider = command_provider
+    layout = resolve_layout(layout, command_provider)
+
+    if not os.isatty(sys.stdin.fileno()) or not os.isatty(sys.stdout.fileno()):
+        print(
+            "ai-battery-run: stdin/stdout is not a real terminal.\n"
+            "Run this directly in an interactive terminal, not through a non-TTY command runner.",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
+    active_provider = command_provider if command_provider in ("codex", "claude") else None
+    status = StatusLine(interval, bar_width, provider, left_padding, active_provider)
+    cols, rows = term_size()
+    child_rows = child_rows_for(layout, rows)
+
+    pid, master_fd = pty.fork()
+    if pid == 0:
+        set_winsize(0, child_rows, cols)
+        os.execvp(command[0], command)
+
+    set_winsize(master_fd, child_rows, cols)
+    old_term = termios.tcgetattr(sys.stdin.fileno())
+    child_exit = 0
+
+    def on_resize(_signum, _frame):
+        status.resize()
+        new_cols, new_rows = term_size()
+        set_winsize(master_fd, child_rows_for(layout, new_rows), new_cols)
+        try:
+            os.kill(pid, signal.SIGWINCH)
+        except ProcessLookupError:
+            pass
+        status.draw(True)
+
+    signal.signal(signal.SIGWINCH, on_resize)
+
+    try:
+        tty.setraw(sys.stdin.fileno())
+        status.draw(True)
+        screen_dirty = False
+        last_child_output = 0.0
+
+        while True:
+            wait_pid, wait_status = os.waitpid(pid, os.WNOHANG)
+            if wait_pid == pid:
+                if os.WIFEXITED(wait_status):
+                    child_exit = os.WEXITSTATUS(wait_status)
+                elif os.WIFSIGNALED(wait_status):
+                    child_exit = 128 + os.WTERMSIG(wait_status)
+                break
+
+            timeout = 0.05 if screen_dirty else min(0.1, max(0.01, status.seconds_until_refresh()))
+            readable, _, _ = select.select([master_fd, sys.stdin.fileno()], [], [], timeout)
+            if master_fd in readable:
+                try:
+                    data = os.read(master_fd, 8192)
+                except OSError as exc:
+                    if exc.errno == errno.EIO:
+                        break
+                    raise
+                if not data:
+                    break
+                os.write(sys.stdout.fileno(), data)
+                screen_dirty = True
+                last_child_output = time.monotonic()
+
+            if sys.stdin.fileno() in readable:
+                data = os.read(sys.stdin.fileno(), 8192)
+                if data:
+                    os.write(master_fd, data)
+
+            now = time.monotonic()
+            if screen_dirty and (now - last_child_output >= 0.05 or now - status.last_draw >= 0.75):
+                status.draw(False, dirty=True)
+                screen_dirty = False
+            elif status.refresh_due():
+                status.draw(False)
+    finally:
+        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_term)
+        status.clear()
+
+    raise SystemExit(child_exit)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+HUD_PS1="$SCRIPT_DIR/ai-battery-hud.ps1"
+
+if ! command -v powershell.exe >/dev/null 2>&1; then
+  echo "ai-battery-hud: powershell.exe is required for the Windows always-on-top HUD." >&2
+  exit 1
+fi
+
+FOREGROUND=0
+ONCE=0
+STOP=0
+FILTERED_ARGS=()
+for arg in "$@"; do
+  case "$arg" in
+    -Foreground|--foreground)
+      FOREGROUND=1
+      ;;
+    -Movable|--movable)
+      FILTERED_ARGS+=("-Movable")
+      ;;
+    -Once|--once)
+      ONCE=1
+      FILTERED_ARGS+=("$arg")
+      ;;
+    -Stop|--stop)
+      STOP=1
+      FILTERED_ARGS+=("-StopExisting")
+      ;;
+    *)
+      FILTERED_ARGS+=("$arg")
+      ;;
+  esac
+done
+
+HUD_PS1_WIN="$(wslpath -w "$HUD_PS1")"
+
+if [[ -n "${CLAUDEX_BATTERY_COMMAND:-}" ]]; then
+  AI_BATTERY_COMMAND="$CLAUDEX_BATTERY_COMMAND"
+fi
+
+if [[ -z "${AI_BATTERY_COMMAND:-}" ]]; then
+  NODE_BIN="$(command -v node || true)"
+  if [[ -z "$NODE_BIN" ]]; then
+    echo "ai-battery-hud: node was not found in WSL PATH." >&2
+    exit 1
+  fi
+  printf -v WSL_HOME_QUOTED "%q" "$HOME"
+  printf -v NODE_BIN_QUOTED "%q" "$NODE_BIN"
+  printf -v AI_BATTERY_JS_QUOTED "%q" "$SCRIPT_DIR/ai-battery.js"
+  ENV_PREFIX=()
+  for name in AI_BATTERY_STATE_DIR CLAUDEX_BATTERY_STATE_DIR AI_BATTERY_COLUMNS CLAUDEX_BATTERY_COLUMNS AI_BATTERY_COLUMN_GUARD CLAUDEX_BATTERY_COLUMN_GUARD CODEX_HOME; do
+    if [[ -n "${!name:-}" ]]; then
+      printf -v value_quoted "%q" "${!name}"
+      ENV_PREFIX+=("$name=$value_quoted")
+    fi
+  done
+  AI_BATTERY_COMMAND="${ENV_PREFIX[*]} HOME=$WSL_HOME_QUOTED $NODE_BIN_QUOTED $AI_BATTERY_JS_QUOTED --json"
+fi
+
+PS_ARGS=(-NoProfile -ExecutionPolicy Bypass -File "$HUD_PS1_WIN" -BatteryCommand "$AI_BATTERY_COMMAND" "${FILTERED_ARGS[@]}")
+
+if [[ "$FOREGROUND" == "1" || "$ONCE" == "1" || "$STOP" == "1" ]]; then
+  exec powershell.exe "${PS_ARGS[@]}"
+fi
+
+ps_quote() {
+  local value="${1//\'/\'\'}"
+  printf "'%s'" "$value"
+}
+
+win_arg_quote() {
+  local value="${1//\"/\\\"}"
+  printf '"%s"' "$value"
+}
+
+PS_CMDLINE=""
+for arg in "${PS_ARGS[@]}"; do
+  if [[ -n "$PS_CMDLINE" ]]; then
+    PS_CMDLINE+=" "
+  fi
+  PS_CMDLINE+="$(win_arg_quote "$arg")"
+done
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -WindowStyle Hidden -FilePath 'powershell.exe' -ArgumentList $(ps_quote "$PS_CMDLINE")" >/dev/null 2>&1
+echo "AI Battery HUD started or already running. Drag it to place it; right-click and choose Exit to close."
