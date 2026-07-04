@@ -405,17 +405,34 @@ test("colored battery bar uses one tall glyph for fill and track so heights matc
   // Regression: pairing the fill glyph with the light-shade glyph rendered the
   // two halves at different heights under macOS terminal fonts. Both halves
   // must be the SAME glyph and be separated only by ANSI color.
-  const glyph = "▮";
-  const rendered = bar(50, 10, "green", "ansi");
+  const glyph = "❚";
+  const rendered = withEnv({
+    AI_BATTERY_BAR_GLYPH: glyph
+  }, () => bar(50, 10, "green", "ansi"));
   const plain = rendered.replace(/\x1b\[[0-9;]*m/g, "");
   assert.equal(plain, glyph.repeat(10), "colored bar should be one uniform glyph");
-  assert.doesNotMatch(rendered, /[▆░▒▓]/, "no lower block or shade glyphs in colored output");
-  assert.match(rendered, /\x1b\[32m▮+\x1b\[0m/, "fill segment carries the charge color");
-  assert.match(rendered, /\x1b\[90m▮+\x1b\[0m/, "track segment is gray, not the fill color");
+  assert.doesNotMatch(rendered, /[▆▖░▒▓]/, "no lower block or shade glyphs in colored output");
+  assert.match(rendered, /\x1b\[32m❚+\x1b\[0m/, "fill segment carries the charge color");
+  assert.match(rendered, /\x1b\[90m❚+\x1b\[0m/, "track segment is gray, not the fill color");
+});
+
+test("battery bar glyph can be tuned for Windows and WSL terminal fonts", () => {
+  const rendered = withEnv({
+    AI_BATTERY_BAR_GLYPH: "❚"
+  }, () => bar(50, 10, "green", "ansi"));
+  const plain = rendered.replace(/\x1b\[[0-9;]*m/g, "");
+
+  assert.equal(plain, "❚".repeat(10));
+  assert.match(rendered, /\x1b\[32m❚+\x1b\[0m/);
+  assert.match(rendered, /\x1b\[90m❚+\x1b\[0m/);
 });
 
 test("plain battery bar keeps distinct glyphs when there is no color", () => {
-  assert.equal(bar(50, 10, "green", "plain"), "▮▮▮▮▮░░░░░");
+  const rendered = withEnv({
+    AI_BATTERY_BAR_GLYPH: "▮"
+  }, () => bar(50, 10, "green", "plain"));
+
+  assert.equal(rendered, "▮▮▮▮▮░░░░░");
 });
 
 test("narrow statusline keeps every provider instead of truncating the tail", () => {

@@ -2389,15 +2389,22 @@ function statusColorize(data, text, args) {
   return colorize(text, activityColor(data), args.style);
 }
 
-// The colored bar uses one glyph for both filled and empty halves, separated
-// only by color. ▮ is slightly shorter than a full block while still reading as
-// a tall, connected bar, and avoids the macOS font fallback issue where mixing
-// block glyphs with shade glyphs such as ░ made the two halves render at
-// different heights.
-const BAR_GLYPH = "▮";
+// The colored bar uses one centered glyph for both filled and empty halves,
+// separated only by color. It keeps the segmented shape while keeping the bar
+// aligned with the text baseline across macOS Terminal, Windows Terminal, and
+// WSL terminal fonts.
+const BAR_GLYPH = "❚";
+const WINDOWS_BAR_GLYPH = "❚";
 // Plain (--no-color / non-TTY) has no color to tell the halves apart, so it
 // falls back to a distinct empty glyph. This path is opt-in and not the TUI.
 const BAR_EMPTY_PLAIN_GLYPH = "░";
+
+function barGlyph() {
+  const override = process.env.AI_BATTERY_BAR_GLYPH || process.env.CLAUDEX_BATTERY_BAR_GLYPH;
+  if (override) return Array.from(override)[0];
+  if (process.platform === "win32" || isWsl()) return WINDOWS_BAR_GLYPH;
+  return BAR_GLYPH;
+}
 
 function bar(percent, width, chargeColor = "green", style) {
   if (typeof percent !== "number") return colorize("─".repeat(width), "gray", style);
@@ -2407,13 +2414,14 @@ function bar(percent, width, chargeColor = "green", style) {
   if (percent > 0 && full === 0) full = 1;
   if (full > width) full = width;
 
-  const fill = BAR_GLYPH.repeat(full);
+  const glyph = barGlyph();
+  const fill = glyph.repeat(full);
   const empty = width - full;
 
   if (style === "plain") {
     return `${fill}${BAR_EMPTY_PLAIN_GLYPH.repeat(empty)}`;
   }
-  return `${colorize(fill, chargeColor, style)}${empty ? colorize(BAR_GLYPH.repeat(empty), "gray", style) : ""}`;
+  return `${colorize(fill, chargeColor, style)}${empty ? colorize(glyph.repeat(empty), "gray", style) : ""}`;
 }
 
 function duration(seconds) {
