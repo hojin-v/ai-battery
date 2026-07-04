@@ -196,7 +196,7 @@ Claude가 한 번 이상 statusLine payload를 전달해야 Claude의 사용량 
 
 ## Floating HUD
 
-일반 터미널 위에 외부 프로세스가 안전하게 status line을 덧그리는 방식은 안정적이지 않습니다. 그래서 HUD는 Windows floating overlay로 제공합니다.
+일반 터미널 위에 외부 프로세스가 안전하게 status line을 덧그리는 방식은 안정적이지 않습니다. 그래서 HUD는 Windows floating overlay로 제공합니다. Windows native에서는 WSL 없이 PowerShell/WinForms로 바로 실행되고, WSL에서는 `powershell.exe`를 통해 같은 HUD를 띄웁니다.
 
 ```bash
 ai-battery hud
@@ -222,7 +222,7 @@ Claude [battery:76] │ 5h 00:47 │ 7d 59%
 | `ai-battery hud -Interval 2` | 갱신 주기를 바꿉니다. |
 | `ai-battery hud -Mode tray` | Windows tray icon 모드로 실행합니다. |
 
-autostart는 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`에 사용자 단위로 등록되며, HUD 스크립트 사본을 `%LOCALAPPDATA%\ai-battery`에 두어 로그인 시 WSL이 아직 시작되지 않아도 HUD가 먼저 뜨도록 합니다(사용량은 WSL이 올라온 뒤 채워집니다). ai-battery를 업데이트한 뒤에는 `ai-battery hud autostart on`을 다시 실행해 사본을 갱신하세요.
+autostart는 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`에 사용자 단위로 등록됩니다. Windows native에서는 WSL 없이 바로 실행되고, WSL에서 등록한 경우에는 HUD 스크립트 사본을 `%LOCALAPPDATA%\ai-battery`에 두어 로그인 시 WSL이 아직 시작되지 않아도 HUD가 먼저 뜨도록 합니다(WSL 로그 기반 사용량은 WSL이 올라온 뒤 채워집니다). ai-battery를 업데이트한 뒤에는 `ai-battery hud autostart on`을 다시 실행해 사본을 갱신하세요.
 
 ## Shell Prompt
 
