@@ -12,7 +12,8 @@ param(
   [switch]$ClickThrough,
   [switch]$StopExisting,
   [switch]$UseWsl,
-  [switch]$Once
+  [switch]$Once,
+  [string]$ReadyPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -111,6 +112,22 @@ $script:hudAnchorX = "left"
 $script:hudAnchorY = "top"
 $script:codexRowVisible = $true
 $script:claudeRowVisible = $true
+
+function Signal-HudReady {
+  if ([string]::IsNullOrWhiteSpace($ReadyPath)) { return }
+  try {
+    $dir = Split-Path -Parent $ReadyPath
+    if ($dir) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+    @{
+      Ready = $true
+      Pid = $PID
+      At = [datetime]::UtcNow.ToString("o")
+      Mode = $Mode
+    } | ConvertTo-Json -Compress | Set-Content -Encoding UTF8 -Path $ReadyPath
+  } catch {
+    # Readiness is diagnostic only.
+  }
+}
 
 function Read-HudPlacement {
   foreach ($path in @((Get-HudStatePath), (Get-LegacyHudStatePath))) {
@@ -969,6 +986,7 @@ if ($Mode -eq "tray") {
   $timer.add_Tick({ Update-Tray })
   Update-Tray
   $timer.Start()
+  Signal-HudReady
   [System.Windows.Forms.Application]::Run($context)
   Release-SingleInstance
   exit 0
@@ -1807,6 +1825,7 @@ $form.add_SizeChanged({ Sync-HitFormBounds })
 $form.add_Shown({
   Show-HitForm
   Update-HudVisibilityForFullscreen
+  Signal-HudReady
 })
 
 Set-Position

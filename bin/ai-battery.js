@@ -196,6 +196,7 @@ function stateDir() {
 function dataDir() {
   if (process.env.AI_BATTERY_DATA_DIR) return process.env.AI_BATTERY_DATA_DIR;
   if (process.env.XDG_DATA_HOME) return path.join(process.env.XDG_DATA_HOME, "ai-battery");
+  if (process.platform === "win32" && process.env.LOCALAPPDATA) return path.join(process.env.LOCALAPPDATA, "ai-battery");
   return homePath(".local", "share", "ai-battery");
 }
 
@@ -476,9 +477,7 @@ function executableTarget(commandPath) {
 }
 
 function findCommand(command, skipPaths = []) {
-  const names = process.platform === "win32"
-    ? [command, `${command}.cmd`, `${command}.exe`, `${command}.bat`]
-    : [command];
+  const names = commandNames(command);
   const skips = skipPaths.filter(Boolean);
 
   for (const dir of pathEntries()) {
@@ -489,6 +488,12 @@ function findCommand(command, skipPaths = []) {
     }
   }
   return null;
+}
+
+function commandNames(command) {
+  return process.platform === "win32"
+    ? [command, `${command}.cmd`, `${command}.exe`, `${command}.bat`]
+    : [command];
 }
 
 function codexWrapperScript(originalCommand) {
@@ -504,6 +509,30 @@ exec ${shQuote(originalCommand)} "$@"
 `;
 }
 
+function cmdQuote(value) {
+  return `"${String(value).replace(/"/g, '""')}"`;
+}
+
+function windowsCodexWrapperScript(originalCommand) {
+  const runner = path.join(scriptDir(), "ai-battery-run-win.js");
+  return `@echo off
+rem ${CODEX_WRAPPER_MARKER}=1
+set "AI_BATTERY_ORIGINAL_CODEX=${originalCommand}"
+set "AI_BATTERY_WRAPPED_CODEX=1"
+if exist ${cmdQuote(runner)} (
+  ${cmdQuote(process.execPath)} ${cmdQuote(runner)} --provider all -- ${cmdQuote(originalCommand)} %*
+) else (
+  ${cmdQuote(originalCommand)} %*
+)
+`;
+}
+
+function codexWrapperScriptForPlatform(originalCommand) {
+  return process.platform === "win32"
+    ? windowsCodexWrapperScript(originalCommand)
+    : codexWrapperScript(originalCommand);
+}
+
 function managedCodexWrapper(filePath) {
   try {
     return fs.readFileSync(filePath, "utf8").includes(CODEX_WRAPPER_MARKER);
@@ -516,8 +545,16 @@ function defaultCodexShimDir() {
   return path.join(dataDir(), "bin");
 }
 
+function codexWrapperBasename() {
+  return process.platform === "win32" ? "codex.cmd" : "codex";
+}
+
+function codexWrapperPathInDir(dir) {
+  return path.join(dir, codexWrapperBasename());
+}
+
 function legacyCodexWrapperPath() {
-  return homePath(".local", "bin", "codex");
+  return path.join(homePath(".local", "bin"), codexWrapperBasename());
 }
 
 function legacyCodexShimDir() {
@@ -538,8 +575,8 @@ function pathDirPrecedesOriginal(dir, originalCommand) {
 function codexInstallSkipPaths(config = readConfig()) {
   return uniquePaths([
     config.codexWrapper?.wrapperPath,
-    process.env.AI_BATTERY_SHIM_DIR ? path.join(process.env.AI_BATTERY_SHIM_DIR, "codex") : null,
-    path.join(defaultCodexShimDir(), "codex"),
+    process.env.AI_BATTERY_SHIM_DIR ? codexWrapperPathInDir(process.env.AI_BATTERY_SHIM_DIR) : null,
+    codexWrapperPathInDir(defaultCodexShimDir()),
     legacyCodexWrapperPath()
   ]);
 }
@@ -582,12 +619,15 @@ function selectCodexShimDir(originalCommand, pathCommand = originalCommand) {
 
 function findOriginalCodexCommand(skipPaths = []) {
   const skips = skipPaths.filter(Boolean);
+  const names = commandNames("codex");
   for (const dir of pathEntries()) {
-    const candidate = path.join(dir, "codex");
-    if (skips.some((skip) => samePath(candidate, skip))) continue;
-    if (!safeStat(candidate)?.isFile() || !isExecutable(candidate)) continue;
-    if (managedCodexWrapper(candidate)) continue;
-    return candidate;
+    for (const name of names) {
+      const candidate = path.join(dir, name);
+      if (skips.some((skip) => samePath(candidate, skip))) continue;
+      if (!safeStat(candidate)?.isFile() || !isExecutable(candidate)) continue;
+      if (managedCodexWrapper(candidate)) continue;
+      return candidate;
+    }
   }
   return null;
 }
@@ -641,7 +681,11 @@ function shellRcCandidates() {
   ]);
 }
 
-function removeShellPathBlocks() {
+function removeShellPathBlocks(extraShimDirs = []) {
+  if (process.platform === "win32") {
+    return removeWindowsUserPathEntries([defaultCodexShimDir(), legacyCodexShimDir(), ...extraShimDirs]);
+  }
+
   const changed = [];
   for (const rcPath of shellRcCandidates()) {
     if (!fs.existsSync(rcPath)) continue;
@@ -654,7 +698,76 @@ function removeShellPathBlocks() {
   return changed;
 }
 
+function psQuote(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function runWindowsPowerShell(script) {
+  return spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script], {
+    encoding: "utf8",
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+}
+
+function windowsUserPathParts() {
+  const result = runWindowsPowerShell("[Environment]::GetEnvironmentVariable('Path', 'User')");
+  const text = result.status === 0 ? result.stdout : "";
+  return String(text || "")
+    .trim()
+    .split(";")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function sameWindowsPath(left, right) {
+  return path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
+}
+
+function ensureWindowsShimPath(shimDir, originalCommand) {
+  const activeNow = pathDirPrecedesOriginal(shimDir, originalCommand);
+  if (activeNow) {
+    return {
+      changed: false,
+      rcPath: null,
+      note: `${shimDir} is already before the original codex on PATH. Plain "codex" can use AI Battery in new command lookups. Open a new cmd/PowerShell if this terminal cached the old command.`
+    };
+  }
+
+  const parts = windowsUserPathParts();
+  const filtered = parts.filter((entry) => !sameWindowsPath(entry, shimDir));
+  const changed = filtered.length !== parts.length || !sameWindowsPath(parts[0] || "", shimDir);
+  const next = [shimDir, ...filtered].join(";");
+  const result = runWindowsPowerShell(`[Environment]::SetEnvironmentVariable('Path', ${psQuote(next)}, 'User')`);
+  if (result.status !== 0) {
+    return {
+      changed: false,
+      rcPath: null,
+      note: `Could not update the Windows user PATH. Add ${shimDir} before the original codex manually.`
+    };
+  }
+  return {
+    changed,
+    rcPath: "Windows user PATH",
+    note: `${changed ? "Added" : "Kept"} ${shimDir} at the front of the Windows user PATH. Open a new cmd/PowerShell for plain "codex" to use AI Battery.`
+  };
+}
+
+function removeWindowsUserPathEntries(shimDirs) {
+  const dirs = uniquePaths(shimDirs).filter(Boolean);
+  if (!dirs.length) return [];
+
+  const parts = windowsUserPathParts();
+  const nextParts = parts.filter((entry) => !dirs.some((dir) => sameWindowsPath(entry, dir)));
+  if (nextParts.length === parts.length) return [];
+
+  const result = runWindowsPowerShell(`[Environment]::SetEnvironmentVariable('Path', ${psQuote(nextParts.join(";"))}, 'User')`);
+  return result.status === 0 ? ["Windows user PATH"] : [];
+}
+
 function ensureShimPath(shimDir, originalCommand) {
+  if (process.platform === "win32") return ensureWindowsShimPath(shimDir, originalCommand);
+
   const entries = pathEntries();
   const shimIndex = entries.findIndex((entry) => path.resolve(entry) === path.resolve(shimDir));
   const originalDir = path.dirname(originalCommand);
@@ -687,8 +800,8 @@ function codexWrapperCandidates(config = readConfig()) {
   const activeCodex = findCommand("codex");
   return uniquePaths([
     config.codexWrapper?.wrapperPath,
-    process.env.AI_BATTERY_SHIM_DIR ? path.join(process.env.AI_BATTERY_SHIM_DIR, "codex") : null,
-    path.join(defaultCodexShimDir(), "codex"),
+    process.env.AI_BATTERY_SHIM_DIR ? codexWrapperPathInDir(process.env.AI_BATTERY_SHIM_DIR) : null,
+    codexWrapperPathInDir(defaultCodexShimDir()),
     legacyCodexWrapperPath(),
     activeCodex && managedCodexWrapper(activeCodex) ? activeCodex : null
   ]);
@@ -798,7 +911,7 @@ function uninstallCodexWrapper() {
     }
   }
 
-  const rcPaths = removeShellPathBlocks();
+  const rcPaths = removeShellPathBlocks(candidates.map((wrapperPath) => path.dirname(wrapperPath)));
   const hadConfig = Boolean(config.codexWrapper);
   if (hadConfig) {
     config.codexWrapper = null;
@@ -821,14 +934,6 @@ function uninstallCodexWrapper() {
 }
 
 function installCodexWrapper(args) {
-  if (process.platform === "win32") {
-    return {
-      ok: false,
-      skipped: true,
-      reason: "Codex wrapper uses a POSIX PTY and is not supported on native Windows"
-    };
-  }
-
   const config = readConfig();
   const configuredOriginal = config.codexWrapper?.originalCommand;
   const discoveredOriginal = findOriginalCodexCommand(codexInstallSkipPaths(config));
@@ -848,7 +953,7 @@ function installCodexWrapper(args) {
 
   const shimSelection = selectCodexShimDir(originalCommand, originalPathForPath);
   const shimDir = shimSelection.shimDir;
-  const wrapperPath = path.join(shimDir, "codex");
+  const wrapperPath = codexWrapperPathInDir(shimDir);
 
   if (samePath(wrapperPath, originalCommand)) {
     return {
@@ -868,7 +973,7 @@ function installCodexWrapper(args) {
     };
   }
 
-  fs.writeFileSync(wrapperPath, codexWrapperScript(originalCommand), { mode: 0o755 });
+  fs.writeFileSync(wrapperPath, codexWrapperScriptForPlatform(originalCommand), { mode: 0o755 });
 
   const wrapperCleanup = [];
   for (const staleWrapperPath of codexInstallSkipPaths(config)) {
@@ -899,6 +1004,7 @@ function installCodexWrapper(args) {
 }
 
 function sourcePathCommand(rcPath) {
+  if (process.platform === "win32") return null;
   const shell = path.basename(process.env.SHELL || "");
   if (!rcPath) return null;
   if (["bash", "fish", "zsh"].includes(shell)) return `source ${shellArg(rcPath)}`;
@@ -910,17 +1016,26 @@ function codexRestartNote() {
   return "Current Codex was not started through AI Battery. Exit this Codex session and run plain \"codex\" again from a normal terminal.";
 }
 
+function codexRunnerPath() {
+  return path.join(scriptDir(), process.platform === "win32" ? "ai-battery-run-win.js" : "ai-battery-run");
+}
+
+function codexRunnerExists(runnerPath = codexRunnerPath()) {
+  if (process.platform === "win32") return fs.existsSync(runnerPath);
+  return isExecutable(runnerPath);
+}
+
 function diagnoseCodex() {
   const config = readConfig();
-  const configuredWrapper = config.codexWrapper?.wrapperPath || path.join(defaultCodexShimDir(), "codex");
+  const configuredWrapper = config.codexWrapper?.wrapperPath || codexWrapperPathInDir(defaultCodexShimDir());
   const configuredOriginal = config.codexWrapper?.originalCommand || null;
   const activeCodex = findCommand("codex");
   const wrapperInstalled = configuredWrapper ? managedCodexWrapper(configuredWrapper) : false;
   const activeIsWrapper = activeCodex ? managedCodexWrapper(activeCodex) : false;
   const activeWrapperBackup = activeIsWrapper ? existingCodexWrapperBackup(activeCodex, config) : null;
   const originalExists = configuredOriginal ? fs.existsSync(configuredOriginal) : false;
-  const runnerPath = path.join(scriptDir(), "ai-battery-run");
-  const runnerExists = isExecutable(runnerPath);
+  const runnerPath = codexRunnerPath();
+  const runnerExists = codexRunnerExists(runnerPath);
   const python3 = findCommand("python3");
   const providerEnabled = providerVisible("codex");
   const notes = [];
@@ -943,7 +1058,7 @@ function diagnoseCodex() {
   if (!runnerExists) {
     notes.push(`AI Battery runner is missing or not executable: ${runnerPath}`);
   }
-  if (wrapperInstalled && !python3) {
+  if (wrapperInstalled && process.platform !== "win32" && !python3) {
     notes.push("Codex wrapper needs python3 for the POSIX PTY row. Install Python 3, then run plain \"codex\" again.");
   }
   if (configuredOriginal && !originalExists) {
@@ -2829,6 +2944,9 @@ async function main() {
         } else {
           console.log(`Claude statusLine installed: ${result.claude.settingsPath}`);
           if (result.claude.backedUp) console.log("Backed up previous Claude statusLine for uninstall restore.");
+          if (process.platform === "win32") {
+            console.log("Windows note: Claude statusLine appears inside Claude Code, not in the normal cmd/PowerShell prompt. Restart Claude Code if it was already open.");
+          }
         }
       }
       if (result.codex?.ok) {
@@ -2839,6 +2957,9 @@ async function main() {
         if (reloadCommand) console.log(`For this terminal now, run: ${reloadCommand}`);
       } else if (result.codex?.skipped) {
         console.log(`Codex wrapper skipped: ${result.codex.reason}`);
+      }
+      if (process.platform === "win32" && result.codex) {
+        console.log("Windows terminal note: Codex uses a native Windows runner. It reserves the row with node-pty/ConPTY when available and falls back to an overlay row otherwise. Open a new cmd/PowerShell after setup.");
       }
       console.log("To remove AI Battery cleanly later, run: ai-battery uninstall");
       const note = codexRestartNote();

@@ -78,6 +78,15 @@ function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
+function waitForFile(filePath, timeoutMs = 3500) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (fs.existsSync(filePath)) return true;
+    sleepSync(100);
+  }
+  return false;
+}
+
 function snapshotHasWeekly(jsonText) {
   try {
     const snapshot = JSON.parse(jsonText);
@@ -313,9 +322,10 @@ function runMacHud(cliArgs) {
     process.exit(result.status ?? 0);
   }
 
-  if (macHudPids().length) {
-    console.log("AI Battery menu bar is already running.");
-    process.exit(0);
+  const existingPids = macHudPids();
+  if (existingPids.length) {
+    spawnSync("kill", existingPids.map(String), { stdio: "ignore" });
+    sleepSync(400);
   }
 
   const osascriptArgs = [
@@ -335,7 +345,7 @@ function runMacHud(cliArgs) {
     stdio: "ignore"
   });
   child.unref();
-  console.log("AI Battery menu bar started. Click the menu bar item for details; use \"ai-battery hud stop\" to close it.");
+  console.log(`${existingPids.length ? "AI Battery menu bar restarted" : "AI Battery menu bar started"}. Click the menu bar item for details; use "ai-battery hud stop" to close it.`);
   process.exit(0);
 }
 
@@ -511,6 +521,9 @@ if (subcommand === "autostart") {
 }
 
 const initialJson = stop ? null : prefetchInitialJson(batteryCommand, useWsl);
+const readyPath = (!useWsl && process.platform === "win32" && !foreground && !once && !stop)
+  ? path.join(os.tmpdir(), `ai-battery-hud-ready-${process.pid}-${Date.now()}.json`)
+  : null;
 
 const psArgs = [
   "-NoProfile",
@@ -522,6 +535,10 @@ const psArgs = [
   batteryCommand,
   ...filteredArgs
 ];
+
+if (readyPath) {
+  psArgs.push("-ReadyPath", readyPath);
+}
 
 if (initialJson) {
   psArgs.push("-InitialJsonBase64", Buffer.from(initialJson, "utf8").toString("base64"));
@@ -560,4 +577,9 @@ if (useWsl) {
   child.unref();
 }
 
-console.log("AI Battery HUD started or already running. Drag it to place it; right-click and choose Exit to close.");
+if (readyPath && !waitForFile(readyPath)) {
+  console.log("AI Battery HUD start requested, but no visible window was confirmed. Run: ai-battery hud --foreground");
+} else {
+  console.log("AI Battery HUD started. Drag it to place it; right-click and choose Exit to close.");
+}
+if (readyPath) fs.rmSync(readyPath, { force: true });

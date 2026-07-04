@@ -1,6 +1,6 @@
 {
   "name": "ai-battery",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Tiny terminal battery meter for local Codex and Claude Code usage.",
   "type": "module",
   "keywords": [
@@ -16,6 +16,7 @@
     "ai-battery": "bin/ai-battery.js",
     "ai-battery-hud": "bin/ai-battery-hud.js",
     "ai-battery-run": "bin/ai-battery-run",
+    "ai-battery-run-win": "bin/ai-battery-run-win.js",
     "claudex-battery": "bin/ai-battery.js",
     "claudex-battery-hud": "bin/ai-battery-hud.js",
     "claudex-battery-run": "bin/ai-battery-run"
@@ -23,6 +24,7 @@
   "files": [
     "bin/ai-battery.js",
     "bin/ai-battery-run",
+    "bin/ai-battery-run-win.js",
     "bin/ai-battery-hud",
     "bin/ai-battery-hud.js",
     "bin/ai-battery-macos-status.applescript",
@@ -32,11 +34,14 @@
   ],
   "scripts": {
     "start": "node ./bin/ai-battery.js",
-    "check": "node --check ./bin/ai-battery.js && node --check ./bin/ai-battery-hud.js && node --test",
+    "check": "node --check ./bin/ai-battery.js && node --check ./bin/ai-battery-hud.js && node --check ./bin/ai-battery-run-win.js && node --test",
     "test": "node --test"
   },
   "engines": {
     "node": ">=18"
+  },
+  "optionalDependencies": {
+    "node-pty": "^1.0.0"
   },
   "license": "MIT",
   "repository": {
