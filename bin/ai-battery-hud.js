@@ -430,7 +430,7 @@ function hudProcessStatus() {
     + "$_.Name -match '^(powershell|pwsh)' -and "
     + "$_.CommandLine -like '*ai-battery-hud.ps1*' -and "
     + "$_.CommandLine -notlike '*Start-Process*' }; "
-    + "if ($hud) { 'running (PID ' + @($hud)[0].ProcessId + ')' } else { 'stopped' }";
+    + "if ($hud) { $p = @($hud)[0]; $source = if ($p.CommandLine -like '*-UseWsl*') { 'WSL' } else { 'Windows' }; 'running (' + $source + ', PID ' + $p.ProcessId + ')' } else { 'stopped' }";
   const result = runPowerShell(query);
   return (result.stdout || "").trim() || "unknown";
 }

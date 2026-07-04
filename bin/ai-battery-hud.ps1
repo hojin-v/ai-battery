@@ -89,6 +89,11 @@ function Get-HudStatePath {
   return Join-Path $root "hud-position.json"
 }
 
+function Get-HudSourceId {
+  if ($UseWsl) { return "wsl" }
+  return "windows"
+}
+
 function Get-HudSnapshotPath {
   $root = if ($env:LOCALAPPDATA) {
     Join-Path $env:LOCALAPPDATA "ai-battery"
@@ -96,7 +101,7 @@ function Get-HudSnapshotPath {
     Join-Path $env:TEMP "ai-battery"
   }
   New-Item -ItemType Directory -Force -Path $root | Out-Null
-  return Join-Path $root "hud-snapshot.json"
+  return Join-Path $root "hud-snapshot-$(Get-HudSourceId).json"
 }
 
 function Get-LegacyHudStatePath {
@@ -206,6 +211,7 @@ function Read-InitialHudSnapshot {
 function Write-HudSnapshot($Snapshot) {
   try {
     if (-not $Snapshot) { return }
+    $Snapshot | Add-Member -NotePropertyName "hudSource" -NotePropertyValue (Get-HudSourceId) -Force
     $Snapshot | ConvertTo-Json -Depth 20 -Compress | Set-Content -Encoding UTF8 -Path (Get-HudSnapshotPath)
   } catch {
     # The HUD can still run without a warm-start cache.
