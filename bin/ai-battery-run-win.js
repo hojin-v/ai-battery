@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,14 +10,29 @@ const BATTERY_BIN = process.env.AI_BATTERY_BIN
   || process.env.CLAUDEX_BATTERY_BIN
   || path.join(SCRIPT_DIR, "ai-battery.js");
 const ANSI_RE = /\u001b\[[0-?]*[ -/]*[@-~]/g;
+const DEBUG_LOG = process.env.AI_BATTERY_DEBUG_LOG || process.env.CLAUDEX_BATTERY_DEBUG_LOG || "";
 const DEFAULT_COLUMN_GUARD = 4;
 const DEFAULT_LEFT_PADDING = 2;
 
 function usage() {
-  console.log(`Usage: ai-battery-run-win [--interval SECONDS] [--bar-width N] [--provider auto|all|codex|claude] [--left-padding N] -- COMMAND [ARGS...]
+  console.log(`Usage: ai-battery-run-win [--interval SECONDS] [--bar-width N] [--provider auto|all|codex|claude] [--layout auto|reserve|overlay] [--left-padding N] -- COMMAND [ARGS...]
 
 Runs COMMAND and keeps AI Battery on the terminal bottom row.
 On Windows, node-pty enables ConPTY row reservation when available; otherwise AI Battery falls back to a same-console overlay row.`);
+}
+
+function debugLog(event, details = {}) {
+  if (!DEBUG_LOG) return;
+  try {
+    fs.mkdirSync(path.dirname(DEBUG_LOG), { recursive: true });
+    fs.appendFileSync(DEBUG_LOG, `${JSON.stringify({
+      at: new Date().toISOString(),
+      event,
+      ...details
+    })}\n`);
+  } catch {
+    // Debug logging must never interfere with launching Codex.
+  }
 }
 
 function parseArgs(argv) {
@@ -25,6 +40,7 @@ function parseArgs(argv) {
     interval: Number(process.env.AI_BATTERY_INTERVAL || process.env.CLAUDEX_BATTERY_INTERVAL || 10),
     barWidth: process.env.AI_BATTERY_BAR_WIDTH || process.env.CLAUDEX_BATTERY_BAR_WIDTH || "10",
     provider: process.env.AI_BATTERY_PROVIDER || process.env.CLAUDEX_BATTERY_PROVIDER || "auto",
+    layout: process.env.AI_BATTERY_WIN_LAYOUT || process.env.CLAUDEX_BATTERY_WIN_LAYOUT || process.env.AI_BATTERY_LAYOUT || "auto",
     leftPadding: Number(process.env.AI_BATTERY_LEFT_PADDING || process.env.CLAUDEX_BATTERY_LEFT_PADDING || DEFAULT_LEFT_PADDING),
     command: []
   };
@@ -43,8 +59,16 @@ function parseArgs(argv) {
       if (!["auto", "all", "codex", "claude"].includes(args.provider)) {
         throw new Error("--provider must be one of: auto, all, codex, claude");
       }
+    } else if (arg === "--layout") {
+      args.layout = argv[++i] || args.layout;
+      if (!["auto", "reserve", "overlay"].includes(args.layout)) {
+        throw new Error("--layout must be one of: auto, reserve, overlay");
+      }
     } else if (arg === "--left-padding") {
-      args.leftPadding = Math.max(0, Math.min(20, Number(argv[++i]) || args.leftPadding));
+      const value = Number(argv[++i]);
+      args.leftPadding = Number.isFinite(value)
+        ? Math.max(0, Math.min(20, value))
+        : args.leftPadding;
     } else if (arg === "--") {
       args.command = argv.slice(i + 1);
       break;
@@ -59,6 +83,7 @@ function parseArgs(argv) {
     process.exit(2);
   }
   if (!Number.isFinite(args.interval)) args.interval = 10;
+  if (!["auto", "reserve", "overlay"].includes(args.layout)) args.layout = "auto";
   return args;
 }
 
@@ -71,9 +96,12 @@ function inferProvider(command) {
 }
 
 function termSize() {
+  const windowSize = process.stdout.getWindowSize?.();
+  const cols = process.stdout.columns || windowSize?.[0] || 80;
+  const rows = process.stdout.rows || windowSize?.[1] || 24;
   return {
-    cols: Math.max(20, process.stdout.columns || 80),
-    rows: Math.max(1, process.stdout.rows || 24)
+    cols: Math.max(20, cols),
+    rows: Math.max(1, rows)
   };
 }
 
@@ -115,6 +143,10 @@ function batteryCommand(args, activeProvider, maxWidth) {
   return command;
 }
 
+function statusOutputText(stdout) {
+  return String(stdout || "").replace(/[\r\n]+$/g, "");
+}
+
 class StatusLine {
   constructor(args, activeProvider) {
     this.args = args;
@@ -123,6 +155,10 @@ class StatusLine {
     this.nextFetch = 0;
     this.lastLine = "";
     this.lastDraw = 0;
+    this.refreshInFlight = false;
+    this.refreshQueued = false;
+    this.disposed = false;
+    this.onRefresh = null;
     this.resize();
   }
 
@@ -132,26 +168,63 @@ class StatusLine {
     this.rows = size.rows;
   }
 
-  refresh(force = false) {
+  kickRefresh(force = false) {
+    if (this.disposed) return;
     const now = Date.now();
     if (!force && now < this.nextFetch) return;
+    if (this.refreshInFlight) {
+      this.refreshQueued = this.refreshQueued || force;
+      return;
+    }
+
+    this.refreshInFlight = true;
     this.nextFetch = now + (this.args.interval * 1000);
     const maxWidth = Math.max(20, this.cols - columnGuard());
     const command = batteryCommand(this.args, this.activeProvider, maxWidth);
-    const result = spawnSync(command[0], command.slice(1), {
-      encoding: "utf8",
+    const child = spawn(command[0], command.slice(1), {
       stdio: ["ignore", "pipe", "ignore"],
-      timeout: 1500,
       windowsHide: true
     });
-    const text = result.stdout?.trim();
-    if (result.status === 0 && text) this.text = text;
+
+    let stdout = "";
+    const timeout = setTimeout(() => child.kill(), 1500);
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk;
+      if (stdout.length > 64 * 1024) child.kill();
+    });
+
+    let settled = false;
+    const finish = (status) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      this.refreshInFlight = false;
+      if (this.disposed) return;
+      const text = statusOutputText(stdout);
+      const changed = status === 0 && text && text !== this.text;
+      if (changed) {
+        this.text = text;
+        if (typeof this.onRefresh === "function") {
+          this.onRefresh();
+        } else {
+          this.paint(true);
+        }
+      }
+      if (this.refreshQueued) {
+        this.refreshQueued = false;
+        this.kickRefresh(true);
+      }
+    };
+
+    child.on("close", finish);
+    child.on("error", () => finish(1));
   }
 
-  draw(force = false) {
+  paint(force = false) {
+    if (this.disposed) return;
     const now = Date.now();
     if (!force && now - this.lastDraw < 150) return;
-    this.refresh(force);
     const width = Math.max(1, this.cols - 1);
     const line = fitAnsi(this.text, width, true);
     if (!force && line === this.lastLine) return;
@@ -160,13 +233,15 @@ class StatusLine {
     process.stdout.write(`\x1b7\x1b[0m\x1b[${this.rows};1H\r\x1b[1G${line}\x1b[K\x1b[0m\x1b8`);
   }
 
+  draw(force = false) {
+    this.kickRefresh(force);
+    this.paint(force);
+  }
+
   clear() {
+    this.disposed = true;
     process.stdout.write(`\x1b7\x1b[0m\x1b[${this.rows};1H\r\x1b[1G\x1b[2K\x1b8`);
   }
-}
-
-function quoteCmdArg(value) {
-  return `"${String(value).replace(/"/g, '""')}"`;
 }
 
 function normalizeWindowsCommandPath(value) {
@@ -201,7 +276,7 @@ function windowsCommand(command) {
   if (/\.(cmd|bat)$/i.test(exe)) {
     return {
       file: "cmd.exe",
-      args: ["/d", "/s", "/c", [exe, ...rest].map(quoteCmdArg).join(" ")]
+      args: ["/d", "/s", "/c", "call", exe, ...rest]
     };
   }
   if (/\.ps1$/i.test(exe)) {
@@ -222,20 +297,47 @@ function windowsCommand(command) {
 async function loadNodePty() {
   try {
     const mod = await import("node-pty");
+    debugLog("node-pty:loaded");
     return mod.default ?? mod;
-  } catch {
+  } catch (error) {
+    debugLog("node-pty:missing", { error: error.message });
     return null;
   }
 }
 
 async function runConPty(args, activeProvider) {
+  if (args.layout === "overlay") {
+    debugLog("conpty:skipped", { reason: "layout overlay" });
+    return null;
+  }
+
   const pty = await loadNodePty();
-  if (!pty || !process.stdin.isTTY || !process.stdout.isTTY) return null;
+  if (!pty || !process.stdin.isTTY || !process.stdout.isTTY) {
+    debugLog("conpty:unavailable", {
+      hasPty: Boolean(pty),
+      stdinTty: Boolean(process.stdin.isTTY),
+      stdoutTty: Boolean(process.stdout.isTTY)
+    });
+    if (args.layout === "reserve") {
+      console.error("ai-battery-run-win: ConPTY reserve layout is unavailable in this terminal.");
+      return 2;
+    }
+    return null;
+  }
 
   const status = new StatusLine(args, activeProvider);
   const size = termSize();
   const childRows = Math.max(1, size.rows - 1);
   const command = windowsCommand(args.command);
+  debugLog("conpty:start", {
+    size,
+    childRows,
+    command,
+    stdoutColumns: process.stdout.columns,
+    stdoutRows: process.stdout.rows,
+    windowSize: process.stdout.getWindowSize?.() || null,
+    wtSession: Boolean(process.env.WT_SESSION)
+  });
   const term = pty.spawn(command.file, command.args, {
     name: "xterm-256color",
     cols: size.cols,
@@ -250,39 +352,74 @@ async function runConPty(args, activeProvider) {
   const onInput = (data) => term.write(data.toString());
   process.stdin.on("data", onInput);
 
-  const timer = setInterval(() => status.draw(false), Math.max(500, args.interval * 1000));
+  let drawTimer = null;
+  let drawForce = false;
+  const scheduleDraw = (force = false, delayMs = 45) => {
+    drawForce = drawForce || force;
+    if (drawTimer) return;
+    drawTimer = setTimeout(() => {
+      drawTimer = null;
+      const forceNow = drawForce;
+      drawForce = false;
+      status.draw(forceNow);
+    }, delayMs);
+  };
+  status.onRefresh = () => scheduleDraw(true, 45);
+
+  const timer = setInterval(() => scheduleDraw(false), Math.max(500, args.interval * 1000));
   const onResize = () => {
     status.resize();
     term.resize(status.cols, Math.max(1, status.rows - 1));
-    status.draw(true);
+    scheduleDraw(true, 0);
   };
   process.stdout.on("resize", onResize);
 
   return await new Promise((resolve) => {
     term.onData((data) => {
       process.stdout.write(data);
-      status.draw(false);
+      scheduleDraw(false);
     });
     term.onExit(({ exitCode }) => {
+      debugLog("conpty:exit", { exitCode });
       clearInterval(timer);
+      if (drawTimer) clearTimeout(drawTimer);
       process.stdout.off("resize", onResize);
       process.stdin.off("data", onInput);
       process.stdin.setRawMode?.(oldRaw);
       status.clear();
       resolve(exitCode ?? 0);
     });
-    status.draw(true);
+    scheduleDraw(true, 0);
   });
+}
+
+function overlayInitialDelayMs() {
+  const raw = Number(process.env.AI_BATTERY_OVERLAY_INITIAL_DELAY_MS || process.env.CLAUDEX_BATTERY_OVERLAY_INITIAL_DELAY_MS);
+  if (Number.isFinite(raw)) return Math.max(0, Math.min(5000, Math.floor(raw)));
+  return 1200;
 }
 
 function runOverlay(args, activeProvider) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    debugLog("overlay:unavailable", {
+      stdinTty: Boolean(process.stdin.isTTY),
+      stdoutTty: Boolean(process.stdout.isTTY)
+    });
     console.error("ai-battery-run-win: stdin/stdout is not a real terminal.");
     return 2;
   }
 
   const status = new StatusLine(args, activeProvider);
   const command = windowsCommand(args.command);
+  debugLog("overlay:start", {
+    size: termSize(),
+    command,
+    initialDelayMs: overlayInitialDelayMs(),
+    stdoutColumns: process.stdout.columns,
+    stdoutRows: process.stdout.rows,
+    windowSize: process.stdout.getWindowSize?.() || null,
+    wtSession: Boolean(process.env.WT_SESSION)
+  });
   const child = spawn(command.file, command.args, {
     stdio: "inherit",
     cwd: process.cwd(),
@@ -290,25 +427,52 @@ function runOverlay(args, activeProvider) {
     windowsHide: false
   });
 
-  const timer = setInterval(() => status.draw(true), Math.max(750, args.interval * 1000));
+  const timer = setInterval(() => status.draw(false), Math.max(1000, args.interval * 1000));
   const onResize = () => {
     status.resize();
     status.draw(true);
   };
   process.stdout.on("resize", onResize);
-  status.draw(true);
+  const firstDraw = setTimeout(() => status.draw(true), overlayInitialDelayMs());
 
   return new Promise((resolve) => {
     child.on("exit", (code, signal) => {
+      debugLog("overlay:exit", { code, signal });
       clearInterval(timer);
+      clearTimeout(firstDraw);
       process.stdout.off("resize", onResize);
       status.clear();
       resolve(code ?? (signal ? 1 : 0));
     });
     child.on("error", (error) => {
+      debugLog("overlay:error", { error: error.message });
       clearInterval(timer);
+      clearTimeout(firstDraw);
       process.stdout.off("resize", onResize);
       status.clear();
+      console.error(`ai-battery-run-win: ${error.message}`);
+      resolve(1);
+    });
+  });
+}
+
+function runPlain(args) {
+  const command = windowsCommand(args.command);
+  debugLog("plain:start", { command });
+  const child = spawn(command.file, command.args, {
+    stdio: "inherit",
+    cwd: process.cwd(),
+    env: process.env,
+    windowsHide: false
+  });
+
+  return new Promise((resolve) => {
+    child.on("exit", (code, signal) => {
+      debugLog("plain:exit", { code, signal });
+      resolve(code ?? (signal ? 1 : 0));
+    });
+    child.on("error", (error) => {
+      debugLog("plain:error", { error: error.message });
       console.error(`ai-battery-run-win: ${error.message}`);
       resolve(1);
     });
@@ -325,14 +489,27 @@ async function main() {
   const commandProvider = inferProvider(args.command);
   if (args.provider === "auto") args.provider = commandProvider;
   const activeProvider = ["codex", "claude"].includes(commandProvider) ? commandProvider : null;
+  debugLog("main:start", {
+    argv: process.argv.slice(2),
+    provider: args.provider,
+    layout: args.layout,
+    commandProvider,
+    activeProvider,
+    stdinTty: Boolean(process.stdin.isTTY),
+    stdoutTty: Boolean(process.stdout.isTTY)
+  });
 
   const ptyExit = await runConPty(args, activeProvider);
-  const exitCode = ptyExit === null ? await runOverlay(args, activeProvider) : ptyExit;
+  const exitCode = ptyExit === null
+    ? (process.stdin.isTTY && process.stdout.isTTY ? await runOverlay(args, activeProvider) : await runPlain(args))
+    : ptyExit;
   process.exit(exitCode);
 }
 
 export {
+  parseArgs,
   resolveWindowsCommandFile,
+  statusOutputText,
   windowsCommand
 };
 

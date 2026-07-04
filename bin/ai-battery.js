@@ -185,6 +185,14 @@ Compatibility:
 }
 
 function userHome() {
+  const envHome = String(process.env.HOME || "").trim();
+  if (envHome) {
+    const looksWindowsAbsolute = /^[A-Za-z]:[\\/]/.test(envHome) || envHome.startsWith("\\\\");
+    if (process.platform === "win32" ? looksWindowsAbsolute : envHome.startsWith("/")) {
+      return envHome;
+    }
+  }
+
   const home = os.homedir();
   if (process.platform !== "win32" && (/^[A-Za-z]:[\\/]/.test(home) || home.includes("\\"))) {
     try {
@@ -584,7 +592,7 @@ rem ${CODEX_WRAPPER_MARKER}=1
 set "AI_BATTERY_ORIGINAL_CODEX=${command}"
 set "AI_BATTERY_WRAPPED_CODEX=1"
 if exist ${cmdQuote(runner)} (
-  ${cmdQuote(process.execPath)} ${cmdQuote(runner)} --provider all -- ${cmdQuote(command)} %*
+  ${cmdQuote(process.execPath)} ${cmdQuote(runner)} --provider all --left-padding 2 -- ${cmdQuote(command)} %*
 ) else (
 ${windowsCmdFallbackCommand(command)}
 )
@@ -661,7 +669,7 @@ function selectCodexShimDir(originalCommand, pathCommand = originalCommand) {
   }
 
   const legacyDir = legacyCodexShimDir();
-  const legacyWrapper = path.join(legacyDir, "codex");
+  const legacyWrapper = codexWrapperPathInDir(legacyDir);
   if (
     pathDirPrecedesOriginal(legacyDir, pathCommand)
     && canUseCodexShimTarget(legacyWrapper, originalCommand)
@@ -798,6 +806,14 @@ function ensureWindowsShimPath(shimDir, originalCommand) {
     };
   }
 
+  if (process.env.AI_BATTERY_SKIP_WINDOWS_PATH_WRITE === "1") {
+    return {
+      changed: false,
+      rcPath: null,
+      note: `Skipped Windows user PATH update for ${shimDir}`
+    };
+  }
+
   const parts = windowsUserPathParts();
   const filtered = parts.filter((entry) => !sameWindowsPath(entry, shimDir));
   const changed = filtered.length !== parts.length || !sameWindowsPath(parts[0] || "", shimDir);
@@ -818,6 +834,8 @@ function ensureWindowsShimPath(shimDir, originalCommand) {
 }
 
 function removeWindowsUserPathEntries(shimDirs) {
+  if (process.env.AI_BATTERY_SKIP_WINDOWS_PATH_WRITE === "1") return [];
+
   const dirs = uniquePaths(shimDirs).filter(Boolean);
   if (!dirs.length) return [];
 
@@ -3569,12 +3587,13 @@ async function main() {
         const claudeData = claudeStatuslineResultFromCache(capturedClaude, capturedSource, { includeBackground: true }) ?? readClaude();
         results.push({ ...claudeData, running: true });
       }
-      const header = args.header ? applyLeftPadding(claudeHeader(input, args, capturedClaude), args) : "";
+      const contentWidth = Math.max(20, statusLineUsableColumns(input) - (Number(args.leftPadding) || 0));
+      const header = args.header ? claudeHeader(input, args, capturedClaude) : "";
       const usage = render({
         generatedAt: new Date().toISOString(),
         results
-      }, { ...args, activeProvider: "claude", maxWidth: statusLineUsableColumns(input) });
-      console.log(header && usage ? `${header}\n${usage}` : (usage || header));
+      }, { ...args, activeProvider: "claude", leftPadding: 0, maxWidth: contentWidth });
+      console.log(applyLeftPadding(header && usage ? `${header}\n${usage}` : (usage || header), args));
     }
     return;
   }

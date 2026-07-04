@@ -20,11 +20,14 @@ import {
   uninstallClaudeStatusline
 } from "../bin/ai-battery.js";
 import {
+  parseArgs as parseWindowsRunnerArgs,
+  statusOutputText,
   windowsCommand
 } from "../bin/ai-battery-run-win.js";
 
 const CLI_PATH = fileURLToPath(new URL("../bin/ai-battery.js", import.meta.url));
 const HUD_SH_PATH = fileURLToPath(new URL("../bin/ai-battery-hud", import.meta.url));
+const CODEX_BIN_NAME = process.platform === "win32" ? "codex.cmd" : "codex";
 
 function withEnv(values, callback) {
   const previous = new Map();
@@ -225,6 +228,18 @@ test("Windows runner launches Node scripts through node instead of spawning them
   assert.deepEqual(command.args, [scriptPath, "--version"]);
 });
 
+test("Windows runner lets wrapper left padding zero override environment padding", () => {
+  const args = withEnv({
+    AI_BATTERY_LEFT_PADDING: "2"
+  }, () => parseWindowsRunnerArgs(["--left-padding", "0", "--", "codex"]));
+
+  assert.equal(args.leftPadding, 0);
+});
+
+test("Windows runner preserves leading statusline padding", () => {
+  assert.equal(statusOutputText("  Codex 91%\r\n"), "  Codex 91%");
+});
+
 test("Windows runner prefers a .cmd sibling over an extensionless npm shim", (t) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
   t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
@@ -237,9 +252,9 @@ test("Windows runner prefers a .cmd sibling over an extensionless npm shim", (t)
   const command = windowsCommand([commandPath, "--version"]);
 
   assert.equal(command.file, "cmd.exe");
-  assert.deepEqual(command.args.slice(0, 3), ["/d", "/s", "/c"]);
-  assert.match(command.args[3], /codex\.cmd/);
-  assert.match(command.args[3], /--version/);
+  assert.deepEqual(command.args.slice(0, 4), ["/d", "/s", "/c", "call"]);
+  assert.match(command.args[4], /codex\.cmd/);
+  assert.equal(command.args[5], "--version");
 });
 
 test("Windows runner normalizes quoted cmd paths from older wrappers", () => {
@@ -247,9 +262,28 @@ test("Windows runner normalizes quoted cmd paths from older wrappers", () => {
   const command = windowsCommand([quotedCodex, "--version"]);
 
   assert.equal(command.file, "cmd.exe");
-  assert.deepEqual(command.args.slice(0, 3), ["/d", "/s", "/c"]);
-  assert.match(command.args[3], /^"C:\\Users\\ghwls\\AppData\\Roaming\\npm\\codex\.cmd"/);
-  assert.doesNotMatch(command.args[3], /'|\\"/);
+  assert.deepEqual(command.args.slice(0, 4), ["/d", "/s", "/c", "call"]);
+  assert.equal(command.args[4], "C:\\Users\\ghwls\\AppData\\Roaming\\npm\\codex.cmd");
+  assert.doesNotMatch(command.args[4], /'|\\"/);
+  assert.equal(command.args[5], "--version");
+});
+
+test("Windows runner can execute normalized cmd paths through cmd call", { skip: process.platform !== "win32" }, (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const cmdPath = path.join(tmpDir, "codex.cmd");
+  fs.writeFileSync(cmdPath, "@echo off\r\necho ok:%~1\r\n");
+
+  const quotedCodex = `'\\\"${cmdPath}\\\"'`;
+  const command = windowsCommand([quotedCodex, "--version"]);
+  const result = spawnSync(command.file, command.args, {
+    encoding: "utf8",
+    windowsHide: true
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout.trim(), "ok:--version");
 });
 
 test("uninstall restores a codex command that setup backed up", (t) => {
@@ -261,8 +295,8 @@ test("uninstall restores a codex command that setup backed up", (t) => {
   fs.mkdirSync(shimDir, { recursive: true });
   fs.mkdirSync(originalDir, { recursive: true });
 
-  const shimCodex = path.join(shimDir, "codex");
-  const originalCodex = path.join(originalDir, "codex");
+  const shimCodex = path.join(shimDir, CODEX_BIN_NAME);
+  const originalCodex = path.join(originalDir, CODEX_BIN_NAME);
   const backupPath = `${shimCodex}.ai-battery-original-link`;
   const originalShimText = "#!/bin/sh\necho custom shim\n";
   fs.writeFileSync(originalCodex, "#!/bin/sh\necho original codex\n", { mode: 0o755 });
@@ -317,8 +351,8 @@ test("setup refuses to overwrite an unmanaged codex command in the shim director
   fs.mkdirSync(shimDir, { recursive: true });
   fs.mkdirSync(originalDir, { recursive: true });
 
-  const shimCodex = path.join(shimDir, "codex");
-  const originalCodex = path.join(originalDir, "codex");
+  const shimCodex = path.join(shimDir, CODEX_BIN_NAME);
+  const originalCodex = path.join(originalDir, CODEX_BIN_NAME);
   const unmanagedText = "#!/bin/sh\necho do not touch\n";
   fs.writeFileSync(shimCodex, unmanagedText, { mode: 0o755 });
   fs.writeFileSync(originalCodex, "#!/bin/sh\necho original codex\n", { mode: 0o755 });
@@ -328,6 +362,7 @@ test("setup refuses to overwrite an unmanaged codex command in the shim director
     XDG_STATE_HOME: stateDir,
     XDG_DATA_HOME: dataDir,
     AI_BATTERY_SHIM_DIR: shimDir,
+    AI_BATTERY_SKIP_WINDOWS_PATH_WRITE: "1",
     AI_BATTERY_RC: path.join(tmpDir, "shellrc"),
     PATH: `${shimDir}${path.delimiter}${originalDir}${path.delimiter}${process.env.PATH || ""}`
   }, () => installCodexWrapper({ force: true }));
@@ -349,8 +384,8 @@ test("setup prefers empty ~/.local/bin when it is already before codex on PATH",
   fs.mkdirSync(localBin, { recursive: true });
   fs.mkdirSync(originalDir, { recursive: true });
 
-  const localCodex = path.join(localBin, "codex");
-  const originalCodex = path.join(originalDir, "codex");
+  const localCodex = path.join(localBin, CODEX_BIN_NAME);
+  const originalCodex = path.join(originalDir, CODEX_BIN_NAME);
   fs.writeFileSync(originalCodex, "#!/bin/sh\necho original codex\n", { mode: 0o755 });
 
   const result = withEnv({
@@ -358,6 +393,7 @@ test("setup prefers empty ~/.local/bin when it is already before codex on PATH",
     XDG_STATE_HOME: stateDir,
     XDG_DATA_HOME: dataDir,
     AI_BATTERY_SHIM_DIR: undefined,
+    AI_BATTERY_SKIP_WINDOWS_PATH_WRITE: "1",
     AI_BATTERY_RC: path.join(tmpDir, "shellrc"),
     PATH: `${localBin}${path.delimiter}${originalDir}${path.delimiter}${process.env.PATH || ""}`
   }, () => installCodexWrapper({ force: false }));
@@ -367,6 +403,9 @@ test("setup prefers empty ~/.local/bin when it is already before codex on PATH",
   assert.equal(result.path.changed, false);
   assert.match(result.path.note, /already before the original codex/);
   assert.match(fs.readFileSync(localCodex, "utf8"), /AI_BATTERY_MANAGED_CODEX_WRAPPER/);
+  if (process.platform === "win32") {
+    assert.match(fs.readFileSync(localCodex, "utf8"), /--left-padding 2 --/);
+  }
 });
 
 test("Claude statusLine header places context left at the terminal right edge", () => {
@@ -403,6 +442,47 @@ test("Claude statusLine header keeps a small clipping guard by default", () => {
 
   assert.equal(visibleWidth(line), 97);
   assert.equal(line.endsWith("83% context left"), true);
+});
+
+test("Claude capture output aligns the first and second line starts", (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const input = {
+    session_id: "align-test",
+    model: { display_name: "Opus" },
+    workspace: { project_dir: tmpDir },
+    context_window: { remaining_percentage: 83 },
+    terminal: { columns: 100 },
+    transcript_path: ""
+  };
+  const result = spawnSync(process.execPath, [
+    CLI_PATH,
+    "capture-claude",
+    "--muted",
+    "--left-padding",
+    "3"
+  ], {
+    input: `${JSON.stringify(input)}\n`,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: path.join(tmpDir, "home"),
+      CODEX_HOME: path.join(tmpDir, ".codex"),
+      AI_BATTERY_STATE_DIR: path.join(tmpDir, "state")
+    },
+    timeout: 5000
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const plainLines = result.stdout
+    .trimEnd()
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
+  assert.equal(plainLines.length, 2);
+  assert.deepEqual(plainLines.map((line) => line.match(/^ */)[0].length), [3, 3]);
+  assert.match(plainLines[0].slice(3), /^Opus\b/);
+  assert.match(plainLines[1].slice(3), /^Claude\b/);
 });
 
 test("Claude statusLine from another tool is skipped by default and restored after forced install", (t) => {

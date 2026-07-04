@@ -4,6 +4,7 @@ param(
   [ValidateSet("tray", "statusline", "floating")]
   [string]$Mode = $(if ($env:AI_BATTERY_HUD_MODE) { $env:AI_BATTERY_HUD_MODE } elseif ($env:CLAUDEX_BATTERY_HUD_MODE) { $env:CLAUDEX_BATTERY_HUD_MODE } else { "floating" }),
   [string]$BatteryCommand = $(if ($env:AI_BATTERY_COMMAND) { $env:AI_BATTERY_COMMAND } elseif ($env:CLAUDEX_BATTERY_COMMAND) { $env:CLAUDEX_BATTERY_COMMAND } else { "ai-battery --json" }),
+  [string]$BatteryCommandBase64 = "",
   [string]$InitialJsonBase64 = "",
   [int]$Width = 282,
   [double]$Opacity = $(if ($env:AI_BATTERY_HUD_OPACITY) { [double]$env:AI_BATTERY_HUD_OPACITY } elseif ($env:CLAUDEX_BATTERY_HUD_OPACITY) { [double]$env:CLAUDEX_BATTERY_HUD_OPACITY } else { 1.0 }),
@@ -19,6 +20,14 @@ param(
 $ErrorActionPreference = "Stop"
 Add-Type -AssemblyName System.Drawing
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+
+if (-not [string]::IsNullOrWhiteSpace($BatteryCommandBase64)) {
+  try {
+    $BatteryCommand = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($BatteryCommandBase64))
+  } catch {
+    # Fall back to BatteryCommand/env defaults; the HUD can still show an error row.
+  }
+}
 
 function Stop-ExistingHudProcesses {
   $currentPid = $PID
@@ -243,6 +252,8 @@ public static class AiBatteryNative {
   public const int WS_EX_TOOLWINDOW = 0x80;
   public const int WS_EX_NOACTIVATE = 0x08000000;
   public const UInt32 MONITOR_DEFAULTTONEAREST = 2;
+  public const UInt32 GW_HWNDNEXT = 2;
+  public const int DWMWA_CLOAKED = 14;
   public static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
   public const UInt32 SWP_NOSIZE = 0x0001;
   public const UInt32 SWP_NOMOVE = 0x0002;
@@ -256,6 +267,16 @@ public static class AiBatteryNative {
   public static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
   [DllImport("user32.dll")]
   public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, UInt32 uFlags);
+  [DllImport("user32.dll")]
+  public static extern IntPtr GetWindow(IntPtr hWnd, UInt32 uCmd);
+  [DllImport("user32.dll")]
+  public static extern IntPtr GetTopWindow(IntPtr hWnd);
+  [DllImport("user32.dll")]
+  public static extern bool IsWindowVisible(IntPtr hWnd);
+  [DllImport("user32.dll", CharSet=CharSet.Auto)]
+  public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+  [DllImport("dwmapi.dll")]
+  public static extern int DwmGetWindowAttribute(IntPtr hWnd, int dwAttribute, out int pvAttribute, int cbAttribute);
   [DllImport("user32.dll", CharSet=CharSet.Auto)]
   public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
   [DllImport("user32.dll", CharSet=CharSet.Auto)]
@@ -1160,7 +1181,7 @@ function Show-HitForm {
     $hitForm.Show()
   }
   $style = [AiBatteryNative]::GetWindowLong($hitForm.Handle, [AiBatteryNative]::GWL_EXSTYLE)
-  $style = $style -bor [AiBatteryNative]::WS_EX_TOOLWINDOW
+  $style = $style -bor [AiBatteryNative]::WS_EX_TOOLWINDOW -bor [AiBatteryNative]::WS_EX_NOACTIVATE
   [AiBatteryNative]::SetWindowLong($hitForm.Handle, [AiBatteryNative]::GWL_EXSTYLE, $style) | Out-Null
 }
 
@@ -1280,21 +1301,79 @@ function Test-RectCoversMonitor($WindowRect, $MonitorRect) {
   )
 }
 
-function Test-ForegroundFullscreen {
+function Test-HudWindowHandle([IntPtr]$Handle) {
+  if ($Handle -eq [IntPtr]::Zero) { return $false }
+  if ($form -and -not $form.IsDisposed -and $Handle -eq $form.Handle) { return $true }
+  if ($hitForm -and -not $hitForm.IsDisposed -and $Handle -eq $hitForm.Handle) { return $true }
+  return $false
+}
+
+function Get-WindowClassName([IntPtr]$Handle) {
+  if ($Handle -eq [IntPtr]::Zero) { return "" }
+  $builder = New-Object System.Text.StringBuilder 256
+  [AiBatteryNative]::GetClassName($Handle, $builder, $builder.Capacity) | Out-Null
+  return $builder.ToString()
+}
+
+function Test-WindowCloaked([IntPtr]$Handle) {
+  if ($Handle -eq [IntPtr]::Zero) { return $false }
+  $value = 0
+  try {
+    $hr = [AiBatteryNative]::DwmGetWindowAttribute($Handle, [AiBatteryNative]::DWMWA_CLOAKED, [ref]$value, 4)
+  } catch {
+    return $false
+  }
+  if ($hr -ne 0) { return $false }
+  return ($value -ne 0)
+}
+
+# Desktop and shell surfaces span the monitor but must never hide the HUD.
+$script:hudSkipWindowClasses = @(
+  "Shell_TrayWnd",
+  "Shell_SecondaryTrayWnd",
+  "NotifyIconOverflowWindow",
+  "Progman",
+  "WorkerW"
+)
+
+function Test-FullscreenOnHudMonitor {
   if (-not $form -or $form.IsDisposed) { return $false }
-  $foreground = [AiBatteryNative]::GetForegroundWindow()
-  if ($foreground -eq [IntPtr]::Zero) { return $false }
-  if ($foreground -eq $form.Handle) { return $false }
-  if ($hitForm -and -not $hitForm.IsDisposed -and $foreground -eq $hitForm.Handle) { return $false }
-
   $hudMonitor = [AiBatteryNative]::MonitorFromWindow($form.Handle, [AiBatteryNative]::MONITOR_DEFAULTTONEAREST)
-  $foregroundMonitor = [AiBatteryNative]::MonitorFromWindow($foreground, [AiBatteryNative]::MONITOR_DEFAULTTONEAREST)
-  if ($hudMonitor -eq [IntPtr]::Zero -or $foregroundMonitor -eq [IntPtr]::Zero) { return $false }
-  if ($hudMonitor -ne $foregroundMonitor) { return $false }
+  if ($hudMonitor -eq [IntPtr]::Zero) { return $false }
+  $monitorRect = Get-MonitorRectObject $hudMonitor
+  if (-not $monitorRect) { return $false }
 
-  $windowRect = Get-WindowRectObject $foreground
-  $monitorRect = Get-MonitorRectObject $foregroundMonitor
-  return Test-RectCoversMonitor $windowRect $monitorRect
+  # Walk the Z-order from the top down. The first genuine window sitting on the
+  # HUD's monitor decides: if it fills the monitor the HUD would cover
+  # fullscreen content and must hide; otherwise the desktop or a normal window
+  # is visible and the HUD stays. Checking only the foreground window missed a
+  # fullscreen video/game on the HUD monitor while focus was on another
+  # monitor. Cloaked windows (virtual-desktop leftovers, ClickToDo/IME hosts)
+  # and shell surfaces are skipped so they never trigger a false hide.
+  $handle = [AiBatteryNative]::GetTopWindow([IntPtr]::Zero)
+  for ($scanned = 0; $scanned -lt 400 -and $handle -ne [IntPtr]::Zero; $scanned += 1) {
+    $next = [AiBatteryNative]::GetWindow($handle, [AiBatteryNative]::GW_HWNDNEXT)
+    # Filter cheapest-first: most windows live on another monitor, so skip the
+    # DWM cloak and class-name lookups until a window is on the HUD monitor.
+    if ((-not (Test-HudWindowHandle $handle)) -and
+        [AiBatteryNative]::IsWindowVisible($handle) -and
+        ([AiBatteryNative]::MonitorFromWindow($handle, [AiBatteryNative]::MONITOR_DEFAULTTONEAREST) -eq $hudMonitor) -and
+        (-not (Test-WindowCloaked $handle)) -and
+        ($script:hudSkipWindowClasses -notcontains (Get-WindowClassName $handle))) {
+      $windowRect = Get-WindowRectObject $handle
+      if ($windowRect -and $windowRect.Width -gt 0 -and $windowRect.Height -gt 0) {
+        $covers = Test-RectCoversMonitor $windowRect $monitorRect
+        if ($env:AI_BATTERY_HUD_DEBUG_FS) {
+          $script:fsDecision = "class=$(Get-WindowClassName $handle) rect=($($windowRect.Left),$($windowRect.Top),$($windowRect.Right),$($windowRect.Bottom)) mon=($($monitorRect.Left),$($monitorRect.Top),$($monitorRect.Right),$($monitorRect.Bottom)) covers=$covers scanned=$scanned"
+        }
+        return $covers
+      }
+    }
+    $handle = $next
+  }
+
+  if ($env:AI_BATTERY_HUD_DEBUG_FS) { $script:fsDecision = "no-deciding-window scanned=$scanned" }
+  return $false
 }
 
 function Set-TaskbarPosition {
@@ -1441,7 +1520,13 @@ function Set-HudHiddenForFullscreen([bool]$Hidden) {
 
 function Update-HudVisibilityForFullscreen {
   if (-not $form -or $form.IsDisposed) { return }
-  if (Test-ForegroundFullscreen) {
+  $fullscreen = Test-FullscreenOnHudMonitor
+  if ($env:AI_BATTERY_HUD_DEBUG_FS) {
+    try {
+      Add-Content -LiteralPath $env:AI_BATTERY_HUD_DEBUG_FS -Value ("{0:HH:mm:ss.fff} fs={1} hidden={2} | {3}" -f [datetime]::Now, $fullscreen, $script:hudHiddenForFullscreen, $script:fsDecision)
+    } catch { }
+  }
+  if ($fullscreen) {
     Set-HudHiddenForFullscreen $true
     return
   }
@@ -1764,22 +1849,32 @@ function Update-HudFromSnapshot($Snapshot) {
 function Invoke-HudPump {
   # Everything here must return quickly: this runs on the UI thread, and the
   # actual data fetch happens on a background runspace.
+  $dbg = [bool]$env:AI_BATTERY_HUD_DEBUG_FS
+  $sw = if ($dbg) { [Diagnostics.Stopwatch]::StartNew() } else { $null }
+  function _lap([string]$what) {
+    if (-not $dbg) { return }
+    Add-Content -LiteralPath $env:AI_BATTERY_HUD_DEBUG_FS -Value ("{0:HH:mm:ss.fff} PUMP {1} +{2}ms" -f [datetime]::Now, $what, $sw.ElapsedMilliseconds)
+  }
   if ($script:fetchPowerShell -and -not $script:fetchHandle.IsCompleted -and
       ([datetime]::UtcNow - $script:lastFetchStartUtc).TotalSeconds -gt 30) {
     Stop-SnapshotFetch
   }
 
   $fresh = Complete-SnapshotFetch
+  _lap "complete"
   if ($fresh) {
     $merged = Merge-HudSnapshot $fresh $script:latestSnapshot
     $script:latestSnapshot = $merged
     Write-HudSnapshot $merged
+    _lap "merge+write"
     Update-HudFromSnapshot $merged
+    _lap "update-hud"
 
     $missingWeekly = @($merged.results | Where-Object { $_.ok -and $null -ne $_.percentRemaining -and $null -eq $_.secondary })
     if ($missingWeekly.Count -gt 0 -and $script:weeklyRetryCount -lt 6) {
       $script:weeklyRetryCount += 1
       Start-SnapshotFetch
+      _lap "start-fetch(retry)"
       return
     }
     $script:weeklyRetryCount = 0
@@ -1789,14 +1884,19 @@ function Invoke-HudPump {
   if (-not $script:fetchPowerShell -and
       ([datetime]::UtcNow - $script:lastFetchStartUtc).TotalSeconds -ge [math]::Max(1, $Interval)) {
     Start-SnapshotFetch
+    _lap "start-fetch"
   }
 }
 
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 1000
 $timer.add_Tick({ Invoke-HudPump })
+# Poll fast so the HUD hides within a fraction of a second when a fullscreen
+# app appears on its monitor and reappears just as quickly when it closes. The
+# check early-outs on the first real window on the HUD monitor, so it stays
+# cheap even at this cadence.
 $topMostTimer = New-Object System.Windows.Forms.Timer
-$topMostTimer.Interval = 1000
+$topMostTimer.Interval = 250
 $topMostTimer.add_Tick({ Update-HudVisibilityForFullscreen })
 $form.add_FormClosed({
   if ($canMove) {
@@ -1847,14 +1947,12 @@ if ($script:initialHudSnapshot) {
 }
 Update-HudFromSnapshot $script:latestSnapshot
 Start-SnapshotFetch
-if ($Mode -eq "statusline" -or $ClickThrough) {
-  $style = [AiBatteryNative]::GetWindowLong($form.Handle, [AiBatteryNative]::GWL_EXSTYLE)
-  $style = $style -bor [AiBatteryNative]::WS_EX_TOOLWINDOW -bor [AiBatteryNative]::WS_EX_NOACTIVATE
-  if ($ClickThrough) {
-    $style = $style -bor [AiBatteryNative]::WS_EX_TRANSPARENT
-  }
-  [AiBatteryNative]::SetWindowLong($form.Handle, [AiBatteryNative]::GWL_EXSTYLE, $style) | Out-Null
+$style = [AiBatteryNative]::GetWindowLong($form.Handle, [AiBatteryNative]::GWL_EXSTYLE)
+$style = $style -bor [AiBatteryNative]::WS_EX_TOOLWINDOW -bor [AiBatteryNative]::WS_EX_NOACTIVATE
+if ($ClickThrough) {
+  $style = $style -bor [AiBatteryNative]::WS_EX_TRANSPARENT
 }
+[AiBatteryNative]::SetWindowLong($form.Handle, [AiBatteryNative]::GWL_EXSTYLE, $style) | Out-Null
 $timer.Start()
 $topMostTimer.Start()
 [System.Windows.Forms.Application]::Run($form)
