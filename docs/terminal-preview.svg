@@ -6,21 +6,43 @@
   <circle cx="24" cy="22" r="5" fill="#ff5f57"/>
   <circle cx="42" cy="22" r="5" fill="#ffbd2e"/>
   <circle cx="60" cy="22" r="5" fill="#28c840"/>
-  <text x="24" y="70" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18">
-    <tspan fill="#f2f2f2">Codex </tspan>
-    <tspan fill="#4ade80">█████████░</tspan>
-    <tspan fill="#f2f2f2"> 86% </tspan>
-    <tspan fill="#8b949e">│</tspan>
-    <tspan fill="#f2f2f2"> 5h 18:09 </tspan>
-    <tspan fill="#8b949e">│</tspan>
-    <tspan fill="#f2f2f2"> 7d 82%  </tspan>
-    <tspan fill="#8b949e">┃</tspan>
-    <tspan fill="#8b949e">  Claude </tspan>
-    <tspan fill="#ff5c5c">█░░░░░░░░░</tspan>
-    <tspan fill="#8b949e"> 4% </tspan>
-    <tspan fill="#8b949e">│</tspan>
-    <tspan fill="#8b949e"> 5h 18:10 </tspan>
-    <tspan fill="#8b949e">│</tspan>
-    <tspan fill="#8b949e"> 7d 71%</tspan>
-  </text>
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18">
+    <text x="24" y="70" fill="#f2f2f2">Codex</text>
+    <g shape-rendering="crispEdges">
+      <rect x="92" y="53" width="8" height="18" fill="#4ade80"/>
+      <rect x="102" y="53" width="8" height="18" fill="#4ade80"/>
+      <rect x="112" y="53" width="8" height="18" fill="#4ade80"/>
+      <rect x="122" y="53" width="8" height="18" fill="#4ade80"/>
+      <rect x="132" y="53" width="8" height="18" fill="#4ade80"/>
+      <rect x="142" y="53" width="8" height="18" fill="#4ade80"/>
+      <rect x="152" y="53" width="8" height="18" fill="#4ade80"/>
+      <rect x="162" y="53" width="8" height="18" fill="#4ade80"/>
+      <rect x="172" y="53" width="8" height="18" fill="#4ade80"/>
+      <rect x="182" y="53" width="8" height="18" fill="#2a3a31"/>
+    </g>
+    <text x="204" y="70" fill="#f2f2f2">86%</text>
+    <text x="250" y="70" fill="#8b949e">│</text>
+    <text x="272" y="70" fill="#f2f2f2">5h 18:09</text>
+    <text x="365" y="70" fill="#8b949e">│</text>
+    <text x="388" y="70" fill="#f2f2f2">7d 82%</text>
+    <text x="480" y="70" fill="#8b949e">┃</text>
+    <text x="505" y="70" fill="#8b949e">Claude</text>
+    <g shape-rendering="crispEdges">
+      <rect x="590" y="53" width="8" height="18" fill="#ff5c5c"/>
+      <rect x="600" y="53" width="8" height="18" fill="#3f252a"/>
+      <rect x="610" y="53" width="8" height="18" fill="#3f252a"/>
+      <rect x="620" y="53" width="8" height="18" fill="#3f252a"/>
+      <rect x="630" y="53" width="8" height="18" fill="#3f252a"/>
+      <rect x="640" y="53" width="8" height="18" fill="#3f252a"/>
+      <rect x="650" y="53" width="8" height="18" fill="#3f252a"/>
+      <rect x="660" y="53" width="8" height="18" fill="#3f252a"/>
+      <rect x="670" y="53" width="8" height="18" fill="#3f252a"/>
+      <rect x="680" y="53" width="8" height="18" fill="#3f252a"/>
+    </g>
+    <text x="702" y="70" fill="#8b949e">4%</text>
+    <text x="748" y="70" fill="#8b949e">│</text>
+    <text x="770" y="70" fill="#8b949e">5h 18:10</text>
+    <text x="863" y="70" fill="#8b949e">│</text>
+    <text x="886" y="70" fill="#8b949e">7d 71%</text>
+  </g>
 </svg>

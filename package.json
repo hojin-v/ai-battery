@@ -26,7 +26,7 @@
     "bin/ai-battery-hud",
     "bin/ai-battery-hud.js",
     "bin/ai-battery-hud.ps1",
-    "docs/terminal-preview.svg",
+    "docs/*.svg",
     "README.md"
   ],
   "scripts": {
