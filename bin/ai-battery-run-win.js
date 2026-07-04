@@ -2,7 +2,6 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -170,13 +169,51 @@ function quoteCmdArg(value) {
   return `"${String(value).replace(/"/g, '""')}"`;
 }
 
+function normalizeWindowsCommandPath(value) {
+  let text = String(value || "").trim();
+  for (let i = 0; i < 6; i += 1) {
+    const before = text;
+    text = text.replace(/\\"/g, "\"").trim();
+    if (
+      (text.startsWith("\"") && text.endsWith("\""))
+      || (text.startsWith("'") && text.endsWith("'"))
+    ) {
+      text = text.slice(1, -1).trim();
+    }
+    if (text === before) break;
+  }
+  return text;
+}
+
+function resolveWindowsCommandFile(commandPath) {
+  commandPath = normalizeWindowsCommandPath(commandPath);
+  if (path.extname(commandPath)) return commandPath;
+  for (const suffix of [".cmd", ".exe", ".bat", ".ps1"]) {
+    const candidate = `${commandPath}${suffix}`;
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return commandPath;
+}
+
 function windowsCommand(command) {
-  const exe = command[0];
+  const exe = resolveWindowsCommandFile(command[0]);
   const rest = command.slice(1);
   if (/\.(cmd|bat)$/i.test(exe)) {
     return {
       file: "cmd.exe",
       args: ["/d", "/s", "/c", [exe, ...rest].map(quoteCmdArg).join(" ")]
+    };
+  }
+  if (/\.ps1$/i.test(exe)) {
+    return {
+      file: "powershell.exe",
+      args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", exe, ...rest]
+    };
+  }
+  if (/\.(js|mjs|cjs)$/i.test(exe)) {
+    return {
+      file: process.execPath,
+      args: [exe, ...rest]
     };
   }
   return { file: exe, args: rest };
@@ -294,7 +331,26 @@ async function main() {
   process.exit(exitCode);
 }
 
-main().catch((error) => {
-  console.error(`ai-battery-run-win: ${error.message}`);
-  process.exit(1);
-});
+export {
+  resolveWindowsCommandFile,
+  windowsCommand
+};
+
+function sameFilePath(leftPath, rightPath) {
+  try {
+    return fs.realpathSync(leftPath) === fs.realpathSync(rightPath);
+  } catch {
+    return path.resolve(leftPath) === path.resolve(rightPath);
+  }
+}
+
+function isDirectRun() {
+  return Boolean(process.argv[1]) && sameFilePath(fileURLToPath(import.meta.url), process.argv[1]);
+}
+
+if (isDirectRun()) {
+  main().catch((error) => {
+    console.error(`ai-battery-run-win: ${error.message}`);
+    process.exit(1);
+  });
+}

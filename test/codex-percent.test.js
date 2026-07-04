@@ -19,6 +19,9 @@ import {
   visibleWidth,
   uninstallClaudeStatusline
 } from "../bin/ai-battery.js";
+import {
+  windowsCommand
+} from "../bin/ai-battery-run-win.js";
 
 const CLI_PATH = fileURLToPath(new URL("../bin/ai-battery.js", import.meta.url));
 const HUD_SH_PATH = fileURLToPath(new URL("../bin/ai-battery-hud", import.meta.url));
@@ -212,6 +215,41 @@ test("Codex wrapper falls back to original codex when AI Battery runner is unava
 
   assert.match(script, /\[ -t 0 \] && \[ -t 1 \] && \[ -x /);
   assert.match(script, /exec '\/tmp\/original-codex' "\$@"/);
+});
+
+test("Windows runner launches Node scripts through node instead of spawning them directly", () => {
+  const scriptPath = path.join("C:", "Users", "me", "AppData", "Roaming", "npm", "node_modules", "@openai", "codex", "bin", "codex.js");
+  const command = windowsCommand([scriptPath, "--version"]);
+
+  assert.equal(command.file, process.execPath);
+  assert.deepEqual(command.args, [scriptPath, "--version"]);
+});
+
+test("Windows runner prefers a .cmd sibling over an extensionless npm shim", (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const commandPath = path.join(tmpDir, "codex");
+  const cmdPath = `${commandPath}.cmd`;
+  fs.writeFileSync(commandPath, "#!/bin/sh\necho unix shim\n");
+  fs.writeFileSync(cmdPath, "@echo off\r\necho windows shim\r\n");
+
+  const command = windowsCommand([commandPath, "--version"]);
+
+  assert.equal(command.file, "cmd.exe");
+  assert.deepEqual(command.args.slice(0, 3), ["/d", "/s", "/c"]);
+  assert.match(command.args[3], /codex\.cmd/);
+  assert.match(command.args[3], /--version/);
+});
+
+test("Windows runner normalizes quoted cmd paths from older wrappers", () => {
+  const quotedCodex = "'\\\"C:\\Users\\ghwls\\AppData\\Roaming\\npm\\codex.cmd\\\"'";
+  const command = windowsCommand([quotedCodex, "--version"]);
+
+  assert.equal(command.file, "cmd.exe");
+  assert.deepEqual(command.args.slice(0, 3), ["/d", "/s", "/c"]);
+  assert.match(command.args[3], /^"C:\\Users\\ghwls\\AppData\\Roaming\\npm\\codex\.cmd"/);
+  assert.doesNotMatch(command.args[3], /'|\\"/);
 });
 
 test("uninstall restores a codex command that setup backed up", (t) => {

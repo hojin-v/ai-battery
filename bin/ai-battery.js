@@ -492,6 +492,14 @@ function executableTarget(commandPath) {
   }
 }
 
+function wrapperCommandTarget(commandPath) {
+  // On Windows the PATH command is often an npm-generated .cmd shim. Resolving
+  // it can expose the underlying .js file, which is not directly executable by
+  // ConPTY/spawn and fails with ERROR_BAD_EXE_FORMAT (193).
+  if (process.platform === "win32") return commandPath;
+  return executableTarget(commandPath);
+}
+
 function findCommand(command, skipPaths = []) {
   const names = commandNames(command);
   const skips = skipPaths.filter(Boolean);
@@ -508,7 +516,7 @@ function findCommand(command, skipPaths = []) {
 
 function commandNames(command) {
   return process.platform === "win32"
-    ? [command, `${command}.cmd`, `${command}.exe`, `${command}.bat`]
+    ? [`${command}.cmd`, `${command}.exe`, `${command}.bat`, command]
     : [command];
 }
 
@@ -529,16 +537,56 @@ function cmdQuote(value) {
   return `"${String(value).replace(/"/g, '""')}"`;
 }
 
+function normalizeWindowsCommandPath(value) {
+  let text = String(value || "").trim();
+  for (let i = 0; i < 6; i += 1) {
+    const before = text;
+    text = text.replace(/\\"/g, "\"").trim();
+    if (
+      (text.startsWith("\"") && text.endsWith("\""))
+      || (text.startsWith("'") && text.endsWith("'"))
+    ) {
+      text = text.slice(1, -1).trim();
+    }
+    if (text === before) break;
+  }
+  return text;
+}
+
+function windowsCommandSibling(commandPath) {
+  commandPath = normalizeWindowsCommandPath(commandPath);
+  if (path.extname(commandPath)) return commandPath;
+  for (const suffix of [".cmd", ".exe", ".bat", ".ps1"]) {
+    const candidate = `${commandPath}${suffix}`;
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return commandPath;
+}
+
+function windowsCmdFallbackCommand(commandPath) {
+  const command = windowsCommandSibling(commandPath);
+  const quotedCommand = cmdQuote(command);
+  if (/\.(cmd|bat)$/i.test(command)) return `  call ${quotedCommand} %*`;
+  if (/\.ps1$/i.test(command)) {
+    return `  powershell.exe -NoProfile -ExecutionPolicy Bypass -File ${quotedCommand} %*`;
+  }
+  if (/\.(js|mjs|cjs)$/i.test(command)) {
+    return `  ${cmdQuote(process.execPath)} ${quotedCommand} %*`;
+  }
+  return `  ${quotedCommand} %*`;
+}
+
 function windowsCodexWrapperScript(originalCommand) {
   const runner = path.join(scriptDir(), "ai-battery-run-win.js");
+  const command = windowsCommandSibling(originalCommand);
   return `@echo off
 rem ${CODEX_WRAPPER_MARKER}=1
-set "AI_BATTERY_ORIGINAL_CODEX=${originalCommand}"
+set "AI_BATTERY_ORIGINAL_CODEX=${command}"
 set "AI_BATTERY_WRAPPED_CODEX=1"
 if exist ${cmdQuote(runner)} (
-  ${cmdQuote(process.execPath)} ${cmdQuote(runner)} --provider all -- ${cmdQuote(originalCommand)} %*
+  ${cmdQuote(process.execPath)} ${cmdQuote(runner)} --provider all -- ${cmdQuote(command)} %*
 ) else (
-  ${cmdQuote(originalCommand)} %*
+${windowsCmdFallbackCommand(command)}
 )
 `;
 }
@@ -957,7 +1005,7 @@ function installCodexWrapper(args) {
     ? configuredOriginal
     : discoveredOriginal;
   const originalPathForPath = discoveredOriginal || originalCandidate;
-  const originalCommand = originalCandidate ? executableTarget(originalCandidate) : null;
+  const originalCommand = originalCandidate ? wrapperCommandTarget(originalCandidate) : null;
 
   if (!originalCommand) {
     return {
@@ -1069,7 +1117,11 @@ function diagnoseCodex() {
     notes.push(`A Codex backup is available for restore: ${activeWrapperBackup}`);
   }
   if (wrapperInstalled && !activeIsWrapper) {
-    notes.push(`Plain "codex" does not resolve to the AI Battery wrapper in this shell. Ensure ${path.dirname(configuredWrapper)} is before the original codex on PATH, then open a new terminal or run "hash -r" in the parent shell.`);
+    const wrapperDir = path.dirname(configuredWrapper);
+    const refreshNote = process.platform === "win32"
+      ? `open a new cmd/PowerShell, or run: $env:Path="${wrapperDir};$env:Path"`
+      : "open a new terminal or run \"hash -r\" in the parent shell";
+    notes.push(`Plain "codex" does not resolve to the AI Battery wrapper in this shell. Ensure ${wrapperDir} is before the original codex on PATH, then ${refreshNote}.`);
   }
   if (!runnerExists) {
     notes.push(`AI Battery runner is missing or not executable: ${runnerPath}`);
