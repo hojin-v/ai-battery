@@ -18,6 +18,8 @@ const DEFAULT_STATUSLINE_COLUMN_GUARD = 4;
 const COMMANDS = new Set([
   "show",
   "setup",
+  "teardown",
+  "uninstall",
   "doctor",
   "hud",
   "on",
@@ -27,7 +29,11 @@ const COMMANDS = new Set([
   "uninstall-claude-statusline"
 ]);
 const PROVIDERS = ["codex", "claude"];
+const TEARDOWN_TARGETS = ["codex", "claude", "hud"];
 const CODEX_WRAPPER_MARKER = "AI_BATTERY_MANAGED_CODEX_WRAPPER";
+const CODEX_PREFERRED_BACKUP_SUFFIX = ".ai-battery-original-link";
+const CODEX_TIMESTAMP_BACKUP_MARKER = ".ai-battery-backup-";
+const DEFAULT_STATUSLINE_HEADER_COLUMN_GUARD = 2;
 
 function parseArgs(argv) {
   const args = {
@@ -60,7 +66,7 @@ function parseArgs(argv) {
         args.rest = argv.slice(i + 1);
         break;
       }
-    } else if (!arg.startsWith("-") && ["setup", "on", "off"].includes(args.command)) {
+    } else if (!arg.startsWith("-") && ["setup", "teardown", "uninstall", "on", "off"].includes(args.command)) {
       args.targets.push(arg);
     } else if (arg === "--provider" || arg === "-p") {
       args.provider = argv[++i] || "all";
@@ -126,6 +132,7 @@ function printHelp() {
 Usage:
   ai-battery [options]
   ai-battery setup [codex|claude] [--force]
+  ai-battery uninstall [codex|claude|hud|all]
   ai-battery doctor
   ai-battery hud [start|stop|status] [hud options]
   ai-battery hud autostart on|off|status
@@ -157,6 +164,7 @@ Options:
 Compatibility:
   ai-battery install-claude-statusline [--force]
   ai-battery uninstall-claude-statusline
+  ai-battery teardown [codex|claude|hud|all]
 `);
 }
 
@@ -183,6 +191,12 @@ function stateDir() {
   if (process.env.CLAUDEX_BATTERY_STATE_DIR) return process.env.CLAUDEX_BATTERY_STATE_DIR;
   if (process.env.XDG_STATE_HOME) return path.join(process.env.XDG_STATE_HOME, "ai-battery");
   return homePath(".local", "state", "ai-battery");
+}
+
+function dataDir() {
+  if (process.env.AI_BATTERY_DATA_DIR) return process.env.AI_BATTERY_DATA_DIR;
+  if (process.env.XDG_DATA_HOME) return path.join(process.env.XDG_DATA_HOME, "ai-battery");
+  return homePath(".local", "share", "ai-battery");
 }
 
 function legacyStateDir() {
@@ -217,7 +231,8 @@ function defaultConfig() {
       codex: true,
       claude: true
     },
-    codexWrapper: null
+    codexWrapper: null,
+    claudeStatusLineBackup: null
   };
 }
 
@@ -256,6 +271,21 @@ function providerTargets(targets) {
     }
   }
   return [...providers];
+}
+
+function teardownTargets(targets) {
+  const requested = targets.length ? targets : ["all"];
+  const selected = new Set();
+  for (const target of requested) {
+    if (target === "all") {
+      TEARDOWN_TARGETS.forEach((item) => selected.add(item));
+    } else if (TEARDOWN_TARGETS.includes(target)) {
+      selected.add(target);
+    } else {
+      throw new Error("target must be one of: codex, claude, hud, all");
+    }
+  }
+  return [...selected];
 }
 
 function setProviderVisibility(targets, visible) {
@@ -467,7 +497,7 @@ function codexWrapperScript(originalCommand) {
 # ${CODEX_WRAPPER_MARKER}=1
 export AI_BATTERY_ORIGINAL_CODEX=${shQuote(originalCommand)}
 export AI_BATTERY_WRAPPED_CODEX=1
-if [ -t 0 ] && [ -t 1 ]; then
+if [ -t 0 ] && [ -t 1 ] && [ -x ${shQuote(runner)} ]; then
   exec ${shQuote(runner)} --provider all -- ${shQuote(originalCommand)} "$@"
 fi
 exec ${shQuote(originalCommand)} "$@"
@@ -480,6 +510,86 @@ function managedCodexWrapper(filePath) {
   } catch {
     return false;
   }
+}
+
+function defaultCodexShimDir() {
+  return path.join(dataDir(), "bin");
+}
+
+function legacyCodexWrapperPath() {
+  return homePath(".local", "bin", "codex");
+}
+
+function legacyCodexShimDir() {
+  return path.dirname(legacyCodexWrapperPath());
+}
+
+function pathIndexForDir(dir) {
+  return pathEntries().findIndex((entry) => path.resolve(entry) === path.resolve(dir));
+}
+
+function pathDirPrecedesOriginal(dir, originalCommand) {
+  const shimIndex = pathIndexForDir(dir);
+  if (shimIndex < 0) return false;
+  const originalIndex = pathIndexForDir(path.dirname(originalCommand));
+  return originalIndex < 0 || shimIndex < originalIndex;
+}
+
+function codexInstallSkipPaths(config = readConfig()) {
+  return uniquePaths([
+    config.codexWrapper?.wrapperPath,
+    process.env.AI_BATTERY_SHIM_DIR ? path.join(process.env.AI_BATTERY_SHIM_DIR, "codex") : null,
+    path.join(defaultCodexShimDir(), "codex"),
+    legacyCodexWrapperPath()
+  ]);
+}
+
+function canUseCodexShimTarget(wrapperPath, originalCommand) {
+  if (samePath(wrapperPath, originalCommand)) return false;
+  if (!fs.existsSync(wrapperPath)) return true;
+  return managedCodexWrapper(wrapperPath);
+}
+
+function selectCodexShimDir(originalCommand, pathCommand = originalCommand) {
+  if (process.env.AI_BATTERY_SHIM_DIR) {
+    return {
+      shimDir: process.env.AI_BATTERY_SHIM_DIR,
+      immediate: pathDirPrecedesOriginal(process.env.AI_BATTERY_SHIM_DIR, pathCommand),
+      reason: "AI_BATTERY_SHIM_DIR"
+    };
+  }
+
+  const legacyDir = legacyCodexShimDir();
+  const legacyWrapper = path.join(legacyDir, "codex");
+  if (
+    pathDirPrecedesOriginal(legacyDir, pathCommand)
+    && canUseCodexShimTarget(legacyWrapper, originalCommand)
+  ) {
+    return {
+      shimDir: legacyDir,
+      immediate: true,
+      reason: `${legacyDir} is already before the original codex on PATH`
+    };
+  }
+
+  const shimDir = defaultCodexShimDir();
+  return {
+    shimDir,
+    immediate: pathDirPrecedesOriginal(shimDir, pathCommand),
+    reason: "AI Battery-owned data directory"
+  };
+}
+
+function findOriginalCodexCommand(skipPaths = []) {
+  const skips = skipPaths.filter(Boolean);
+  for (const dir of pathEntries()) {
+    const candidate = path.join(dir, "codex");
+    if (skips.some((skip) => samePath(candidate, skip))) continue;
+    if (!safeStat(candidate)?.isFile() || !isExecutable(candidate)) continue;
+    if (managedCodexWrapper(candidate)) continue;
+    return candidate;
+  }
+  return null;
 }
 
 function shellRcPath() {
@@ -500,6 +610,50 @@ function shellPathBlock(shimDir) {
   return `\n# >>> ai-battery setup >>>\nexport PATH=${shQuote(shimDir)}:"$PATH"\n# <<< ai-battery setup <<<\n`;
 }
 
+function removeAiBatteryShellPathBlock(text) {
+  return String(text).replace(
+    /(\r?\n)?# >>> ai-battery setup >>>\r?\n[\s\S]*?# <<< ai-battery setup <<<(?:\r?\n)?/g,
+    (match, leadingNewline, offset) => (offset === 0 ? "" : (leadingNewline || "\n"))
+  );
+}
+
+function uniquePaths(paths) {
+  const seen = new Set();
+  const result = [];
+  for (const filePath of paths.filter(Boolean)) {
+    const key = path.resolve(filePath);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(filePath);
+  }
+  return result;
+}
+
+function shellRcCandidates() {
+  return uniquePaths([
+    process.env.AI_BATTERY_RC,
+    shellRcPath(),
+    homePath(".zshrc"),
+    homePath(".bashrc"),
+    homePath(".bash_profile"),
+    homePath(".profile"),
+    homePath(".config", "fish", "config.fish")
+  ]);
+}
+
+function removeShellPathBlocks() {
+  const changed = [];
+  for (const rcPath of shellRcCandidates()) {
+    if (!fs.existsSync(rcPath)) continue;
+    const existing = fs.readFileSync(rcPath, "utf8");
+    const next = removeAiBatteryShellPathBlock(existing);
+    if (next === existing) continue;
+    fs.writeFileSync(rcPath, next, "utf8");
+    changed.push(rcPath);
+  }
+  return changed;
+}
+
 function ensureShimPath(shimDir, originalCommand) {
   const entries = pathEntries();
   const shimIndex = entries.findIndex((entry) => path.resolve(entry) === path.resolve(shimDir));
@@ -510,26 +664,159 @@ function ensureShimPath(shimDir, originalCommand) {
     return {
       changed: false,
       rcPath: null,
-      note: `${shimDir} is already before the original codex on PATH`
+      note: `${shimDir} is already before the original codex on PATH. Plain "codex" can use AI Battery in new command lookups. If this shell already cached codex, run "hash -r" once.`
     };
   }
 
   const rcPath = shellRcPath();
   fs.mkdirSync(path.dirname(rcPath), { recursive: true });
   const existing = fs.existsSync(rcPath) ? fs.readFileSync(rcPath, "utf8") : "";
-  if (!existing.includes(">>> ai-battery setup >>>")) {
-    fs.appendFileSync(rcPath, shellPathBlock(shimDir));
+  const withoutAiBatteryBlock = removeAiBatteryShellPathBlock(existing);
+  const separator = withoutAiBatteryBlock && !withoutAiBatteryBlock.endsWith("\n") ? "\n" : "";
+  const next = `${withoutAiBatteryBlock}${separator}${shellPathBlock(shimDir)}`;
+  fs.writeFileSync(rcPath, next, "utf8");
+
+  return {
+    changed: true,
+    rcPath,
+    note: `${existing === withoutAiBatteryBlock ? "Added" : "Updated"} ${shimDir} before PATH in ${rcPath}. Open a new terminal for plain "codex" to use AI Battery.`
+  };
+}
+
+function codexWrapperCandidates(config = readConfig()) {
+  const activeCodex = findCommand("codex");
+  return uniquePaths([
+    config.codexWrapper?.wrapperPath,
+    process.env.AI_BATTERY_SHIM_DIR ? path.join(process.env.AI_BATTERY_SHIM_DIR, "codex") : null,
+    path.join(defaultCodexShimDir(), "codex"),
+    legacyCodexWrapperPath(),
+    activeCodex && managedCodexWrapper(activeCodex) ? activeCodex : null
+  ]);
+}
+
+function codexTimestampBackups(wrapperPath) {
+  const dir = path.dirname(wrapperPath);
+  const prefix = `${path.basename(wrapperPath)}${CODEX_TIMESTAMP_BACKUP_MARKER}`;
+  try {
+    return fs.readdirSync(dir)
+      .filter((entry) => entry.startsWith(prefix))
+      .map((entry) => path.join(dir, entry))
+      .filter((entryPath) => fs.existsSync(entryPath))
+      .sort((left, right) => {
+        const leftStat = safeStat(left);
+        const rightStat = safeStat(right);
+        return (rightStat?.mtimeMs ?? 0) - (leftStat?.mtimeMs ?? 0);
+      });
+  } catch {
+    return [];
+  }
+}
+
+function codexWrapperBackupCandidates(wrapperPath, config = readConfig()) {
+  return uniquePaths([
+    config.codexWrapper?.wrapperPath === wrapperPath ? config.codexWrapper?.backupPath : null,
+    `${wrapperPath}${CODEX_PREFERRED_BACKUP_SUFFIX}`,
+    ...codexTimestampBackups(wrapperPath)
+  ]);
+}
+
+function existingCodexWrapperBackup(wrapperPath, config = readConfig()) {
+  return codexWrapperBackupCandidates(wrapperPath, config).find((backupPath) => fs.existsSync(backupPath)) || null;
+}
+
+function nextCodexBackupPath(wrapperPath) {
+  const preferred = `${wrapperPath}${CODEX_PREFERRED_BACKUP_SUFFIX}`;
+  if (!fs.existsSync(preferred)) return preferred;
+  return `${wrapperPath}${CODEX_TIMESTAMP_BACKUP_MARKER}${Date.now()}`;
+}
+
+function sameOrInsidePath(childPath, parentPath) {
+  const child = path.resolve(childPath);
+  const parent = path.resolve(parentPath);
+  return child === parent || child.startsWith(`${parent}${path.sep}`);
+}
+
+function canRemoveCodexWrapperWithoutBackup(wrapperPath, config = readConfig()) {
+  if (sameOrInsidePath(wrapperPath, defaultCodexShimDir())) return true;
+  if (samePath(wrapperPath, legacyCodexWrapperPath())) return true;
+  const configuredWrapper = config.codexWrapper?.wrapperPath;
+  if (
+    configuredWrapper
+    && samePath(wrapperPath, configuredWrapper)
+    && sameOrInsidePath(wrapperPath, dataDir())
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function removeOrRestoreCodexWrapper(wrapperPath, config) {
+  const backupPath = existingCodexWrapperBackup(wrapperPath, config);
+  if (!backupPath && !canRemoveCodexWrapperWithoutBackup(wrapperPath, config)) {
     return {
-      changed: true,
-      rcPath,
-      note: `Added ${shimDir} before PATH in ${rcPath}. Open a new terminal for plain "codex" to use AI Battery.`
+      wrapperPath,
+      restoredFrom: null,
+      skipped: true,
+      reason: "Managed wrapper is outside AI Battery-owned paths and no backup is available for restore"
     };
+  }
+  fs.rmSync(wrapperPath, { force: true });
+  if (backupPath) {
+    fs.renameSync(backupPath, wrapperPath);
+    return {
+      wrapperPath,
+      restoredFrom: backupPath
+    };
+  }
+  return {
+    wrapperPath,
+    restoredFrom: null
+  };
+}
+
+function uninstallCodexWrapper() {
+  const config = readConfig();
+  const candidates = codexWrapperCandidates(config);
+  const unmanaged = [];
+  const skippedWrappers = [];
+  const removedWrappers = [];
+  const restoredWrappers = [];
+
+  for (const wrapperPath of candidates) {
+    if (!fs.existsSync(wrapperPath)) continue;
+    if (!managedCodexWrapper(wrapperPath)) {
+      unmanaged.push(wrapperPath);
+      continue;
+    }
+    const result = removeOrRestoreCodexWrapper(wrapperPath, config);
+    if (result.skipped) {
+      skippedWrappers.push(result);
+    } else if (result.restoredFrom) {
+      restoredWrappers.push(result);
+    } else {
+      removedWrappers.push(result.wrapperPath);
+    }
+  }
+
+  const rcPaths = removeShellPathBlocks();
+  const hadConfig = Boolean(config.codexWrapper);
+  if (hadConfig) {
+    config.codexWrapper = null;
+    writeConfig(config);
   }
 
   return {
-    changed: false,
-    rcPath,
-    note: `${rcPath} already has an AI Battery PATH block. Open a new terminal if plain "codex" does not use AI Battery yet.`
+    changed: Boolean(removedWrappers.length || restoredWrappers.length || rcPaths.length || hadConfig),
+    wrapperPath: restoredWrappers[0]?.wrapperPath || removedWrappers[0] || null,
+    removedWrappers,
+    restoredWrappers,
+    skippedWrappers,
+    rcPaths,
+    configPath: hadConfig ? configPath() : null,
+    unmanaged,
+    reason: (removedWrappers.length || restoredWrappers.length)
+      ? null
+      : (skippedWrappers.length ? "Managed Codex wrapper found but left untouched because no restore backup was available" : "No managed Codex wrapper found")
   };
 }
 
@@ -542,13 +829,13 @@ function installCodexWrapper(args) {
     };
   }
 
-  const shimDir = process.env.AI_BATTERY_SHIM_DIR || homePath(".local", "bin");
-  const wrapperPath = path.join(shimDir, "codex");
   const config = readConfig();
   const configuredOriginal = config.codexWrapper?.originalCommand;
-  const originalCandidate = configuredOriginal && fs.existsSync(configuredOriginal)
+  const discoveredOriginal = findOriginalCodexCommand(codexInstallSkipPaths(config));
+  const originalCandidate = configuredOriginal && fs.existsSync(configuredOriginal) && !managedCodexWrapper(configuredOriginal)
     ? configuredOriginal
-    : findCommand("codex", [wrapperPath]);
+    : discoveredOriginal;
+  const originalPathForPath = discoveredOriginal || originalCandidate;
   const originalCommand = originalCandidate ? executableTarget(originalCandidate) : null;
 
   if (!originalCommand) {
@@ -559,20 +846,42 @@ function installCodexWrapper(args) {
     };
   }
 
+  const shimSelection = selectCodexShimDir(originalCommand, originalPathForPath);
+  const shimDir = shimSelection.shimDir;
+  const wrapperPath = path.join(shimDir, "codex");
+
+  if (samePath(wrapperPath, originalCommand)) {
+    return {
+      ok: false,
+      skipped: true,
+      reason: `Refusing to replace the original codex command at ${wrapperPath}`
+    };
+  }
+
   fs.mkdirSync(shimDir, { recursive: true, mode: 0o755 });
+  let backupPath = null;
   if (fs.existsSync(wrapperPath) && !managedCodexWrapper(wrapperPath)) {
-    if (!args.force) {
-      throw new Error(`${wrapperPath} already exists. Re-run setup with --force to replace it.`);
-    }
-    fs.renameSync(wrapperPath, `${wrapperPath}.ai-battery-backup-${Date.now()}`);
+    return {
+      ok: false,
+      skipped: true,
+      reason: `Refusing to replace unmanaged codex command at ${wrapperPath}. Set AI_BATTERY_SHIM_DIR to an empty AI Battery-owned directory.`
+    };
   }
 
   fs.writeFileSync(wrapperPath, codexWrapperScript(originalCommand), { mode: 0o755 });
 
-  const pathResult = ensureShimPath(shimDir, originalCommand);
+  const wrapperCleanup = [];
+  for (const staleWrapperPath of codexInstallSkipPaths(config)) {
+    if (samePath(staleWrapperPath, wrapperPath)) continue;
+    if (!fs.existsSync(staleWrapperPath) || !managedCodexWrapper(staleWrapperPath)) continue;
+    wrapperCleanup.push(removeOrRestoreCodexWrapper(staleWrapperPath, config));
+  }
+
+  const pathResult = ensureShimPath(shimDir, originalPathForPath || originalCommand);
   config.codexWrapper = {
     wrapperPath,
     originalCommand,
+    backupPath,
     installedAt: new Date().toISOString()
   };
   writeConfig(config);
@@ -581,6 +890,10 @@ function installCodexWrapper(args) {
     ok: true,
     wrapperPath,
     originalCommand,
+    backupPath,
+    legacyCleanup: wrapperCleanup,
+    wrapperCleanup,
+    shimSelection,
     path: pathResult
   };
 }
@@ -599,11 +912,12 @@ function codexRestartNote() {
 
 function diagnoseCodex() {
   const config = readConfig();
-  const configuredWrapper = config.codexWrapper?.wrapperPath || homePath(".local", "bin", "codex");
+  const configuredWrapper = config.codexWrapper?.wrapperPath || path.join(defaultCodexShimDir(), "codex");
   const configuredOriginal = config.codexWrapper?.originalCommand || null;
   const activeCodex = findCommand("codex");
   const wrapperInstalled = configuredWrapper ? managedCodexWrapper(configuredWrapper) : false;
   const activeIsWrapper = activeCodex ? managedCodexWrapper(activeCodex) : false;
+  const activeWrapperBackup = activeIsWrapper ? existingCodexWrapperBackup(activeCodex, config) : null;
   const originalExists = configuredOriginal ? fs.existsSync(configuredOriginal) : false;
   const runnerPath = path.join(scriptDir(), "ai-battery-run");
   const runnerExists = isExecutable(runnerPath);
@@ -617,8 +931,14 @@ function diagnoseCodex() {
   if (!wrapperInstalled) {
     notes.push("Codex wrapper is not installed. Run: ai-battery setup codex");
   }
+  if (activeIsWrapper && !wrapperInstalled) {
+    notes.push("Plain \"codex\" still resolves to an AI Battery wrapper outside the configured shim. Run: ai-battery uninstall codex");
+  }
+  if (activeWrapperBackup) {
+    notes.push(`A Codex backup is available for restore: ${activeWrapperBackup}`);
+  }
   if (wrapperInstalled && !activeIsWrapper) {
-    notes.push("Plain \"codex\" does not resolve to the AI Battery wrapper in this shell. Open a new terminal or put ~/.local/bin before the original codex on PATH.");
+    notes.push(`Plain "codex" does not resolve to the AI Battery wrapper in this shell. Ensure ${path.dirname(configuredWrapper)} is before the original codex on PATH, then open a new terminal or run "hash -r" in the parent shell.`);
   }
   if (!runnerExists) {
     notes.push(`AI Battery runner is missing or not executable: ${runnerPath}`);
@@ -636,6 +956,7 @@ function diagnoseCodex() {
     providerEnabled,
     activeCodex,
     activeIsWrapper,
+    activeWrapperBackup,
     wrapperPath: configuredWrapper,
     wrapperInstalled,
     runnerPath,
@@ -680,12 +1001,22 @@ function runSetup(args) {
   const targets = providerTargets(args.targets);
   const results = {};
   if (targets.includes("claude")) {
-    results.claude = installClaudeStatusline({ ...args, force: true });
+    results.claude = installClaudeStatusline(args);
   }
   if (targets.includes("codex")) {
     results.codex = installCodexWrapper(args);
   }
   return results;
+}
+
+function isWsl() {
+  if (process.platform !== "linux") return false;
+  if (process.env.WSL_DISTRO_NAME || process.env.WSL_INTEROP) return true;
+  try {
+    return fs.readFileSync("/proc/version", "utf8").toLowerCase().includes("microsoft");
+  } catch {
+    return false;
+  }
 }
 
 function runHud(args) {
@@ -694,6 +1025,71 @@ function runHud(args) {
     stdio: "inherit",
     windowsHide: true
   });
+}
+
+function desktopHudSupported() {
+  return process.platform === "darwin" || process.platform === "win32" || isWsl();
+}
+
+function childResult(result) {
+  return {
+    ok: !result.error && result.status === 0,
+    status: result.status ?? null,
+    error: result.error?.message ?? null,
+    stdout: (result.stdout || "").trim(),
+    stderr: (result.stderr || "").trim()
+  };
+}
+
+function runHudCommand(args) {
+  const hudPath = path.join(scriptDir(), "ai-battery-hud.js");
+  return childResult(spawnSync(process.execPath, [hudPath, ...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 5000,
+    windowsHide: true
+  }));
+}
+
+function uninstallHud() {
+  if (!desktopHudSupported()) {
+    return {
+      changed: false,
+      skipped: true,
+      reason: "Desktop HUD is not supported on this platform"
+    };
+  }
+
+  const autostart = runHudCommand(["autostart", "off"]);
+  const stop = runHudCommand(["stop"]);
+  return {
+    changed: autostart.ok || stop.ok,
+    autostart,
+    stop
+  };
+}
+
+function runTeardown(args) {
+  const targets = teardownTargets(args.targets);
+  const results = {};
+
+  const runStep = (name, action) => {
+    results[name] = action();
+  };
+
+  if (targets.includes("claude")) {
+    runStep("claude", () => uninstallClaudeStatusline({ strict: false }));
+  }
+  if (targets.includes("codex")) {
+    runStep("codex", uninstallCodexWrapper);
+  }
+  if (targets.includes("hud")) {
+    runStep("hud", uninstallHud);
+  }
+  return {
+    targets,
+    results
+  };
 }
 
 function safeStat(filePath) {
@@ -1546,13 +1942,37 @@ function readClaudeStatuslineCache() {
   return readClaudeStatuslineCacheFrom(legacyStateDir()) ?? null;
 }
 
+function claudeStatuslineRefreshInterval() {
+  const value = Number(process.env.AI_BATTERY_CLAUDE_REFRESH ?? process.env.CLAUDEX_BATTERY_CLAUDE_REFRESH);
+  if (!Number.isFinite(value)) return 1;
+  return clamp(Math.floor(value), 1, 60);
+}
+
 function installClaudeStatusline(args) {
   const settingsPath = homePath(".claude", "settings.json");
   const existing = readJson(settingsPath) ?? {};
   const command = `${shellArg(process.execPath)} ${shellArg(fileURLToPath(import.meta.url))} capture-claude --muted --left-padding 1`;
+  const currentCommand = existing.statusLine?.command ?? "";
+  const installedByAiBattery = currentCommand.includes("ai-battery.js") && currentCommand.includes("capture-claude");
+  const config = readConfig();
 
-  if (existing.statusLine && !args.force) {
-    throw new Error(`Claude statusLine already exists in ${settingsPath}. Re-run with --force to replace it.`);
+  if (existing.statusLine && !installedByAiBattery && !args.force) {
+    return {
+      settingsPath,
+      command,
+      skipped: true,
+      reason: "Claude statusLine is already configured by another tool. Re-run with --force to replace it with a restorable backup."
+    };
+  }
+
+  let backedUp = false;
+  if (existing.statusLine && !installedByAiBattery && args.force) {
+    config.claudeStatusLineBackup = {
+      settingsPath,
+      statusLine: existing.statusLine,
+      savedAt: new Date().toISOString()
+    };
+    backedUp = true;
   }
 
   const next = {
@@ -1561,22 +1981,27 @@ function installClaudeStatusline(args) {
       type: "command",
       command,
       padding: 0,
-      refreshInterval: 5
+      refreshInterval: claudeStatuslineRefreshInterval()
     }
   };
 
   writeJsonAtomic(settingsPath, next);
+  if (backedUp) writeConfig(config);
   return {
     settingsPath,
-    command
+    command,
+    backedUp
   };
 }
 
-function uninstallClaudeStatusline() {
+function uninstallClaudeStatusline(options = {}) {
   const settingsPath = homePath(".claude", "settings.json");
   const existing = readJson(settingsPath) ?? {};
   const command = existing.statusLine?.command ?? "";
   const installedByAiBattery = command.includes("ai-battery.js") && command.includes("capture-claude");
+  const strict = options.strict !== false;
+  const config = readConfig();
+  const backup = config.claudeStatusLineBackup;
 
   if (!existing.statusLine) {
     return {
@@ -1587,15 +2012,31 @@ function uninstallClaudeStatusline() {
   }
 
   if (!installedByAiBattery) {
+    if (!strict) {
+      return {
+        settingsPath,
+        changed: false,
+        reason: "Claude statusLine is configured by another tool"
+      };
+    }
     throw new Error(`Claude statusLine exists but does not look like AI Battery's command: ${command}`);
   }
 
   const next = { ...existing };
-  delete next.statusLine;
+  if (backup?.statusLine && (!backup.settingsPath || path.resolve(backup.settingsPath) === path.resolve(settingsPath))) {
+    next.statusLine = backup.statusLine;
+  } else {
+    delete next.statusLine;
+  }
   writeJsonAtomic(settingsPath, next);
+  if (backup) {
+    config.claudeStatusLineBackup = null;
+    writeConfig(config);
+  }
   return {
     settingsPath,
-    changed: true
+    changed: true,
+    restored: Boolean(backup?.statusLine)
   };
 }
 
@@ -1950,26 +2391,75 @@ function numericGuard(value) {
   return clamp(Math.floor(number), 0, 20);
 }
 
+function sttyColumns() {
+  if (process.platform === "win32") return null;
+
+  let ttyFd = null;
+  try {
+    ttyFd = fs.openSync("/dev/tty", "r");
+    const output = execFileSync("stty", ["size"], {
+      encoding: "utf8",
+      stdio: [ttyFd, "pipe", "ignore"],
+      timeout: 100
+    }).trim();
+    const [, columns] = output.split(/\s+/).map((part) => Number(part));
+    return numericColumn(columns);
+  } catch {
+    return null;
+  } finally {
+    if (ttyFd !== null) {
+      try {
+        fs.closeSync(ttyFd);
+      } catch {
+        // Nothing to clean up if the fd was already closed by the OS.
+      }
+    }
+  }
+}
+
+function runtimeTerminalColumns() {
+  return numericColumn(process.stdout.columns) ?? sttyColumns();
+}
+
 function statusLineColumns(input) {
-  const candidates = [
-    process.env.AI_BATTERY_COLUMNS,
-    process.env.CLAUDEX_BATTERY_COLUMNS,
+  const explicitColumns = numericColumn(process.env.AI_BATTERY_COLUMNS)
+    ?? numericColumn(process.env.CLAUDEX_BATTERY_COLUMNS);
+  if (explicitColumns) return explicitColumns;
+
+  const runtimeColumns = runtimeTerminalColumns();
+  const payloadCandidates = [
     input.terminal?.columns,
     input.terminal?.cols,
     input.terminal?.width,
     input.terminal_columns,
     input.terminal_width,
     input.columns,
-    input.width,
-    process.env.COLUMNS,
-    process.stdout.columns
+    input.width
   ];
 
-  for (const candidate of candidates) {
+  let payloadColumns = null;
+  for (const candidate of payloadCandidates) {
     const columns = numericColumn(candidate);
-    if (columns) return columns;
+    if (columns) {
+      payloadColumns = columns;
+      break;
+    }
   }
+
+  if (payloadColumns && runtimeColumns) return Math.min(payloadColumns, runtimeColumns);
+  if (payloadColumns) return payloadColumns;
+  if (runtimeColumns) return runtimeColumns;
+
+  const envColumns = numericColumn(process.env.COLUMNS) ?? numericColumn(process.stdout.columns);
+  if (envColumns) return envColumns;
   return 80;
+}
+
+function statusLineHeaderColumns(input, args) {
+  const guard = numericGuard(process.env.AI_BATTERY_HEADER_COLUMN_GUARD)
+    ?? numericGuard(process.env.CLAUDEX_BATTERY_HEADER_COLUMN_GUARD)
+    ?? DEFAULT_STATUSLINE_HEADER_COLUMN_GUARD;
+  return Math.max(20, statusLineColumns(input) - guard - (Number(args.leftPadding) || 0));
 }
 
 function statusLineUsableColumns(input) {
@@ -2082,7 +2572,7 @@ function claudeHeader(input, args, capturedClaude = null) {
   }
   const left = parts.join(" ");
   const right = contextLeftText(input, capturedClaude?.contextWindow ?? null);
-  const columns = Math.max(20, statusLineUsableColumns(input) - (args.leftPadding || 0));
+  const columns = statusLineHeaderColumns(input, args);
   const header = alignHeader(left, right, columns);
   return statusColorize({ running: false }, header, args);
 }
@@ -2252,6 +2742,71 @@ function render(snapshot, args) {
   return applyLeftPadding(renderLine(snapshot, args), args);
 }
 
+function printTeardownResult(result) {
+  if (result.skipped) {
+    console.log(`Teardown skipped: ${result.reason}`);
+    return;
+  }
+
+  const { codex, claude, hud } = result.results;
+  if (codex) {
+    if (codex.error) {
+      console.log(`Codex wrapper error: ${codex.error}`);
+    } else {
+      for (const restored of codex.restoredWrappers || []) {
+        console.log(`Restored Codex command: ${restored.wrapperPath}`);
+        console.log(`Restored from: ${restored.restoredFrom}`);
+      }
+      for (const wrapperPath of codex.removedWrappers || []) {
+        console.log(`Removed Codex wrapper: ${wrapperPath}`);
+      }
+      for (const skipped of codex.skippedWrappers || []) {
+        console.log(`Left Codex wrapper untouched: ${skipped.wrapperPath}`);
+        console.log(`Reason: ${skipped.reason}`);
+      }
+      if (!(codex.restoredWrappers?.length || codex.removedWrappers?.length || codex.skippedWrappers?.length)) {
+        console.log(`Codex wrapper: ${codex.reason}`);
+      }
+    }
+    for (const rcPath of codex.rcPaths || []) {
+      console.log(`Removed shell PATH block: ${rcPath}`);
+    }
+    if (codex.configPath) console.log(`Updated ${codex.configPath}`);
+    for (const wrapperPath of codex.unmanaged || []) {
+      console.log(`Skipped unmanaged codex command: ${wrapperPath}`);
+    }
+  }
+
+  if (claude) {
+    if (claude.error) {
+      console.log(`Claude statusLine error: ${claude.error}`);
+    } else if (claude.changed) {
+      console.log(`${claude.restored ? "Restored previous Claude statusLine" : "Removed Claude statusLine"}: ${claude.settingsPath}`);
+    } else {
+      console.log(`${claude.reason}: ${claude.settingsPath}`);
+    }
+  }
+
+  if (hud) {
+    if (hud.error) {
+      console.log(`HUD error: ${hud.error}`);
+    } else if (hud.skipped) {
+      console.log(`HUD: ${hud.reason}`);
+    } else {
+      console.log(`HUD autostart: ${hud.autostart.ok ? "off" : "not changed"}`);
+      if (!hud.autostart.ok && hud.autostart.error) console.log(`HUD autostart error: ${hud.autostart.error}`);
+      if (!hud.autostart.ok && hud.autostart.stderr) console.log(`HUD autostart error: ${hud.autostart.stderr}`);
+      console.log(`HUD process: ${hud.stop.ok ? "stopped" : "not changed"}`);
+      if (!hud.stop.ok && hud.stop.error) console.log(`HUD stop error: ${hud.stop.error}`);
+      if (!hud.stop.ok && hud.stop.stderr) console.log(`HUD stop error: ${hud.stop.stderr}`);
+    }
+  }
+
+  if (runningInsideAiBatteryCodexWrapper()) {
+    console.log("Current Codex session was already started through AI Battery; exit this session to remove the terminal row.");
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.version) {
@@ -2269,7 +2824,12 @@ async function main() {
       console.log(JSON.stringify(result, null, 2));
     } else {
       if (result.claude) {
-        console.log(`Claude statusLine installed: ${result.claude.settingsPath}`);
+        if (result.claude.skipped) {
+          console.log(`Claude statusLine skipped: ${result.claude.reason}`);
+        } else {
+          console.log(`Claude statusLine installed: ${result.claude.settingsPath}`);
+          if (result.claude.backedUp) console.log("Backed up previous Claude statusLine for uninstall restore.");
+        }
       }
       if (result.codex?.ok) {
         console.log(`Codex wrapper installed: ${result.codex.wrapperPath}`);
@@ -2280,8 +2840,19 @@ async function main() {
       } else if (result.codex?.skipped) {
         console.log(`Codex wrapper skipped: ${result.codex.reason}`);
       }
+      console.log("To remove AI Battery cleanly later, run: ai-battery uninstall");
       const note = codexRestartNote();
       if (result.codex && note) console.log(note);
+    }
+    return;
+  }
+
+  if (args.command === "teardown" || args.command === "uninstall") {
+    const result = runTeardown(args);
+    if (args.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else if (!args.silent) {
+      printTeardownResult(result);
     }
     return;
   }
@@ -2351,8 +2922,13 @@ async function main() {
   if (args.command === "install-claude-statusline") {
     const result = installClaudeStatusline(args);
     if (!args.json) {
-      console.log(`Installed Claude statusLine: ${result.command}`);
-      console.log(`Updated ${result.settingsPath}`);
+      if (result.skipped) {
+        console.log(`Claude statusLine skipped: ${result.reason}`);
+      } else {
+        console.log(`Installed Claude statusLine: ${result.command}`);
+        console.log(`Updated ${result.settingsPath}`);
+        if (result.backedUp) console.log("Backed up previous Claude statusLine for uninstall restore.");
+      }
     } else {
       console.log(JSON.stringify(result, null, 2));
     }
@@ -2363,7 +2939,7 @@ async function main() {
     const result = uninstallClaudeStatusline();
     if (!args.json) {
       if (result.changed) {
-        console.log(`Removed Claude statusLine from ${result.settingsPath}`);
+        console.log(`${result.restored ? "Restored previous Claude statusLine in" : "Removed Claude statusLine from"} ${result.settingsPath}`);
       } else {
         console.log(`${result.reason}: ${result.settingsPath}`);
       }
@@ -2433,10 +3009,18 @@ async function main() {
 }
 
 export {
+  claudeHeader,
+  codexWrapperScript,
   firstPercentValue,
+  installClaudeStatusline,
+  installCodexWrapper,
   normalizeLimit,
+  removeOrRestoreCodexWrapper,
+  removeAiBatteryShellPathBlock,
   percentValue,
-  sameFilePath
+  sameFilePath,
+  visibleWidth,
+  uninstallClaudeStatusline
 };
 
 function sameFilePath(leftPath, rightPath) {

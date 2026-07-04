@@ -107,6 +107,7 @@ ai-battery --version
 ai-battery --provider codex
 ai-battery --provider claude
 ai-battery setup
+ai-battery uninstall
 ai-battery doctor
 ai-battery hud
 ai-battery off codex
@@ -124,6 +125,33 @@ ai-battery on codex
 
 `doctor`는 설치 상태와 함께 npm latest 버전을 확인합니다. 네트워크가 막혀 있으면 버전 확인만 건너뛰고 나머지 진단은 계속 표시합니다.
 
+## Uninstall
+
+`off`는 표시만 숨기는 설정이고, `uninstall`은 `setup`과 HUD autostart가 만든 통합 지점을 제거합니다.
+
+```bash
+ai-battery uninstall
+```
+
+일부만 제거할 수도 있습니다.
+
+```bash
+ai-battery uninstall codex
+ai-battery uninstall claude
+ai-battery uninstall hud
+```
+
+이 명령은 AI Battery가 관리 마커를 넣은 Codex wrapper, Claude `statusLine`, HUD/menu bar autostart와 실행 중인 HUD를 정리합니다. 다른 도구가 만든 `codex` 파일이나 Claude `statusLine`은 건드리지 않습니다. 이전 버전이나 `--force`로 기존 파일을 백업한 경우에는 가능한 한 원래 파일/symlink를 복원합니다. 현재 이미 AI Battery wrapper 안에서 실행 중인 Codex 세션의 terminal row는 그 세션을 종료해야 사라집니다.
+
+최신 npm은 패키지의 uninstall lifecycle을 실행하지 않기 때문에 `npm uninstall ai-battery` 또는 `npm uninstall -g ai-battery`만으로는 외부 통합 지점을 자동 정리할 수 없습니다. 완전히 제거하려면 npm 패키지를 지우기 전에 먼저 실행하세요.
+
+```bash
+ai-battery uninstall
+npm uninstall -g ai-battery
+```
+
+이미 npm 패키지를 먼저 지운 뒤라면, 다시 설치한 다음 `ai-battery uninstall`을 실행하거나 아래 항목을 직접 확인해 제거해야 합니다: AI Battery가 만든 Codex wrapper, shell rc의 `# >>> ai-battery setup >>>` block, Claude `statusLine`, HUD/menu bar autostart.
+
 ## Setup
 
 `setup`은 한 번만 실행합니다. Claude Code에는 statusLine hook을 설치하고, Codex에는 `codex` wrapper를 설치해서 이후에는 추가 명령 없이 원래처럼 실행하게 합니다.
@@ -139,7 +167,7 @@ ai-battery setup claude
 ai-battery setup codex
 ```
 
-Codex wrapper는 기존 `codex` 명령을 직접 덮어쓰지 않습니다. `~/.local/bin/codex`에 관리형 wrapper를 만들고, 필요한 경우 셸 설정에 `~/.local/bin`을 PATH 앞쪽으로 추가합니다. 새 터미널부터 `codex`가 자동으로 AI Battery 하단 행과 함께 실행됩니다. 현재 터미널에서 바로 쓰려면 `setup` 출력에 표시되는 `source ...` 명령을 실행하세요.
+Codex wrapper는 기존 `codex` 명령을 직접 덮어쓰지 않습니다. `~/.local/bin`이 이미 PATH에서 원본 `codex`보다 앞에 있고 `~/.local/bin/codex`가 비어 있거나 AI Battery 관리 파일이면 그 위치에 wrapper를 둬서 바로 잡히게 합니다. 그렇지 않으면 `~/.local/share/ai-battery/bin/codex`에 관리형 wrapper를 만들고, 필요한 경우 셸 설정에 이 디렉터리를 PATH 앞쪽으로 추가합니다. `~/.local/bin/codex` 같은 공용 위치에 이미 다른 파일이 있으면 덮어쓰지 않습니다. 새 터미널부터 `codex`가 자동으로 AI Battery 하단 행과 함께 실행됩니다. 같은 터미널에서 이미 `codex`를 실행한 적이 있으면 셸 캐시 때문에 `hash -r`이 한 번 필요할 수 있고, PATH 추가가 필요한 경우에는 `setup` 출력에 표시되는 `source ...` 명령을 실행하세요.
 
 Codex 하단 행이 보이지 않으면 진단을 실행합니다.
 
