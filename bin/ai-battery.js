@@ -3574,13 +3574,13 @@ async function main() {
     const capturedClaude = captureClaudeStatusline(input);
     if (!args.silent) {
       const results = [];
-      if (providerVisible("codex")) {
+      if ((args.provider === "all" || args.provider === "codex") && providerVisible("codex")) {
         const codexData = process.platform === "win32"
           ? readCodex({ cachedOnly: true, includeRunning: false, maxAgeSeconds: 60 })
           : readCodex();
         if (codexData) results.push(codexData);
       }
-      if (providerVisible("claude")) {
+      if ((args.provider === "all" || args.provider === "claude") && providerVisible("claude")) {
         const capturedSource = capturedClaude.sessionKind === "bg" && capturedClaude.sessionId
           ? claudeSessionCachePath(capturedClaude.sessionId)
           : claudeCachePath();

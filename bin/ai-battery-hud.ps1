@@ -252,17 +252,30 @@ public struct AiBatteryPowerThrottlingState {
   public uint ControlMask;
   public uint StateMask;
 }
+public delegate void AiBatteryWinEventDelegate(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime);
 public static class AiBatteryNative {
   public const int ProcessPowerThrottling = 4;
   public const uint PROCESS_POWER_THROTTLING_CURRENT_VERSION = 1;
   public const uint PROCESS_POWER_THROTTLING_EXECUTION_SPEED = 0x1;
+  public const int OBJID_WINDOW = 0;
   public const int GWL_EXSTYLE = -20;
   public const int WS_EX_TRANSPARENT = 0x20;
   public const int WS_EX_TOOLWINDOW = 0x80;
   public const int WS_EX_NOACTIVATE = 0x08000000;
+  public const int SW_HIDE = 0;
+  public const int SW_SHOWNOACTIVATE = 4;
   public const UInt32 MONITOR_DEFAULTTONEAREST = 2;
   public const UInt32 GW_HWNDNEXT = 2;
   public const int DWMWA_CLOAKED = 14;
+  public const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+  public const uint EVENT_OBJECT_SHOW = 0x8002;
+  public const uint EVENT_OBJECT_HIDE = 0x8003;
+  public const uint EVENT_OBJECT_REORDER = 0x8004;
+  public const uint EVENT_OBJECT_LOCATIONCHANGE = 0x800B;
+  public const uint EVENT_OBJECT_CLOAKED = 0x8017;
+  public const uint EVENT_OBJECT_UNCLOAKED = 0x8018;
+  public const uint WINEVENT_OUTOFCONTEXT = 0x0000;
+  public const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
   public static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
   public const UInt32 SWP_NOSIZE = 0x0001;
   public const UInt32 SWP_NOMOVE = 0x0002;
@@ -277,6 +290,8 @@ public static class AiBatteryNative {
   [DllImport("user32.dll")]
   public static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int X, int Y, int cx, int cy, UInt32 uFlags);
   [DllImport("user32.dll")]
+  public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")]
   public static extern IntPtr GetWindow(IntPtr hWnd, UInt32 uCmd);
   [DllImport("user32.dll")]
   public static extern IntPtr GetTopWindow(IntPtr hWnd);
@@ -290,6 +305,10 @@ public static class AiBatteryNative {
   public static extern IntPtr GetCurrentProcess();
   [DllImport("kernel32.dll", SetLastError=true)]
   public static extern bool SetProcessInformation(IntPtr hProcess, int ProcessInformationClass, ref AiBatteryPowerThrottlingState ProcessInformation, int ProcessInformationSize);
+  [DllImport("user32.dll")]
+  public static extern IntPtr SetWinEventHook(uint eventMin, uint eventMax, IntPtr hmodWinEventProc, AiBatteryWinEventDelegate lpfnWinEventProc, uint idProcess, uint idThread, uint dwFlags);
+  [DllImport("user32.dll")]
+  public static extern bool UnhookWinEvent(IntPtr hWinEventHook);
   [DllImport("user32.dll", CharSet=CharSet.Auto)]
   public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
   [DllImport("user32.dll", CharSet=CharSet.Auto)]
@@ -319,12 +338,13 @@ function Disable-ProcessPowerThrottling {
     $state.ControlMask = [AiBatteryNative]::PROCESS_POWER_THROTTLING_EXECUTION_SPEED
     $state.StateMask = 0
     $size = [System.Runtime.InteropServices.Marshal]::SizeOf([type][AiBatteryPowerThrottlingState])
-    [AiBatteryNative]::SetProcessInformation([AiBatteryNative]::GetCurrentProcess(), [AiBatteryNative]::ProcessPowerThrottling, [ref]$state, $size) | Out-Null
+    return [AiBatteryNative]::SetProcessInformation([AiBatteryNative]::GetCurrentProcess(), [AiBatteryNative]::ProcessPowerThrottling, [ref]$state, $size)
   } catch {
     # Older Windows builds lack ProcessPowerThrottling; the HUD still works.
+    return $false
   }
 }
-Disable-ProcessPowerThrottling
+$script:powerThrottlingDisabled = Disable-ProcessPowerThrottling
 
 function Invoke-AiBatteryJson {
   if ($UseWsl) {
@@ -1334,6 +1354,19 @@ function Test-RectCoversMonitor($WindowRect, $MonitorRect) {
   )
 }
 
+function Test-RectIsSubstantialOnMonitor($WindowRect, $MonitorRect) {
+  if (-not $WindowRect -or -not $MonitorRect) { return $false }
+  $left = [math]::Max([int]$WindowRect.Left, [int]$MonitorRect.Left)
+  $top = [math]::Max([int]$WindowRect.Top, [int]$MonitorRect.Top)
+  $right = [math]::Min([int]$WindowRect.Right, [int]$MonitorRect.Right)
+  $bottom = [math]::Min([int]$WindowRect.Bottom, [int]$MonitorRect.Bottom)
+  $width = [math]::Max(0, $right - $left)
+  $height = [math]::Max(0, $bottom - $top)
+  $monitorArea = [math]::Max(1, [int]$MonitorRect.Width * [int]$MonitorRect.Height)
+  $windowArea = $width * $height
+  return (($windowArea / $monitorArea) -ge 0.20)
+}
+
 function Test-HudWindowHandle([IntPtr]$Handle) {
   if ($Handle -eq [IntPtr]::Zero) { return $false }
   if ($form -and -not $form.IsDisposed -and $Handle -eq $form.Handle) { return $true }
@@ -1376,13 +1409,10 @@ function Test-FullscreenOnHudMonitor {
   $monitorRect = Get-MonitorRectObject $hudMonitor
   if (-not $monitorRect) { return $false }
 
-  # Walk the Z-order from the top down. The first genuine window sitting on the
-  # HUD's monitor decides: if it fills the monitor the HUD would cover
-  # fullscreen content and must hide; otherwise the desktop or a normal window
-  # is visible and the HUD stays. Checking only the foreground window missed a
-  # fullscreen video/game on the HUD monitor while focus was on another
-  # monitor. Cloaked windows (virtual-desktop leftovers, ClickToDo/IME hosts)
-  # and shell surfaces are skipped so they never trigger a false hide.
+  # Walk the Z-order from the top down. Small transient overlays (volume, IME,
+  # Game Bar, browser controls) are ignored so we can still see the fullscreen
+  # window beneath them. A substantial normal window stops the search: any
+  # fullscreen window below it is not the visible fullscreen surface.
   $handle = [AiBatteryNative]::GetTopWindow([IntPtr]::Zero)
   for ($scanned = 0; $scanned -lt 400 -and $handle -ne [IntPtr]::Zero; $scanned += 1) {
     $next = [AiBatteryNative]::GetWindow($handle, [AiBatteryNative]::GW_HWNDNEXT)
@@ -1395,7 +1425,12 @@ function Test-FullscreenOnHudMonitor {
         ($script:hudSkipWindowClasses -notcontains (Get-WindowClassName $handle))) {
       $windowRect = Get-WindowRectObject $handle
       if ($windowRect -and $windowRect.Width -gt 0 -and $windowRect.Height -gt 0) {
-        return (Test-RectCoversMonitor $windowRect $monitorRect)
+        if (Test-RectCoversMonitor $windowRect $monitorRect) {
+          return $true
+        }
+        if (Test-RectIsSubstantialOnMonitor $windowRect $monitorRect) {
+          return $false
+        }
       }
     }
     $handle = $next
@@ -1531,9 +1566,11 @@ function Set-HudHiddenForFullscreen([bool]$Hidden) {
   $script:hudHiddenForFullscreen = $Hidden
   if ($Hidden) {
     if ($hitForm -and -not $hitForm.IsDisposed -and $hitForm.Visible) {
+      [AiBatteryNative]::ShowWindow($hitForm.Handle, [AiBatteryNative]::SW_HIDE) | Out-Null
       $hitForm.Hide()
     }
     if ($form -and -not $form.IsDisposed -and $form.Visible) {
+      [AiBatteryNative]::ShowWindow($form.Handle, [AiBatteryNative]::SW_HIDE) | Out-Null
       $form.Hide()
     }
     return
@@ -1541,19 +1578,93 @@ function Set-HudHiddenForFullscreen([bool]$Hidden) {
 
   if ($form -and -not $form.IsDisposed -and -not $form.Visible) {
     $form.Show()
+    [AiBatteryNative]::ShowWindow($form.Handle, [AiBatteryNative]::SW_SHOWNOACTIVATE) | Out-Null
   }
   Show-HitForm
   Sync-HitFormBounds
 }
 
+$script:fullscreenClearCount = 0
+
 function Update-HudVisibilityForFullscreen {
   if (-not $form -or $form.IsDisposed) { return }
   if (Test-FullscreenOnHudMonitor) {
+    $script:fullscreenClearCount = 0
     Set-HudHiddenForFullscreen $true
     return
   }
+  if ($script:hudHiddenForFullscreen) {
+    $script:fullscreenClearCount += 1
+    if ($script:fullscreenClearCount -lt 2) { return }
+  }
+  $script:fullscreenClearCount = 0
   Set-HudHiddenForFullscreen $false
   Ensure-HudTopMost
+}
+
+$script:fullscreenCheckPending = $false
+
+function Request-FullscreenCheck {
+  if (-not $form -or $form.IsDisposed) { return }
+  if ($form.InvokeRequired) {
+    if ($script:fullscreenCheckPending) { return }
+    $script:fullscreenCheckPending = $true
+    try {
+      $form.BeginInvoke([Action]{
+        $script:fullscreenCheckPending = $false
+        Update-HudVisibilityForFullscreen
+      }) | Out-Null
+    } catch {
+      $script:fullscreenCheckPending = $false
+    }
+    return
+  }
+  Update-HudVisibilityForFullscreen
+}
+
+$script:fullscreenEventCallback = $null
+$script:fullscreenEventHooks = @()
+
+function Start-FullscreenEventHooks {
+  if ($script:fullscreenEventCallback) { return }
+  $script:fullscreenEventCallback = [AiBatteryWinEventDelegate]{
+    param($hook, $eventType, $hwnd, $idObject, $idChild, $eventThread, $eventTime)
+    if ($idObject -ne [AiBatteryNative]::OBJID_WINDOW) { return }
+    Request-FullscreenCheck
+  }
+
+  $events = @(
+    [AiBatteryNative]::EVENT_SYSTEM_FOREGROUND,
+    [AiBatteryNative]::EVENT_OBJECT_SHOW,
+    [AiBatteryNative]::EVENT_OBJECT_HIDE,
+    [AiBatteryNative]::EVENT_OBJECT_REORDER,
+    [AiBatteryNative]::EVENT_OBJECT_LOCATIONCHANGE,
+    [AiBatteryNative]::EVENT_OBJECT_CLOAKED,
+    [AiBatteryNative]::EVENT_OBJECT_UNCLOAKED
+  )
+  $flags = [AiBatteryNative]::WINEVENT_OUTOFCONTEXT -bor [AiBatteryNative]::WINEVENT_SKIPOWNPROCESS
+  foreach ($eventId in $events) {
+    try {
+      $hook = [AiBatteryNative]::SetWinEventHook($eventId, $eventId, [IntPtr]::Zero, $script:fullscreenEventCallback, 0, 0, $flags)
+      if ($hook -ne [IntPtr]::Zero) {
+        $script:fullscreenEventHooks += $hook
+      }
+    } catch {
+      # Polling still covers older or restricted Windows environments.
+    }
+  }
+}
+
+function Stop-FullscreenEventHooks {
+  foreach ($hook in $script:fullscreenEventHooks) {
+    try {
+      [AiBatteryNative]::UnhookWinEvent($hook) | Out-Null
+    } catch {
+      # The hook may already be gone during shutdown.
+    }
+  }
+  $script:fullscreenEventHooks = @()
+  $script:fullscreenEventCallback = $null
 }
 
 function Set-HudBatteryImage($Box, [Nullable[int]]$Percent, [bool]$Running) {
@@ -1902,12 +2013,11 @@ function Invoke-HudPump {
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 1000
 $timer.add_Tick({ Invoke-HudPump })
-# Poll fast so the HUD hides within a fraction of a second when a fullscreen
-# app appears on its monitor and reappears just as quickly when it closes. The
-# check early-outs on the first real window on the HUD monitor, so it stays
-# cheap even at this cadence.
+# WinEvent hooks wake fullscreen checks immediately on foreground/Z-order/show
+# changes. The UI timer is only a fallback for Windows builds or shells that do
+# not deliver every event we subscribe to.
 $topMostTimer = New-Object System.Windows.Forms.Timer
-$topMostTimer.Interval = 250
+$topMostTimer.Interval = 150
 $topMostTimer.add_Tick({ Update-HudVisibilityForFullscreen })
 $form.add_FormClosed({
   if ($canMove) {
@@ -1917,6 +2027,7 @@ $form.add_FormClosed({
   $timer.Dispose()
   $topMostTimer.Stop()
   $topMostTimer.Dispose()
+  Stop-FullscreenEventHooks
   Stop-SnapshotFetch
   foreach ($box in @($codexIconLabel, $claudeIconLabel)) {
     if ($box.Image) {
@@ -1965,5 +2076,6 @@ if ($ClickThrough) {
 }
 [AiBatteryNative]::SetWindowLong($form.Handle, [AiBatteryNative]::GWL_EXSTYLE, $style) | Out-Null
 $timer.Start()
+Start-FullscreenEventHooks
 $topMostTimer.Start()
 [System.Windows.Forms.Application]::Run($form)

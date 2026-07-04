@@ -460,6 +460,8 @@ test("Claude capture output aligns the first and second line starts", (t) => {
     CLI_PATH,
     "capture-claude",
     "--muted",
+    "--provider",
+    "claude",
     "--left-padding",
     "3"
   ], {
