@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 
 import fs from "node:fs";
+import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const DEFAULT_TAIL_BYTES = 4 * 1024 * 1024;
 const DEFAULT_MAX_FILES = 40;
@@ -46,6 +47,7 @@ function parseArgs(argv) {
     force: false,
     header: true,
     help: false,
+    version: false,
     targets: [],
     rest: []
   };
@@ -99,6 +101,8 @@ function parseArgs(argv) {
     } else if (arg === "--menu-bar") {
       args.menuBar = true;
       args.style = "plain";
+    } else if (arg === "--version" || arg === "-v") {
+      args.version = true;
     } else if (arg === "--help" || arg === "-h") {
       args.help = true;
     } else {
@@ -147,6 +151,7 @@ Options:
       --tmux                       Emit tmux status-line color markup
       --force                      Replace an existing Claude statusLine
       --no-color                   Disable ANSI colors
+  -v, --version                    Show ai-battery version
   -h, --help                       Show this help
 
 Compatibility:
@@ -277,6 +282,132 @@ function runningInsideAiBatteryCodexWrapper() {
 
 function scriptDir() {
   return path.dirname(fileURLToPath(import.meta.url));
+}
+
+function packageInfo() {
+  const pkg = readJson(path.join(scriptDir(), "..", "package.json")) ?? {};
+  return {
+    name: pkg.name || "ai-battery",
+    version: pkg.version || "0.0.0"
+  };
+}
+
+function npmRegistryPackageUrl(name) {
+  const encoded = String(name)
+    .split("/")
+    .map((part) => encodeURIComponent(part))
+    .join("%2F");
+  return `https://registry.npmjs.org/${encoded}/latest`;
+}
+
+function compareVersions(left, right) {
+  const parse = (value) => {
+    const [main, prerelease = ""] = String(value || "0.0.0").replace(/^v/, "").split("-", 2);
+    return {
+      parts: main.split(".").map((part) => Number.parseInt(part, 10) || 0),
+      prerelease
+    };
+  };
+  const a = parse(left);
+  const b = parse(right);
+  for (let i = 0; i < 3; i += 1) {
+    const diff = (a.parts[i] || 0) - (b.parts[i] || 0);
+    if (diff !== 0) return diff > 0 ? 1 : -1;
+  }
+  if (a.prerelease && !b.prerelease) return -1;
+  if (!a.prerelease && b.prerelease) return 1;
+  if (a.prerelease === b.prerelease) return 0;
+  return a.prerelease > b.prerelease ? 1 : -1;
+}
+
+function fetchJson(url, timeoutMs = 1800, redirectsLeft = 2) {
+  return new Promise((resolve) => {
+    const request = https.get(url, {
+      headers: {
+        Accept: "application/vnd.npm.install-v1+json, application/json",
+        "User-Agent": "ai-battery"
+      }
+    }, (response) => {
+      const location = response.headers.location;
+      if (
+        location
+        && response.statusCode >= 300
+        && response.statusCode < 400
+        && redirectsLeft > 0
+      ) {
+        response.resume();
+        const nextUrl = new URL(location, url).toString();
+        fetchJson(nextUrl, timeoutMs, redirectsLeft - 1).then(resolve);
+        return;
+      }
+
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => {
+        body += chunk;
+        if (body.length > 1024 * 1024) request.destroy(new Error("response too large"));
+      });
+      response.on("end", () => {
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          resolve({ ok: false, error: `HTTP ${response.statusCode}` });
+          return;
+        }
+        try {
+          resolve({ ok: true, value: JSON.parse(body) });
+        } catch {
+          resolve({ ok: false, error: "invalid JSON from npm registry" });
+        }
+      });
+    });
+
+    request.setTimeout(timeoutMs, () => {
+      request.destroy(new Error("timeout"));
+    });
+    request.on("error", (error) => {
+      resolve({ ok: false, error: error.message || String(error) });
+    });
+  });
+}
+
+async function checkPackageVersion() {
+  const current = packageInfo();
+  const checkedAt = new Date().toISOString();
+  if (process.env.AI_BATTERY_NO_UPDATE_CHECK || process.env.NO_UPDATE_NOTIFIER) {
+    return {
+      name: current.name,
+      current: current.version,
+      latest: null,
+      updateAvailable: false,
+      checked: false,
+      checkedAt,
+      error: "disabled"
+    };
+  }
+
+  const result = await fetchJson(npmRegistryPackageUrl(current.name));
+  if (!result.ok) {
+    return {
+      name: current.name,
+      current: current.version,
+      latest: null,
+      updateAvailable: false,
+      checked: false,
+      checkedAt,
+      error: result.error
+    };
+  }
+
+  const latest = result.value?.version ?? null;
+  const comparison = latest ? compareVersions(latest, current.version) : 0;
+  return {
+    name: current.name,
+    current: current.version,
+    latest,
+    updateAvailable: comparison > 0,
+    checked: Boolean(latest),
+    checkedAt,
+    error: latest ? null : "npm registry response did not include a version"
+  };
 }
 
 function shQuote(value) {
@@ -518,11 +649,21 @@ function diagnoseCodex() {
   };
 }
 
-function runDoctor() {
+async function runDoctor() {
+  const version = await checkPackageVersion();
   return {
     generatedAt: new Date().toISOString(),
     aiBattery: {
       script: fileURLToPath(import.meta.url),
+      packageName: version.name,
+      version: version.current,
+      latestVersion: version.latest,
+      updateAvailable: version.updateAvailable,
+      updateCheck: {
+        checked: version.checked,
+        checkedAt: version.checkedAt,
+        error: version.error
+      },
       stateDir: stateDir(),
       configPath: configPath()
     },
@@ -687,21 +828,37 @@ function prioritizeCodexSessionFiles(files) {
   });
 }
 
-function firstFiniteValue(source, keys) {
+function firstFiniteEntry(source, keys) {
   for (const key of [keys].flat().filter(Boolean)) {
     const value = source?.[key];
-    if (Number.isFinite(value)) return value;
+    if (Number.isFinite(value)) return { key, value };
     if (typeof value === "string" && value.trim()) {
       const numeric = Number(value);
-      if (Number.isFinite(numeric)) return numeric;
+      if (Number.isFinite(numeric)) return { key, value: numeric };
     }
   }
   return null;
 }
 
-function percentValue(value) {
+function firstFiniteValue(source, keys) {
+  return firstFiniteEntry(source, keys)?.value ?? null;
+}
+
+function keyUsesFractionalPercent(key) {
+  return /(?:ratio|fraction|utilization)$/i.test(String(key));
+}
+
+function percentValue(value, options = {}) {
   if (!Number.isFinite(value)) return null;
-  return value >= 0 && value <= 1 ? value * 100 : value;
+  return options.scaleFraction && value >= 0 && value <= 1 ? value * 100 : value;
+}
+
+function firstPercentValue(source, keys) {
+  const entry = firstFiniteEntry(source, keys);
+  if (!entry) return null;
+  return percentValue(entry.value, {
+    scaleFraction: keyUsesFractionalPercent(entry.key)
+  });
 }
 
 function usageInputTokens(usage) {
@@ -736,8 +893,8 @@ function normalizeLimit(limit, options = {}) {
   const usedKeys = options.usedKey || "used_percent";
   const remainingKeys = [options.remainingKey].flat().filter(Boolean);
   const windowMinutes = options.windowMinutes ?? limit?.window_minutes ?? limit?.windowMinutes ?? null;
-  const usedValue = percentValue(firstFiniteValue(limit, usedKeys));
-  const remainingValue = percentValue(firstFiniteValue(limit, remainingKeys));
+  const usedValue = firstPercentValue(limit, usedKeys);
+  const remainingValue = firstPercentValue(limit, remainingKeys);
   const nowSeconds = Math.floor(Date.now() / 1000);
   const resetsAtSeconds = resetEpochSeconds(limit.resets_at ?? limit.resetsAt ?? limit.reset_at ?? limit.resetAt);
   const resetPassed = Number.isFinite(resetsAtSeconds) && resetsAtSeconds <= nowSeconds;
@@ -788,7 +945,7 @@ function readJson(filePath) {
   }
 }
 
-const SCAN_CACHE_VERSION = 1;
+const SCAN_CACHE_VERSION = 2;
 
 function scanCacheSeconds(defaultSeconds) {
   const raw = Number(process.env.AI_BATTERY_SCAN_CACHE_SECONDS);
@@ -999,20 +1156,20 @@ function readStdin() {
 
 function claudeLimitFromStatusline(limit, windowMinutes) {
   if (!limit) return null;
-  const usedPercentage = percentValue(firstFiniteValue(limit, [
+  const usedPercentage = firstPercentValue(limit, [
     "used_percentage",
     "usedPercent",
     "percent_used",
     "percentUsed",
     "utilization"
-  ]));
-  const remainingPercentage = percentValue(firstFiniteValue(limit, [
+  ]);
+  const remainingPercentage = firstPercentValue(limit, [
     "remaining_percentage",
     "remainingPercent",
     "remaining_percent",
     "percent_remaining",
     "percentRemaining"
-  ]));
+  ]);
   const resetsAt = resetEpochSeconds(limit.resets_at ?? limit.resetsAt ?? limit.reset_at ?? limit.resetAt);
   const hasUsedPercentage = Number.isFinite(usedPercentage);
   const hasRemainingPercentage = Number.isFinite(remainingPercentage);
@@ -1065,13 +1222,13 @@ function claudeRateLimitsFromStatusline(input) {
 function normalizeClaudeContextWindow(context) {
   if (!context) return null;
 
-  const usedPercentage = percentValue(firstFiniteValue(context, ["used_percentage", "usedPercentage", "percent_used", "percentUsed"]));
-  let remainingPercentage = percentValue(firstFiniteValue(context, [
+  const usedPercentage = firstPercentValue(context, ["used_percentage", "usedPercentage", "percent_used", "percentUsed"]);
+  let remainingPercentage = firstPercentValue(context, [
     "remaining_percentage",
     "remainingPercentage",
     "percent_remaining",
     "percentRemaining"
-  ]));
+  ]);
   const currentUsage = context.current_usage ?? context.currentUsage ?? null;
   const contextWindowSize = firstFiniteValue(context, ["context_window_size", "contextWindowSize", "size", "max_tokens", "maxTokens"]);
   const totalInputTokens = firstFiniteValue(context, ["total_input_tokens", "totalInputTokens"])
@@ -2097,6 +2254,10 @@ function render(snapshot, args) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.version) {
+    console.log(packageInfo().version);
+    return;
+  }
   if (args.help) {
     printHelp();
     return;
@@ -2126,11 +2287,26 @@ async function main() {
   }
 
   if (args.command === "doctor") {
-    const result = runDoctor();
+    const result = await runDoctor();
     if (args.json) {
       console.log(JSON.stringify(result, null, 2));
     } else {
       console.log(`AI Battery: ${result.aiBattery.script}`);
+      console.log(`Version: ${result.aiBattery.version}`);
+      if (result.aiBattery.latestVersion) {
+        console.log(`npm latest: ${result.aiBattery.latestVersion}`);
+        if (result.aiBattery.updateAvailable) {
+          console.log(`Update: available (npm install -g ${result.aiBattery.packageName}@latest)`);
+        } else if (compareVersions(result.aiBattery.version, result.aiBattery.latestVersion) > 0) {
+          console.log("Update: local version is newer than npm latest");
+        } else {
+          console.log("Update: up to date");
+        }
+      } else if (result.aiBattery.updateCheck.error === "disabled") {
+        console.log("npm latest: skipped");
+      } else {
+        console.log(`npm latest: unavailable (${result.aiBattery.updateCheck.error || "unknown error"})`);
+      }
       console.log(`State: ${result.aiBattery.stateDir}`);
       console.log("");
       console.log(`Codex provider: ${result.codex.providerEnabled ? "on" : "off"}`);
@@ -2256,7 +2432,15 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(`ai-battery: ${error.message}`);
-  process.exit(1);
-});
+export {
+  firstPercentValue,
+  normalizeLimit,
+  percentValue
+};
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((error) => {
+    console.error(`ai-battery: ${error.message}`);
+    process.exit(1);
+  });
+}

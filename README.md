@@ -103,9 +103,11 @@ npx ai-battery
 ai-battery
 ai-battery --watch 10
 ai-battery --json
+ai-battery --version
 ai-battery --provider codex
 ai-battery --provider claude
 ai-battery setup
+ai-battery doctor
 ai-battery hud
 ai-battery off codex
 ai-battery on codex
@@ -118,6 +120,9 @@ ai-battery on codex
 | `--json` | HUD나 다른 도구에서 쓰기 좋은 JSON을 출력합니다. |
 | `--bar-width N` | 터미널 배터리 바 길이를 조정합니다. |
 | `--show-paths` | 로그 파일 경로와 데이터 관측 시각을 함께 표시합니다. |
+| `-v`, `--version` | 설치된 `ai-battery` 버전을 출력합니다. |
+
+`doctor`는 설치 상태와 함께 npm latest 버전을 확인합니다. 네트워크가 막혀 있으면 버전 확인만 건너뛰고 나머지 진단은 계속 표시합니다.
 
 ## Setup
 

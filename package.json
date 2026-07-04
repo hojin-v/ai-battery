@@ -1,6 +1,6 @@
 {
   "name": "ai-battery",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Tiny terminal battery meter for local Codex and Claude Code usage.",
   "type": "module",
   "keywords": [
@@ -32,7 +32,8 @@
   ],
   "scripts": {
     "start": "node ./bin/ai-battery.js",
-    "check": "node --check ./bin/ai-battery.js && node --check ./bin/ai-battery-hud.js"
+    "check": "node --check ./bin/ai-battery.js && node --check ./bin/ai-battery-hud.js && node --test",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=18"
