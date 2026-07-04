@@ -429,7 +429,7 @@ const configuredCommand = process.env.AI_BATTERY_COMMAND || process.env.CLAUDEX_
 const envPrefix = useWsl ? wslEnvPrefix() : "";
 const batteryCommand = configuredCommand || (useWsl
   ? `${envPrefix ? `${envPrefix} ` : ""}HOME=${shellQuote(os.homedir())} ${shellQuote(nodePath)} ${shellQuote(batteryJs)} --json`
-  : `${winArgQuote(nodePath)} ${winArgQuote(batteryJs)} --json`);
+  : `& ${winArgQuote(nodePath)} ${winArgQuote(batteryJs)} --json`);
 const batteryCommandBase64 = Buffer.from(batteryCommand, "utf8").toString("base64");
 
 const AUTOSTART_REG_PATH = "HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";

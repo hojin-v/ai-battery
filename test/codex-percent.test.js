@@ -289,6 +289,53 @@ test("Windows runner can execute normalized cmd paths through cmd call", { skip:
   assert.equal(result.stdout.trim(), "ok:--version");
 });
 
+test("Windows HUD PowerShell accepts a quoted executable battery command", { skip: process.platform !== "win32" }, (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const fixturePath = path.join(tmpDir, "battery-json.js");
+  fs.writeFileSync(fixturePath, [
+    "console.log(JSON.stringify({",
+    "  generatedAt: new Date().toISOString(),",
+    "  results: [{",
+    "    provider: 'codex',",
+    "    ok: true,",
+    "    percentRemaining: 42,",
+    "    primary: {",
+    "      windowMinutes: 300,",
+    "      resetsAt: new Date(Date.now() + 3600000).toISOString(),",
+    "      resetPassed: false",
+    "    },",
+    "    running: true",
+    "  }]",
+    "}));",
+    ""
+  ].join("\n"));
+
+  const command = `"${process.execPath}" "${fixturePath}"`;
+  const hudPath = fileURLToPath(new URL("../bin/ai-battery-hud.ps1", import.meta.url));
+  const result = spawnSync("powershell.exe", [
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    hudPath,
+    "-Once",
+    "-BatteryCommandBase64",
+    Buffer.from(command, "utf8").toString("base64")
+  ], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      LOCALAPPDATA: path.join(tmpDir, "localappdata")
+    },
+    timeout: 10000
+  });
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.match(result.stdout, /Codex\s+\[battery\]/);
+});
+
 test("uninstall restores a codex command that setup backed up", (t) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
   t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));

@@ -350,11 +350,21 @@ function Invoke-AiBatteryJson {
   if ($UseWsl) {
     $output = & wsl.exe bash -lc "$BatteryCommand 2>/dev/null"
   } else {
-    $output = Invoke-Expression "$BatteryCommand 2>`$null"
+    $output = Invoke-LocalBatteryCommandOutput $BatteryCommand
   }
   $text = ($output -join "`n").Trim()
   if (-not $text) { throw "ai-battery produced no output" }
   return $text | ConvertFrom-Json
+}
+
+function Invoke-LocalBatteryCommandOutput([string]$Command) {
+  try {
+    return Invoke-Expression "$Command 2>`$null"
+  } catch {
+    $trimmed = $Command.TrimStart()
+    if ($trimmed.StartsWith("&")) { throw }
+    return Invoke-Expression "& $Command 2>`$null"
+  }
 }
 
 function Get-DurationText([Nullable[int]]$Seconds) {
@@ -621,7 +631,13 @@ function Start-SnapshotFetch {
       if ($UseWslShell) {
         $output = & wsl.exe bash -lc "$Command 2>/dev/null"
       } else {
-        $output = Invoke-Expression "$Command 2>`$null"
+        try {
+          $output = Invoke-Expression "$Command 2>`$null"
+        } catch {
+          $trimmed = $Command.TrimStart()
+          if ($trimmed.StartsWith("&")) { throw }
+          $output = Invoke-Expression "& $Command 2>`$null"
+        }
       }
       ($output -join "`n").Trim()
     } catch {
