@@ -2223,14 +2223,18 @@ function uninstallClaudeStatusline(options = {}) {
   };
 }
 
-function readCodex() {
-  const running = isProviderRunning("codex");
-  let scan = readScanCache("codex-status", scanCacheSeconds(4))?.value;
+function readCodex(options = {}) {
+  const maxAgeSeconds = options.maxAgeSeconds ?? 4;
+  let scan = readScanCache("codex-status", scanCacheSeconds(maxAgeSeconds))?.value;
   if (!scan || typeof scan !== "object") {
+    if (options.cachedOnly) return null;
     scan = scanCodexStatus();
     writeScanCache("codex-status", scan);
   }
 
+  const running = options.includeRunning === false
+    ? Boolean(scan.running)
+    : isProviderRunning("codex");
   const result = { ...scan, running };
   if (result.ok) result.ageSeconds = cacheAgeSeconds(result.timestamp ?? null);
   return result;
@@ -3552,7 +3556,12 @@ async function main() {
     const capturedClaude = captureClaudeStatusline(input);
     if (!args.silent) {
       const results = [];
-      if (providerVisible("codex")) results.push(readCodex());
+      if (providerVisible("codex")) {
+        const codexData = process.platform === "win32"
+          ? readCodex({ cachedOnly: true, includeRunning: false, maxAgeSeconds: 60 })
+          : readCodex();
+        if (codexData) results.push(codexData);
+      }
       if (providerVisible("claude")) {
         const capturedSource = capturedClaude.sessionKind === "bg" && capturedClaude.sessionId
           ? claudeSessionCachePath(capturedClaude.sessionId)
