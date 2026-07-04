@@ -582,6 +582,21 @@ function readTail(filePath, bytes = DEFAULT_TAIL_BYTES) {
   }
 }
 
+function readHead(filePath, bytes = 32 * 1024) {
+  const stat = safeStat(filePath);
+  if (!stat) return "";
+
+  const length = Math.min(bytes, stat.size);
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const buffer = Buffer.alloc(length);
+    fs.readSync(fd, buffer, 0, length, 0);
+    return buffer.toString("utf8");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function latestMatchingJsonLine(files, predicate) {
   let fallback = null;
 
@@ -603,6 +618,48 @@ function latestMatchingJsonLine(files, predicate) {
   }
 
   return fallback;
+}
+
+function codexSessionMeta(filePath) {
+  const text = readHead(filePath);
+  const firstLine = text.split("\n").find((line) => line.includes("\"session_meta\""));
+  if (!firstLine) return null;
+  try {
+    const json = JSON.parse(firstLine);
+    return json.type === "session_meta" ? json.payload ?? null : null;
+  } catch {
+    return null;
+  }
+}
+
+function sameOrNestedPath(a, b) {
+  if (!a || !b) return false;
+  const left = path.resolve(a);
+  const right = path.resolve(b);
+  return left === right || left.startsWith(`${right}${path.sep}`) || right.startsWith(`${left}${path.sep}`);
+}
+
+function prioritizeCodexSessionFiles(files) {
+  const threadId = process.env.CODEX_THREAD_ID;
+  const cwd = (runningInsideAiBatteryCodexWrapper() || runningInsideCodex()) ? process.cwd() : null;
+  if (!threadId && !cwd) return files;
+  const metaCache = new Map();
+  const metaFor = (file) => {
+    if (!metaCache.has(file.path)) metaCache.set(file.path, codexSessionMeta(file.path));
+    return metaCache.get(file.path);
+  };
+
+  return [...files].sort((a, b) => {
+    const aThread = threadId && a.path.includes(threadId) ? 1 : 0;
+    const bThread = threadId && b.path.includes(threadId) ? 1 : 0;
+    if (aThread !== bThread) return bThread - aThread;
+
+    const aCwd = cwd && sameOrNestedPath(metaFor(a)?.cwd, cwd) ? 1 : 0;
+    const bCwd = cwd && sameOrNestedPath(metaFor(b)?.cwd, cwd) ? 1 : 0;
+    if (aCwd !== bCwd) return bCwd - aCwd;
+
+    return b.mtimeMs - a.mtimeMs;
+  });
 }
 
 function normalizeLimit(limit, options = {}) {
@@ -1256,9 +1313,9 @@ function scanCodexStatus() {
     .map((entry) => entry.trim())
     .filter(Boolean)
     .map((entry) => entry.replace(/^~(?=$|\/)/, userHome()));
-  const files = roots
+  const files = prioritizeCodexSessionFiles(roots
     .flatMap((root) => listJsonlFiles(path.join(root, "sessions")))
-    .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    .sort((a, b) => b.mtimeMs - a.mtimeMs));
 
   if (!files.length) {
     return {
