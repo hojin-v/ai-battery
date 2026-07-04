@@ -3,21 +3,20 @@
   <desc id="desc">A two-line Claude statusLine preview showing context remaining and colored AI Battery bars.</desc>
   <rect width="1040" height="150" rx="8" fill="#111318"/>
   <rect x="1" y="1" width="1038" height="148" rx="7" fill="none" stroke="#2a2f3a"/>
+  <defs>
+    <pattern id="greenShade" width="4" height="4" patternUnits="userSpaceOnUse">
+      <rect width="4" height="4" fill="#18251d"/>
+      <circle cx="1" cy="1" r="0.7" fill="#315c3d"/>
+      <circle cx="3" cy="3" r="0.7" fill="#315c3d"/>
+    </pattern>
+  </defs>
   <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18">
     <text x="24" y="54" fill="#8b949e">Opus high · ~/Projects · main</text>
     <text x="828" y="54" fill="#8b949e">83% context left</text>
     <text x="24" y="105" fill="#8b949e">Codex</text>
     <g shape-rendering="crispEdges">
-      <rect x="92" y="88" width="8" height="18" fill="#4ade80"/>
-      <rect x="102" y="88" width="8" height="18" fill="#4ade80"/>
-      <rect x="112" y="88" width="8" height="18" fill="#4ade80"/>
-      <rect x="122" y="88" width="8" height="18" fill="#4ade80"/>
-      <rect x="132" y="88" width="8" height="18" fill="#4ade80"/>
-      <rect x="142" y="88" width="8" height="18" fill="#4ade80"/>
-      <rect x="152" y="88" width="8" height="18" fill="#4ade80"/>
-      <rect x="162" y="88" width="8" height="18" fill="#2a3a31"/>
-      <rect x="172" y="88" width="8" height="18" fill="#2a3a31"/>
-      <rect x="182" y="88" width="8" height="18" fill="#2a3a31"/>
+      <rect x="92" y="88" width="100" height="18" fill="url(#greenShade)"/>
+      <rect x="92" y="88" width="70" height="18" fill="#4ade80"/>
     </g>
     <text x="204" y="105" fill="#8b949e">71%</text>
     <text x="250" y="105" fill="#8b949e">│</text>
@@ -26,16 +25,8 @@
     <text x="388" y="105" fill="#8b949e">7d 90%</text>
     <text x="500" y="105" fill="#f2f2f2">Claude</text>
     <g shape-rendering="crispEdges">
-      <rect x="585" y="88" width="8" height="18" fill="#4ade80"/>
-      <rect x="595" y="88" width="8" height="18" fill="#4ade80"/>
-      <rect x="605" y="88" width="8" height="18" fill="#4ade80"/>
-      <rect x="615" y="88" width="8" height="18" fill="#4ade80"/>
-      <rect x="625" y="88" width="8" height="18" fill="#4ade80"/>
-      <rect x="635" y="88" width="8" height="18" fill="#4ade80"/>
-      <rect x="645" y="88" width="8" height="18" fill="#4ade80"/>
-      <rect x="655" y="88" width="8" height="18" fill="#4ade80"/>
-      <rect x="665" y="88" width="8" height="18" fill="#2a3a31"/>
-      <rect x="675" y="88" width="8" height="18" fill="#2a3a31"/>
+      <rect x="585" y="88" width="100" height="18" fill="url(#greenShade)"/>
+      <rect x="585" y="88" width="80" height="18" fill="#4ade80"/>
     </g>
     <text x="697" y="105" fill="#f2f2f2">76%</text>
     <text x="743" y="105" fill="#8b949e">│</text>

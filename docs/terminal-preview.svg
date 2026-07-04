@@ -3,22 +3,26 @@
   <desc id="desc">A terminal preview showing Codex with a green battery bar and Claude with a red battery bar.</desc>
   <rect width="1040" height="118" rx="8" fill="#111318"/>
   <rect x="1" y="1" width="1038" height="116" rx="7" fill="none" stroke="#2a2f3a"/>
+  <defs>
+    <pattern id="greenShade" width="4" height="4" patternUnits="userSpaceOnUse">
+      <rect width="4" height="4" fill="#18251d"/>
+      <circle cx="1" cy="1" r="0.7" fill="#315c3d"/>
+      <circle cx="3" cy="3" r="0.7" fill="#315c3d"/>
+    </pattern>
+    <pattern id="redShade" width="4" height="4" patternUnits="userSpaceOnUse">
+      <rect width="4" height="4" fill="#29191d"/>
+      <circle cx="1" cy="1" r="0.7" fill="#7f3038"/>
+      <circle cx="3" cy="3" r="0.7" fill="#7f3038"/>
+    </pattern>
+  </defs>
   <circle cx="24" cy="22" r="5" fill="#ff5f57"/>
   <circle cx="42" cy="22" r="5" fill="#ffbd2e"/>
   <circle cx="60" cy="22" r="5" fill="#28c840"/>
   <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace" font-size="18">
     <text x="24" y="70" fill="#f2f2f2">Codex</text>
     <g shape-rendering="crispEdges">
-      <rect x="92" y="53" width="8" height="18" fill="#4ade80"/>
-      <rect x="102" y="53" width="8" height="18" fill="#4ade80"/>
-      <rect x="112" y="53" width="8" height="18" fill="#4ade80"/>
-      <rect x="122" y="53" width="8" height="18" fill="#4ade80"/>
-      <rect x="132" y="53" width="8" height="18" fill="#4ade80"/>
-      <rect x="142" y="53" width="8" height="18" fill="#4ade80"/>
-      <rect x="152" y="53" width="8" height="18" fill="#4ade80"/>
-      <rect x="162" y="53" width="8" height="18" fill="#4ade80"/>
-      <rect x="172" y="53" width="8" height="18" fill="#4ade80"/>
-      <rect x="182" y="53" width="8" height="18" fill="#2a3a31"/>
+      <rect x="92" y="53" width="100" height="18" fill="url(#greenShade)"/>
+      <rect x="92" y="53" width="90" height="18" fill="#4ade80"/>
     </g>
     <text x="204" y="70" fill="#f2f2f2">86%</text>
     <text x="250" y="70" fill="#8b949e">│</text>
@@ -28,16 +32,8 @@
     <text x="480" y="70" fill="#8b949e">┃</text>
     <text x="505" y="70" fill="#8b949e">Claude</text>
     <g shape-rendering="crispEdges">
-      <rect x="590" y="53" width="8" height="18" fill="#ff5c5c"/>
-      <rect x="600" y="53" width="8" height="18" fill="#3f252a"/>
-      <rect x="610" y="53" width="8" height="18" fill="#3f252a"/>
-      <rect x="620" y="53" width="8" height="18" fill="#3f252a"/>
-      <rect x="630" y="53" width="8" height="18" fill="#3f252a"/>
-      <rect x="640" y="53" width="8" height="18" fill="#3f252a"/>
-      <rect x="650" y="53" width="8" height="18" fill="#3f252a"/>
-      <rect x="660" y="53" width="8" height="18" fill="#3f252a"/>
-      <rect x="670" y="53" width="8" height="18" fill="#3f252a"/>
-      <rect x="680" y="53" width="8" height="18" fill="#3f252a"/>
+      <rect x="590" y="53" width="100" height="18" fill="url(#redShade)"/>
+      <rect x="590" y="53" width="10" height="18" fill="#ff5c5c"/>
     </g>
     <text x="702" y="70" fill="#8b949e">4%</text>
     <text x="748" y="70" fill="#8b949e">│</text>
