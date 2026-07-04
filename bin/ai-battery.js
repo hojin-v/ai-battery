@@ -41,6 +41,7 @@ function parseArgs(argv) {
     leftPadding: 0,
     activeProvider: null,
     showPaths: false,
+    menuBar: false,
     silent: false,
     force: false,
     header: true,
@@ -95,6 +96,9 @@ function parseArgs(argv) {
       args.activeProvider = argv[++i] || null;
     } else if (arg === "--show-paths") {
       args.showPaths = true;
+    } else if (arg === "--menu-bar") {
+      args.menuBar = true;
+      args.style = "plain";
     } else if (arg === "--help" || arg === "-h") {
       args.help = true;
     } else {
@@ -139,6 +143,7 @@ Options:
       --left-padding N             Prefix status output with N spaces
       --active-provider codex|claude
       --show-paths                 Include source log paths in text output
+      --menu-bar                   Print compact macOS menu bar text
       --tmux                       Emit tmux status-line color markup
       --force                      Replace an existing Claude statusLine
       --no-color                   Disable ANSI colors
@@ -350,6 +355,7 @@ function shellRcPath() {
   if (process.env.AI_BATTERY_RC) return process.env.AI_BATTERY_RC;
   const shell = path.basename(process.env.SHELL || "");
   if (shell === "zsh") return homePath(".zshrc");
+  if (shell === "bash" && process.platform === "darwin") return homePath(".bash_profile");
   if (shell === "bash") return homePath(".bashrc");
   if (shell === "fish") return homePath(".config", "fish", "config.fish");
   return homePath(".profile");
@@ -448,6 +454,13 @@ function installCodexWrapper(args) {
   };
 }
 
+function sourcePathCommand(rcPath) {
+  const shell = path.basename(process.env.SHELL || "");
+  if (!rcPath) return null;
+  if (["bash", "fish", "zsh"].includes(shell)) return `source ${shellArg(rcPath)}`;
+  return `. ${shellArg(rcPath)}`;
+}
+
 function codexRestartNote() {
   if (!runningInsideCodex() || runningInsideAiBatteryCodexWrapper()) return null;
   return "Current Codex was not started through AI Battery. Exit this Codex session and run plain \"codex\" again from a normal terminal.";
@@ -461,6 +474,9 @@ function diagnoseCodex() {
   const wrapperInstalled = configuredWrapper ? managedCodexWrapper(configuredWrapper) : false;
   const activeIsWrapper = activeCodex ? managedCodexWrapper(activeCodex) : false;
   const originalExists = configuredOriginal ? fs.existsSync(configuredOriginal) : false;
+  const runnerPath = path.join(scriptDir(), "ai-battery-run");
+  const runnerExists = isExecutable(runnerPath);
+  const python3 = findCommand("python3");
   const providerEnabled = providerVisible("codex");
   const notes = [];
 
@@ -472,6 +488,12 @@ function diagnoseCodex() {
   }
   if (wrapperInstalled && !activeIsWrapper) {
     notes.push("Plain \"codex\" does not resolve to the AI Battery wrapper in this shell. Open a new terminal or put ~/.local/bin before the original codex on PATH.");
+  }
+  if (!runnerExists) {
+    notes.push(`AI Battery runner is missing or not executable: ${runnerPath}`);
+  }
+  if (wrapperInstalled && !python3) {
+    notes.push("Codex wrapper needs python3 for the POSIX PTY row. Install Python 3, then run plain \"codex\" again.");
   }
   if (configuredOriginal && !originalExists) {
     notes.push(`Original codex path saved by setup no longer exists: ${configuredOriginal}`);
@@ -485,6 +507,9 @@ function diagnoseCodex() {
     activeIsWrapper,
     wrapperPath: configuredWrapper,
     wrapperInstalled,
+    runnerPath,
+    runnerExists,
+    python3,
     originalCommand: configuredOriginal,
     originalExists: configuredOriginal ? originalExists : null,
     insideCodex: runningInsideCodex(),
@@ -662,18 +687,60 @@ function prioritizeCodexSessionFiles(files) {
   });
 }
 
+function firstFiniteValue(source, keys) {
+  for (const key of [keys].flat().filter(Boolean)) {
+    const value = source?.[key];
+    if (Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim()) {
+      const numeric = Number(value);
+      if (Number.isFinite(numeric)) return numeric;
+    }
+  }
+  return null;
+}
+
+function percentValue(value) {
+  if (!Number.isFinite(value)) return null;
+  return value >= 0 && value <= 1 ? value * 100 : value;
+}
+
+function usageInputTokens(usage) {
+  if (!usage) return null;
+  const inputTokens = firstFiniteValue(usage, ["input_tokens", "inputTokens"]);
+  const cacheCreationTokens = firstFiniteValue(usage, ["cache_creation_input_tokens", "cacheCreationInputTokens"]);
+  const cacheReadTokens = firstFiniteValue(usage, ["cache_read_input_tokens", "cacheReadInputTokens"]);
+  if (
+    !Number.isFinite(inputTokens)
+    && !Number.isFinite(cacheCreationTokens)
+    && !Number.isFinite(cacheReadTokens)
+  ) {
+    return null;
+  }
+  return (Number(inputTokens) || 0) + (Number(cacheCreationTokens) || 0) + (Number(cacheReadTokens) || 0);
+}
+
+function resetEpochSeconds(value) {
+  if (Number.isFinite(value)) return value > 1_000_000_000_000 ? Math.floor(value / 1000) : value;
+  if (typeof value === "string" && value.trim()) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric)) return resetEpochSeconds(numeric);
+    const millis = Date.parse(value);
+    if (!Number.isNaN(millis)) return Math.floor(millis / 1000);
+  }
+  return null;
+}
+
 function normalizeLimit(limit, options = {}) {
   if (!limit) return null;
 
-  const usedKey = options.usedKey || "used_percent";
+  const usedKeys = options.usedKey || "used_percent";
   const remainingKeys = [options.remainingKey].flat().filter(Boolean);
-  const windowMinutes = options.windowMinutes ?? limit?.window_minutes ?? null;
-  const usedValue = limit?.[usedKey];
-  const remainingValue = remainingKeys
-    .map((key) => limit?.[key])
-    .find((value) => Number.isFinite(value));
+  const windowMinutes = options.windowMinutes ?? limit?.window_minutes ?? limit?.windowMinutes ?? null;
+  const usedValue = percentValue(firstFiniteValue(limit, usedKeys));
+  const remainingValue = percentValue(firstFiniteValue(limit, remainingKeys));
   const nowSeconds = Math.floor(Date.now() / 1000);
-  const resetPassed = Number.isFinite(limit.resets_at) && limit.resets_at <= nowSeconds;
+  const resetsAtSeconds = resetEpochSeconds(limit.resets_at ?? limit.resetsAt ?? limit.reset_at ?? limit.resetAt);
+  const resetPassed = Number.isFinite(resetsAtSeconds) && resetsAtSeconds <= nowSeconds;
   const inferResetPassed = options.inferResetPassed !== false;
 
   if (!Number.isFinite(usedValue) && !Number.isFinite(remainingValue) && !(resetPassed && inferResetPassed)) return null;
@@ -693,8 +760,8 @@ function normalizeLimit(limit, options = {}) {
     usedPercent,
     remainingPercent,
     windowMinutes,
-    resetsAt: limit.resets_at ? new Date(limit.resets_at * 1000).toISOString() : null,
-    resetsInSeconds: limit.resets_at ? Math.max(0, limit.resets_at - nowSeconds) : null,
+    resetsAt: resetsAtSeconds ? new Date(resetsAtSeconds * 1000).toISOString() : null,
+    resetsInSeconds: resetsAtSeconds ? Math.max(0, resetsAtSeconds - nowSeconds) : null,
     resetPassed
   };
 }
@@ -932,32 +999,117 @@ function readStdin() {
 
 function claudeLimitFromStatusline(limit, windowMinutes) {
   if (!limit) return null;
-  const hasUsedPercentage = Number.isFinite(limit.used_percentage);
-  const remainingPercentage = [
-    limit.remaining_percentage,
-    limit.remaining_percent,
-    limit.percent_remaining
-  ].find((value) => Number.isFinite(value));
+  const usedPercentage = percentValue(firstFiniteValue(limit, [
+    "used_percentage",
+    "usedPercent",
+    "percent_used",
+    "percentUsed",
+    "utilization"
+  ]));
+  const remainingPercentage = percentValue(firstFiniteValue(limit, [
+    "remaining_percentage",
+    "remainingPercent",
+    "remaining_percent",
+    "percent_remaining",
+    "percentRemaining"
+  ]));
+  const resetsAt = resetEpochSeconds(limit.resets_at ?? limit.resetsAt ?? limit.reset_at ?? limit.resetAt);
+  const hasUsedPercentage = Number.isFinite(usedPercentage);
   const hasRemainingPercentage = Number.isFinite(remainingPercentage);
-  const hasReset = Number.isFinite(limit.resets_at);
+  const hasReset = Number.isFinite(resetsAt);
   if (!hasUsedPercentage && !hasRemainingPercentage && !hasReset) return null;
   return {
     ...limit,
-    used_percentage: hasUsedPercentage ? limit.used_percentage : null,
+    used_percentage: hasUsedPercentage ? usedPercentage : null,
     remaining_percentage: hasRemainingPercentage ? remainingPercentage : null,
-    resets_at: hasReset ? limit.resets_at : null,
-    window_minutes: limit.window_minutes ?? windowMinutes
+    resets_at: hasReset ? resetsAt : null,
+    window_minutes: limit.window_minutes ?? limit.windowMinutes ?? windowMinutes
   };
 }
 
 function normalizeClaudeCachedLimit(limit, options = {}) {
   if (!limit) return null;
   return normalizeLimit(limit, {
-    usedKey: "used_percentage",
-    remainingKey: ["remaining_percentage", "remaining_percent", "percent_remaining"],
-    windowMinutes: limit.window_minutes ?? null,
+    usedKey: ["used_percentage", "usedPercent", "percent_used", "percentUsed", "utilization"],
+    remainingKey: ["remaining_percentage", "remainingPercent", "remaining_percent", "percent_remaining", "percentRemaining"],
+    windowMinutes: limit.window_minutes ?? limit.windowMinutes ?? null,
     ...options
   });
+}
+
+function claudeRateLimitsFromStatusline(input) {
+  const rateLimits = input.rate_limits ?? input.rateLimits ?? input.limits ?? {};
+  const fiveHour = rateLimits.five_hour
+    ?? rateLimits.fiveHour
+    ?? rateLimits.five_hour_limit
+    ?? rateLimits.fiveHourLimit
+    ?? rateLimits.session
+    ?? rateLimits.session_limit
+    ?? rateLimits.sessionLimit
+    ?? rateLimits.primary
+    ?? null;
+  const sevenDay = rateLimits.seven_day
+    ?? rateLimits.sevenDay
+    ?? rateLimits.seven_day_limit
+    ?? rateLimits.sevenDayLimit
+    ?? rateLimits.weekly
+    ?? rateLimits.weekly_limit
+    ?? rateLimits.weeklyLimit
+    ?? rateLimits.weekly_scoped
+    ?? rateLimits.weeklyScoped
+    ?? rateLimits.secondary
+    ?? null;
+  return { fiveHour, sevenDay, raw: rateLimits };
+}
+
+function normalizeClaudeContextWindow(context) {
+  if (!context) return null;
+
+  const usedPercentage = percentValue(firstFiniteValue(context, ["used_percentage", "usedPercentage", "percent_used", "percentUsed"]));
+  let remainingPercentage = percentValue(firstFiniteValue(context, [
+    "remaining_percentage",
+    "remainingPercentage",
+    "percent_remaining",
+    "percentRemaining"
+  ]));
+  const currentUsage = context.current_usage ?? context.currentUsage ?? null;
+  const contextWindowSize = firstFiniteValue(context, ["context_window_size", "contextWindowSize", "size", "max_tokens", "maxTokens"]);
+  const totalInputTokens = firstFiniteValue(context, ["total_input_tokens", "totalInputTokens"])
+    ?? usageInputTokens(currentUsage)
+    ?? firstFiniteValue(context, ["input_tokens", "inputTokens"]);
+  const totalOutputTokens = firstFiniteValue(context, ["total_output_tokens", "totalOutputTokens", "output_tokens", "outputTokens"])
+    ?? firstFiniteValue(currentUsage, ["output_tokens", "outputTokens"]);
+  const totalTokens = firstFiniteValue(context, ["total_tokens", "totalTokens"])
+    ?? ((Number.isFinite(totalInputTokens) || Number.isFinite(totalOutputTokens))
+      ? (Number(totalInputTokens) || 0) + (Number(totalOutputTokens) || 0)
+      : null);
+
+  if (!Number.isFinite(remainingPercentage) && Number.isFinite(usedPercentage)) {
+    remainingPercentage = 100 - usedPercentage;
+  }
+  if (!Number.isFinite(remainingPercentage) && Number.isFinite(contextWindowSize) && Number.isFinite(totalTokens) && contextWindowSize > 0) {
+    remainingPercentage = 100 - ((totalTokens / contextWindowSize) * 100);
+  }
+
+  return {
+    usedPercentage: Number.isFinite(usedPercentage)
+      ? clamp(Math.round(usedPercentage), 0, 100)
+      : (Number.isFinite(remainingPercentage) ? clamp(100 - Math.round(remainingPercentage), 0, 100) : null),
+    remainingPercentage: Number.isFinite(remainingPercentage) ? clamp(Math.round(remainingPercentage), 0, 100) : null,
+    contextWindowSize: contextWindowSize ?? null,
+    totalInputTokens: totalInputTokens ?? null,
+    totalOutputTokens: totalOutputTokens ?? null
+  };
+}
+
+function claudeContextWindowFromStatusline(input) {
+  const context = input.context_window
+    ?? input.contextWindow
+    ?? input.context
+    ?? input.context_window_info
+    ?? (input.context_window_size || input.contextWindowSize ? input : null)
+    ?? null;
+  return normalizeClaudeContextWindow(context);
 }
 
 function claudeTranscriptSessionKind(transcriptPath) {
@@ -1107,47 +1259,43 @@ function applyClaudeRateLimitHit(limit, hit, window) {
 }
 
 function captureClaudeStatusline(input) {
-  const rateLimits = input.rate_limits ?? {};
-  const sessionId = input.session_id ?? null;
+  const rateLimits = claudeRateLimitsFromStatusline(input);
+  const sessionId = input.session_id ?? input.sessionId ?? null;
   const previous = (sessionId ? readJson(claudeSessionCachePath(sessionId)) : null) ?? readJson(claudeCachePath());
   const sessionKind = claudeStatuslineSessionKind(input);
+  const contextWindow = claudeContextWindowFromStatusline(input);
   const snapshot = {
     version: 1,
     provider: "claude",
     sourceType: "statusline",
     capturedAt: new Date().toISOString(),
     sessionId,
-    promptId: input.prompt_id ?? null,
-    transcriptPath: input.transcript_path ?? null,
+    promptId: input.prompt_id ?? input.promptId ?? null,
+    transcriptPath: input.transcript_path ?? input.transcriptPath ?? null,
     sessionKind,
     claudeVersion: input.version ?? null,
     model: {
-      id: input.model?.id ?? null,
-      displayName: input.model?.display_name ?? null
+      id: typeof input.model === "string" ? input.model : input.model?.id ?? null,
+      displayName: typeof input.model === "string" ? input.model : input.model?.display_name ?? input.model?.displayName ?? null
     },
     rateLimits: {
-      fiveHour: claudeLimitFromStatusline(rateLimits.five_hour, 300),
-      sevenDay: claudeLimitFromStatusline(rateLimits.seven_day, 10080)
+      fiveHour: claudeLimitFromStatusline(rateLimits.fiveHour, 300),
+      sevenDay: claudeLimitFromStatusline(rateLimits.sevenDay, 10080)
     },
-    rawRateLimits: rateLimits,
-    contextWindow: input.context_window
-      ? {
-          usedPercentage: input.context_window.used_percentage ?? null,
-          remainingPercentage: input.context_window.remaining_percentage ?? null,
-          contextWindowSize: input.context_window.context_window_size ?? null,
-          totalInputTokens: input.context_window.total_input_tokens ?? null,
-          totalOutputTokens: input.context_window.total_output_tokens ?? null
-        }
-      : null
+    rawRateLimits: rateLimits.raw,
+    contextWindow
   };
 
   if (previous?.provider === "claude" && previous?.sourceType === "statusline") {
-    const sameSession = previous.sessionId && previous.sessionId === snapshot.sessionId;
-    if (sameSession && !snapshot.rateLimits.fiveHour) {
+    const sameSession = previous.sessionId && snapshot.sessionId && previous.sessionId === snapshot.sessionId;
+    if (!snapshot.rateLimits.fiveHour) {
       snapshot.rateLimits.fiveHour = previous.rateLimits?.fiveHour ?? null;
     }
-    if (sameSession && !snapshot.rateLimits.sevenDay) {
+    if (!snapshot.rateLimits.sevenDay) {
       snapshot.rateLimits.sevenDay = previous.rateLimits?.sevenDay ?? null;
+    }
+    if (sameSession && !snapshot.contextWindow) {
+      snapshot.contextWindow = previous.contextWindow ?? null;
     }
   }
 
@@ -1674,18 +1822,18 @@ function statusLineUsableColumns(input) {
   return Math.max(20, statusLineColumns(input) - guard);
 }
 
-function contextRemainingPercent(input) {
-  const context = input.context_window ?? input.contextWindow ?? null;
-  const remaining = context?.remaining_percentage ?? context?.remainingPercentage;
+function contextRemainingPercent(input, fallbackContext = null) {
+  const context = claudeContextWindowFromStatusline(input) ?? fallbackContext;
+  const remaining = context?.remainingPercentage;
   if (typeof remaining === "number") return clamp(Math.round(remaining), 0, 100);
 
-  const used = context?.used_percentage ?? context?.usedPercentage;
+  const used = context?.usedPercentage;
   if (typeof used === "number") return clamp(100 - Math.round(used), 0, 100);
   return null;
 }
 
-function contextLeftText(input) {
-  const remaining = contextRemainingPercent(input);
+function contextLeftText(input, fallbackContext = null) {
+  const remaining = contextRemainingPercent(input, fallbackContext);
   if (remaining === null) return null;
   return `${remaining}% context left`;
 }
@@ -1730,13 +1878,20 @@ function statuslineGitBranch(input) {
     || input.git_branch
     || input.workspace?.git_branch
     || input.workspace?.git?.branch
+    || input.workspace?.branch
+    || input.worktree?.branch
+    || input.worktree?.original_branch
     || null;
   if (explicit) return explicit;
 
   const dirs = [
     input.workspace?.current_dir,
+    input.workspace?.currentDir,
     input.cwd,
-    input.workspace?.project_dir
+    input.current_dir,
+    input.currentDir,
+    input.workspace?.project_dir,
+    input.workspace?.projectDir
   ].filter(Boolean);
 
   for (const dir of dirs) {
@@ -1746,10 +1901,19 @@ function statuslineGitBranch(input) {
   return null;
 }
 
-function claudeHeader(input, args) {
-  const model = input.model?.display_name || input.model?.id || "Claude";
-  const effort = input.effort?.level || null;
-  const workspaceRoot = input.workspace?.project_dir || input.cwd || input.workspace?.current_dir || "";
+function claudeHeader(input, args, capturedClaude = null) {
+  const model = typeof input.model === "string"
+    ? input.model
+    : input.model?.display_name || input.model?.displayName || input.model?.id || "Claude";
+  const effort = input.effort?.level || input.effortLevel || null;
+  const workspaceRoot = input.workspace?.project_dir
+    || input.workspace?.projectDir
+    || input.cwd
+    || input.current_dir
+    || input.currentDir
+    || input.workspace?.current_dir
+    || input.workspace?.currentDir
+    || "";
   const gitBranch = statuslineGitBranch(input);
   const parts = [model];
   if (effort) parts.push(effort);
@@ -1760,7 +1924,7 @@ function claudeHeader(input, args) {
     parts.push(gitBranch);
   }
   const left = parts.join(" ");
-  const right = contextLeftText(input);
+  const right = contextLeftText(input, capturedClaude?.contextWindow ?? null);
   const columns = Math.max(20, statusLineUsableColumns(input) - (args.leftPadding || 0));
   const header = alignHeader(left, right, columns);
   return statusColorize({ running: false }, header, args);
@@ -1891,6 +2055,17 @@ function renderLine(snapshot, args) {
     .join(providerDivider);
 }
 
+function renderMenuBar(snapshot) {
+  const parts = snapshot.results
+    .map((result) => {
+      const label = result.provider === "codex" ? "Cx" : "Cl";
+      if (!result.ok || typeof result.percentRemaining !== "number") return `${label} --`;
+      return `${label} ${result.percentRemaining}%`;
+    })
+    .filter(Boolean);
+  return parts.length ? parts.join(" | ") : "AI --";
+}
+
 function applyLeftPadding(output, args) {
   const padding = Math.max(0, Number(args.leftPadding) || 0);
   if (!padding) return output;
@@ -1903,6 +2078,7 @@ function applyLeftPadding(output, args) {
 
 function render(snapshot, args) {
   if (args.json) return JSON.stringify(snapshot, null, 2);
+  if (args.menuBar) return renderMenuBar(snapshot);
 
   const maxWidth = args.maxWidth
     ? Math.max(20, args.maxWidth - (Number(args.leftPadding) || 0))
@@ -1938,6 +2114,8 @@ async function main() {
         console.log(`Codex wrapper installed: ${result.codex.wrapperPath}`);
         console.log(`Original codex: ${result.codex.originalCommand}`);
         if (result.codex.path?.note) console.log(result.codex.path.note);
+        const reloadCommand = sourcePathCommand(result.codex.path?.rcPath);
+        if (reloadCommand) console.log(`For this terminal now, run: ${reloadCommand}`);
       } else if (result.codex?.skipped) {
         console.log(`Codex wrapper skipped: ${result.codex.reason}`);
       }
@@ -1958,6 +2136,8 @@ async function main() {
       console.log(`Codex provider: ${result.codex.providerEnabled ? "on" : "off"}`);
       console.log(`Codex on PATH: ${result.codex.activeCodex || "not found"}`);
       console.log(`Codex wrapper: ${result.codex.wrapperInstalled ? "installed" : "missing"} (${result.codex.wrapperPath})`);
+      console.log(`AI Battery runner: ${result.codex.runnerExists ? "found" : "missing"} (${result.codex.runnerPath})`);
+      console.log(`python3: ${result.codex.python3 || "not found"}`);
       console.log(`PATH uses wrapper: ${result.codex.activeIsWrapper ? "yes" : "no"}`);
       console.log(`Inside Codex: ${result.codex.insideCodex ? "yes" : "no"}`);
       console.log(`Current Codex wrapped: ${result.codex.currentCodexWrapped ? "yes" : "no"}`);
@@ -2032,7 +2212,7 @@ async function main() {
         const claudeData = claudeStatuslineResultFromCache(capturedClaude, capturedSource, { includeBackground: true }) ?? readClaude();
         results.push({ ...claudeData, running: true });
       }
-      const header = args.header ? applyLeftPadding(claudeHeader(input, args), args) : "";
+      const header = args.header ? applyLeftPadding(claudeHeader(input, args, capturedClaude), args) : "";
       const usage = render({
         generatedAt: new Date().toISOString(),
         results
