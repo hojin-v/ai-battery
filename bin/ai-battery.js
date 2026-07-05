@@ -3036,13 +3036,14 @@ function colorize(text, color, style) {
     cyan: 36
   };
   if (style === "tmux") {
-    // tmux #() output renders on the status bar's own background (often green/custom).
-    // Setting fg alone fails when the bar background matches the charge color.
-    // Use explicit bg for charged colors so the bar is readable on any status theme.
-    const tmuxBg = { green: "green", orange: "colour208", red: "red", white: "white" };
+    // Charge colors used exclusively for bar fill glyphs: set explicit bg so
+    // the filled segment reads on any status-bar background color.
+    const tmuxBg = { green: "green", orange: "colour208", red: "red" };
     if (tmuxBg[color]) return `#[fg=black,bg=${tmuxBg[color]}]${text}#[default]`;
-    // gray = empty portion: just dim fg, let the status bar bg show through
-    return `#[fg=colour244]${text}#[default]`;
+    // Text colors (white = active provider, gray = inactive, cyan = accent):
+    // fg only so they inherit the status-bar background without adding a box.
+    const tmuxFg = { white: "colour255", gray: "colour244", cyan: "cyan" };
+    return `#[fg=${tmuxFg[color] || "default"}]${text}#[default]`;
   }
   return `\u001b[${codes[color] || 0}m${text}\u001b[0m`;
 }
@@ -3134,8 +3135,10 @@ function resetClock(limit) {
   return `${hours}:${minutes}`;
 }
 
+const TMUX_FORMAT_RE = /#\[[^\]]*\]/g;
+
 function stripAnsi(text) {
-  return String(text).replace(ANSI_RE, "");
+  return String(text).replace(ANSI_RE, "").replace(TMUX_FORMAT_RE, "");
 }
 
 function charWidth(char) {
