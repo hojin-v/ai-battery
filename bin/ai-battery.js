@@ -763,10 +763,10 @@ function extractExistingStatusRight(confText) {
 function tmuxStatusBlock(existingStatusRight = null) {
   const battery = `${shQuote(process.execPath)} ${shQuote(fileURLToPath(import.meta.url))} --tmux --bar-width 8 --max-width 80`;
   const batteryPart = `#(${battery})`;
-  // Preserve the user's existing status-right by prepending the battery to it.
-  // When the block is uninstalled, the earlier set -g status-right line wins back.
+  // Put the battery on the far right so tmux left-clips the existing text before
+  // the bar. When the block is uninstalled, the earlier set -g status-right wins.
   const statusRightValue = existingStatusRight
-    ? `${batteryPart}  ${existingStatusRight}`
+    ? `${existingStatusRight}  ${batteryPart} `
     : `${batteryPart} `;
   const rightLength = existingStatusRight ? 150 : 100;
   return [
@@ -3070,6 +3070,9 @@ const WINDOWS_BAR_GLYPH = "❚";
 // Plain (--no-color / non-TTY) has no color to tell the halves apart, so it
 // falls back to a distinct empty glyph. This path is opt-in and not the TUI.
 const BAR_EMPTY_PLAIN_GLYPH = "░";
+// tmux status-right: explicit bg on fill makes it visible on any background.
+// Empty uses a hollow outline rectangle so it reads as "unused" without color.
+const BAR_EMPTY_TMUX_GLYPH = "▯";
 
 function barGlyph() {
   const override = process.env.AI_BATTERY_BAR_GLYPH || process.env.CLAUDEX_BATTERY_BAR_GLYPH;
@@ -3093,7 +3096,8 @@ function bar(percent, width, chargeColor = "green", style) {
   if (style === "plain") {
     return `${fill}${BAR_EMPTY_PLAIN_GLYPH.repeat(empty)}`;
   }
-  return `${colorize(fill, chargeColor, style)}${empty ? colorize(glyph.repeat(empty), "gray", style) : ""}`;
+  const emptyGlyph = style === "tmux" ? BAR_EMPTY_TMUX_GLYPH : glyph;
+  return `${colorize(fill, chargeColor, style)}${empty ? colorize(emptyGlyph.repeat(empty), "gray", style) : ""}`;
 }
 
 function duration(seconds) {

@@ -339,8 +339,8 @@ test("tmux install preserves existing status-right and restores on uninstall", {
   withEnv({ AI_BATTERY_TMUX_CONF: confPath }, () => {
     installTmuxStatus();
     const text = fs.readFileSync(confPath, "utf8");
-    // Existing status-right must be preserved inside our block (battery prepended)
-    assert.match(text, /status-right "#\(.*\)  %H:%M "/);
+    // Existing status-right must be preserved with battery appended to the right
+    assert.match(text, /status-right " %H:%M ".*#\(/s);
     assert.equal((text.match(/set -g status-right/g) || []).length, 2); // original + our block
 
     uninstallTmuxStatus();

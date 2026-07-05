@@ -223,17 +223,7 @@ class StatusLine:
     def seconds_until_refresh(self):
         return max(0.0, self.next_fetch - time.monotonic())
 
-    def draw(self, force=False, dirty=False):
-        now = time.monotonic()
-        if not force and now - self.last_draw < 0.15:
-            return
-        self.refresh(force)
-        paint_width = max(1, self.cols - 1)
-        line = fit_ansi(self.text, paint_width, pad=True)
-        if not force and not dirty and line == self.last_line:
-            return
-        self.last_draw = now
-        self.last_line = line
+    def _write_row(self, line):
         payload = (
             "\x1b7"
             "\x1b[0m"
@@ -245,6 +235,29 @@ class StatusLine:
             "\x1b8"
         )
         os.write(sys.stdout.fileno(), payload.encode("utf-8", errors="replace"))
+
+    def draw_cached(self):
+        """Repaint the cached text at the current terminal size without fetching new data.
+        Used on resize so the bar is repositioned instantly, avoiding the ~100ms
+        subprocess call that would otherwise delay the repaint."""
+        paint_width = max(1, self.cols - 1)
+        line = fit_ansi(self.text, paint_width, pad=True)
+        self.last_draw = time.monotonic()
+        self.last_line = line
+        self._write_row(line)
+
+    def draw(self, force=False, dirty=False):
+        now = time.monotonic()
+        if not force and now - self.last_draw < 0.15:
+            return
+        self.refresh(force)
+        paint_width = max(1, self.cols - 1)
+        line = fit_ansi(self.text, paint_width, pad=True)
+        if not force and not dirty and line == self.last_line:
+            return
+        self.last_draw = now
+        self.last_line = line
+        self._write_row(line)
 
     def clear(self):
         payload = "\x1b7" "\x1b[0m" f"\x1b[{self.rows};1H" "\r\x1b[1G" "\x1b[2K" "\x1b8"
@@ -306,7 +319,11 @@ def main():
             os.kill(pid, signal.SIGWINCH)
         except ProcessLookupError:
             pass
-        status.draw(True)
+        # Repaint immediately at the new size using cached text (no subprocess call).
+        # A subprocess call here blocks signal delivery for ~100ms, causing color
+        # flicker and stutter during resize. Schedule a fresh fetch instead.
+        status.draw_cached()
+        status.next_fetch = 0.0
 
     signal.signal(signal.SIGWINCH, on_resize)
 
