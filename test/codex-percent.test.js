@@ -316,6 +316,7 @@ test("tmux status block installs, updates in place, and uninstalls cleanly", { s
     assert.match(text, /AI_BATTERY_TMUX_STATUS 1/);
     assert.match(text, /status-right "#\(/);
     assert.match(text, /--bar-width 8/);
+    assert.match(text, /--tmux/);
     assert.doesNotMatch(text, /--no-color/);
     assert.equal((text.match(/# >>> ai-battery tmux >>>/g) || []).length, 1);
 
@@ -366,11 +367,12 @@ test("tmux status-bar detection honors env flag and overrides", () => {
   const base = { TMUX: undefined, AI_BATTERY_TMUX: undefined, CLAUDEX_BATTERY_TMUX: undefined, AI_BATTERY_TMUX_STATUS: undefined, CLAUDEX_BATTERY_TMUX_STATUS: undefined };
 
   assert.equal(withEnv({ ...base }, () => tmuxStatusBarActive()), false);
-  assert.equal(withEnv({ ...base, TMUX: "/tmp/tmux-1000/default,123,0" }, () => tmuxStatusBarActive()), false);
+  // TMUX_STATUS=1 is the explicit opt-in — trusted even without TMUX socket path
   assert.equal(withEnv({ ...base, TMUX: "x", AI_BATTERY_TMUX_STATUS: "1" }, () => tmuxStatusBarActive()), true);
-  assert.equal(withEnv({ ...base, AI_BATTERY_TMUX_STATUS: "1" }, () => tmuxStatusBarActive()), false);
-  assert.equal(withEnv({ ...base, TMUX: "x", AI_BATTERY_TMUX_STATUS: "1", AI_BATTERY_TMUX: "row" }, () => tmuxStatusBarActive()), false);
-  assert.equal(withEnv({ ...base, TMUX: "x", AI_BATTERY_TMUX: "status" }, () => tmuxStatusBarActive()), true);
+  assert.equal(withEnv({ ...base, AI_BATTERY_TMUX_STATUS: "1" }, () => tmuxStatusBarActive()), true);
+  // row override wins over the flag
+  assert.equal(withEnv({ ...base, AI_BATTERY_TMUX_STATUS: "1", AI_BATTERY_TMUX: "row" }, () => tmuxStatusBarActive()), false);
+  assert.equal(withEnv({ ...base, AI_BATTERY_TMUX: "status" }, () => tmuxStatusBarActive()), true);
 });
 
 test("tmux block removal leaves untouched configs unchanged", () => {

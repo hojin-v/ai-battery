@@ -730,11 +730,13 @@ function shellPathBlock(shimDir) {
 }
 
 function tmuxStatusBarActive() {
-  if (!process.env.TMUX) return false;
   const override = String(process.env.AI_BATTERY_TMUX || process.env.CLAUDEX_BATTERY_TMUX || "").toLowerCase();
   if (override === "row") return false;
   if (["status", "plain", "off"].includes(override)) return true;
-  return (process.env.AI_BATTERY_TMUX_STATUS || process.env.CLAUDEX_BATTERY_TMUX_STATUS) === "1";
+  // AI_BATTERY_TMUX_STATUS=1 is set by "ai-battery setup tmux" via tmux set-environment -g.
+  // Trust it even when TMUX socket path isn't propagated to Claude Code's statusline subprocess.
+  if ((process.env.AI_BATTERY_TMUX_STATUS || process.env.CLAUDEX_BATTERY_TMUX_STATUS) === "1") return true;
+  return false;
 }
 
 function tmuxConfPath() {
@@ -759,7 +761,7 @@ function extractExistingStatusRight(confText) {
 }
 
 function tmuxStatusBlock(existingStatusRight = null) {
-  const battery = `${shQuote(process.execPath)} ${shQuote(fileURLToPath(import.meta.url))} --muted --bar-width 8 --max-width 80`;
+  const battery = `${shQuote(process.execPath)} ${shQuote(fileURLToPath(import.meta.url))} --tmux --bar-width 8 --max-width 80`;
   const batteryPart = `#(${battery})`;
   // Preserve the user's existing status-right by prepending the battery to it.
   // When the block is uninstalled, the earlier set -g status-right line wins back.
@@ -3033,15 +3035,15 @@ function colorize(text, color, style) {
     gray: 90,
     cyan: 36
   };
-  const tmuxColors = {
-    white: "white",
-    green: "green",
-    orange: "colour208",
-    red: "red",
-    gray: "colour244",
-    cyan: "cyan"
-  };
-  if (style === "tmux") return `#[fg=${tmuxColors[color] || "default"}]${text}#[default]`;
+  if (style === "tmux") {
+    // tmux #() output renders on the status bar's own background (often green/custom).
+    // Setting fg alone fails when the bar background matches the charge color.
+    // Use explicit bg for charged colors so the bar is readable on any status theme.
+    const tmuxBg = { green: "green", orange: "colour208", red: "red", white: "white" };
+    if (tmuxBg[color]) return `#[fg=black,bg=${tmuxBg[color]}]${text}#[default]`;
+    // gray = empty portion: just dim fg, let the status bar bg show through
+    return `#[fg=colour244]${text}#[default]`;
+  }
   return `\u001b[${codes[color] || 0}m${text}\u001b[0m`;
 }
 
