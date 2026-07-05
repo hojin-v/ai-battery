@@ -3036,13 +3036,14 @@ function colorize(text, color, style) {
     cyan: 36
   };
   if (style === "tmux") {
-    // Charge colors used exclusively for bar fill glyphs: set explicit bg so
-    // the filled segment reads on any status-bar background color.
-    const tmuxBg = { green: "green", orange: "colour208", red: "red" };
-    if (tmuxBg[color]) return `#[fg=black,bg=${tmuxBg[color]}]${text}#[default]`;
-    // Text colors (white = active provider, gray = inactive, cyan = accent):
-    // fg only so they inherit the status-bar background without adding a box.
-    const tmuxFg = { white: "colour255", gray: "colour244", cyan: "cyan" };
+    // All colors: fg only (no background). The user's status-bar background
+    // is preserved; only the glyph/text color is changed.
+    const tmuxFg = {
+      green: "green", orange: "colour208", red: "red",
+      white: "black",       // active provider text → black
+      gray: "colour240",    // inactive provider → slightly darker gray than 244
+      cyan: "cyan"
+    };
     return `#[fg=${tmuxFg[color] || "default"}]${text}#[default]`;
   }
   return `\u001b[${codes[color] || 0}m${text}\u001b[0m`;
@@ -3098,7 +3099,10 @@ function bar(percent, width, chargeColor = "green", style) {
     return `${fill}${BAR_EMPTY_PLAIN_GLYPH.repeat(empty)}`;
   }
   const emptyGlyph = style === "tmux" ? BAR_EMPTY_TMUX_GLYPH : glyph;
-  return `${colorize(fill, chargeColor, style)}${empty ? colorize(emptyGlyph.repeat(empty), "gray", style) : ""}`;
+  // tmux: empty portion has no color markup so it inherits the status-bar fg.
+  const emptyStr = empty ? emptyGlyph.repeat(empty) : "";
+  const emptyFormatted = style === "tmux" ? emptyStr : (emptyStr ? colorize(emptyStr, "gray", style) : "");
+  return `${colorize(fill, chargeColor, style)}${emptyFormatted}`;
 }
 
 function duration(seconds) {
