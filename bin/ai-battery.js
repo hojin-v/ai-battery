@@ -1575,11 +1575,13 @@ function diagnoseCodex() {
   }
   const rowpty = process.platform === "win32" ? rowptyExePath() : null;
   const rowptyConpty = rowpty ? fs.existsSync(path.join(path.dirname(rowpty), "conpty.dll")) : false;
+  const requestedRowptyConpty = String(process.env.AI_BATTERY_ROWPTY_CONPTY || process.env.CLAUDEX_BATTERY_ROWPTY_CONPTY || "os").toLowerCase();
+  const bundledRowptyConptyRequested = ["bundled", "node-pty", "nodepty", "auto", "default"].includes(requestedRowptyConpty);
   if (wrapperInstalled && process.platform === "win32" && !rowpty) {
     notes.push("rowpty.exe not found, so the Codex bottom row uses the overlay fallback. Run: ai-battery setup codex (compiles it locally with the in-box csc.exe).");
   }
-  if (rowpty && !rowptyConpty) {
-    notes.push("conpty.dll is not next to rowpty.exe, so it uses the OS built-in ConPTY (lower rendering fidelity). Run: ai-battery setup codex with the node-pty package installed.");
+  if (rowpty && bundledRowptyConptyRequested && !rowptyConpty) {
+    notes.push("Bundled ConPTY was requested, but conpty.dll is not next to rowpty.exe. Run: ai-battery setup codex with the node-pty package installed, or unset AI_BATTERY_ROWPTY_CONPTY to use the faster OS ConPTY default.");
   }
   if (wrapperInstalled && process.platform !== "win32" && !python3) {
     notes.push("Codex wrapper needs python3 for the POSIX PTY row. Install Python 3, then run plain \"codex\" again.");
@@ -1599,7 +1601,9 @@ function diagnoseCodex() {
     wrapperInstalled,
     runnerPath,
     runnerExists,
-    rowpty: process.platform === "win32" ? { path: rowpty, installed: Boolean(rowpty), bundledConpty: rowptyConpty } : null,
+    rowpty: process.platform === "win32"
+      ? { path: rowpty, installed: Boolean(rowpty), bundledConpty: rowptyConpty, bundledConptyRequested }
+      : null,
     statusLine,
     python3,
     originalCommand: configuredOriginal,
@@ -1762,7 +1766,9 @@ function installRowPtyHost() {
     ok: true,
     exePath,
     compiled,
-    conpty: conptyDir ? "bundled (Microsoft-signed, from node-pty)" : "OS built-in fallback"
+    conpty: conptyDir
+      ? "OS default (bundled provider copied; opt in with AI_BATTERY_ROWPTY_CONPTY=bundled)"
+      : "OS built-in"
   };
 }
 
@@ -4210,7 +4216,9 @@ async function main() {
       console.log(`Codex status_line: ${result.codex.statusLine.configured ? "configured" : "missing"} (${result.codex.statusLine.configPath})`);
       console.log(`AI Battery runner: ${result.codex.runnerExists ? "found" : "missing"} (${result.codex.runnerPath})`);
       if (result.codex.rowpty) {
-        const conptyLabel = result.codex.rowpty.bundledConpty ? "bundled ConPTY" : "OS ConPTY";
+        const conptyLabel = result.codex.rowpty.bundledConptyRequested
+          ? (result.codex.rowpty.bundledConpty ? "bundled ConPTY requested" : "bundled ConPTY requested but missing")
+          : (result.codex.rowpty.bundledConpty ? "OS ConPTY default, bundled provider available" : "OS ConPTY default");
         console.log(`rowpty host: ${result.codex.rowpty.installed ? `found, ${conptyLabel} (${result.codex.rowpty.path})` : "missing (overlay fallback)"}`);
       }
       console.log(`python3: ${result.codex.python3 || "not found"}`);

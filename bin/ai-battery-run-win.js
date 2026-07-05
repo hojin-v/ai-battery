@@ -202,6 +202,27 @@ function rowptyStatusCommand(args, activeProvider) {
     .join(" ");
 }
 
+function rowptyConptyMode() {
+  const raw = process.env.AI_BATTERY_ROWPTY_CONPTY ?? process.env.CLAUDEX_BATTERY_ROWPTY_CONPTY ?? "os";
+  const mode = String(raw).toLowerCase();
+  if (["bundled", "node-pty", "nodepty"].includes(mode)) return "bundled";
+  if (["auto", "default"].includes(mode)) return "auto";
+  return "os";
+}
+
+function rowptySpawnEnv() {
+  const env = { ...process.env };
+  const explicitMode = process.env.AI_BATTERY_ROWPTY_CONPTY !== undefined ||
+    process.env.CLAUDEX_BATTERY_ROWPTY_CONPTY !== undefined;
+  const mode = rowptyConptyMode();
+  if (mode === "bundled") {
+    delete env.ROWPTY_NO_CONPTY_DLL;
+  } else if (mode === "os" && (explicitMode || (!env.ROWPTY_NO_CONPTY_DLL && !env.ROWPTY_CONPTY_DLL))) {
+    env.ROWPTY_NO_CONPTY_DLL = "1";
+  }
+  return env;
+}
+
 function runRowPty(args, activeProvider) {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return Promise.resolve(null);
   const exe = rowptyExePath();
@@ -217,11 +238,12 @@ function runRowPty(args, activeProvider) {
     "--status-cmd", rowptyStatusCommand(args, activeProvider),
     "--", command.file, ...command.args
   ];
-  debugLog("rowpty:start", { exe, hostArgs, size: termSize() });
+  const env = rowptySpawnEnv();
+  debugLog("rowpty:start", { exe, hostArgs, size: termSize(), conptyMode: rowptyConptyMode() });
   const child = spawn(exe, hostArgs, {
     stdio: "inherit",
     cwd: process.cwd(),
-    env: process.env,
+    env,
     windowsHide: false
   });
 
@@ -687,7 +709,9 @@ export {
   parseArgs,
   quoteWindowsCommandLineArg,
   resolveWindowsCommandFile,
+  rowptyConptyMode,
   rowptyExePath,
+  rowptySpawnEnv,
   rowptyStatusCommand,
   statusRow,
   statusOutputText,

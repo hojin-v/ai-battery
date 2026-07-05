@@ -39,7 +39,9 @@ import {
   overlayRepaintIntervalMs,
   parseArgs as parseWindowsRunnerArgs,
   quoteWindowsCommandLineArg,
+  rowptyConptyMode,
   rowptyExePath,
+  rowptySpawnEnv,
   rowptyStatusCommand,
   statusOutputText,
   statusRow,
@@ -444,6 +446,37 @@ test("rowpty executable resolution honors the explicit env override", (t) => {
 
   assert.equal(withEnv({ AI_BATTERY_ROWPTY: exePath }, () => rowptyExePath()), exePath);
   assert.equal(withEnv({ AI_BATTERY_ROWPTY: path.join(tmpDir, "missing.exe") }, () => rowptyExePath()), null);
+});
+
+test("rowpty spawn defaults to the OS ConPTY provider for faster startup", () => {
+  const clean = {
+    AI_BATTERY_ROWPTY_CONPTY: undefined,
+    CLAUDEX_BATTERY_ROWPTY_CONPTY: undefined,
+    ROWPTY_NO_CONPTY_DLL: undefined,
+    ROWPTY_CONPTY_DLL: undefined
+  };
+  assert.equal(withEnv(clean, () => rowptyConptyMode()), "os");
+  assert.equal(withEnv(clean, () => rowptySpawnEnv().ROWPTY_NO_CONPTY_DLL), "1");
+
+  assert.equal(withEnv({
+    ...clean,
+    ROWPTY_CONPTY_DLL: "C:\\custom\\conpty.dll"
+  }, () => rowptySpawnEnv().ROWPTY_NO_CONPTY_DLL), undefined);
+
+  const bundled = withEnv({
+    ...clean,
+    AI_BATTERY_ROWPTY_CONPTY: "bundled",
+    ROWPTY_NO_CONPTY_DLL: "1"
+  }, () => ({ mode: rowptyConptyMode(), env: rowptySpawnEnv() }));
+  assert.equal(bundled.mode, "bundled");
+  assert.equal(bundled.env.ROWPTY_NO_CONPTY_DLL, undefined);
+
+  const auto = withEnv({
+    ...clean,
+    AI_BATTERY_ROWPTY_CONPTY: "auto"
+  }, () => ({ mode: rowptyConptyMode(), env: rowptySpawnEnv() }));
+  assert.equal(auto.mode, "auto");
+  assert.equal(auto.env.ROWPTY_NO_CONPTY_DLL, undefined);
 });
 
 test("Windows ConPTY repaint interval and clear-screen detection are bounded", () => {
