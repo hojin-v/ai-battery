@@ -761,14 +761,16 @@ function extractExistingStatusRight(confText) {
 }
 
 function tmuxStatusBlock(existingStatusRight = null) {
-  const battery = `${shQuote(process.execPath)} ${shQuote(fileURLToPath(import.meta.url))} --tmux --bar-width 8 --max-width 80`;
+  // #{client_width} is expanded by tmux before running the shell command,
+  // giving the responsive layout the actual terminal width to work with.
+  const battery = `${shQuote(process.execPath)} ${shQuote(fileURLToPath(import.meta.url))} --tmux --bar-width 8 --max-width #{client_width}`;
   const batteryPart = `#(${battery})`;
   // Put the battery on the far right so tmux left-clips the existing text before
   // the bar. When the block is uninstalled, the earlier set -g status-right wins.
   const statusRightValue = existingStatusRight
     ? `${existingStatusRight}  ${batteryPart} `
     : `${batteryPart} `;
-  const rightLength = existingStatusRight ? 150 : 100;
+  const rightLength = 200;
   return [
     "\n# >>> ai-battery tmux >>>",
     "# AI Battery once per session in the tmux status bar; runners inside tmux",
@@ -3072,8 +3074,12 @@ const WINDOWS_BAR_GLYPH = "❚";
 // Plain (--no-color / non-TTY) has no color to tell the halves apart, so it
 // falls back to a distinct empty glyph. This path is opt-in and not the TUI.
 const BAR_EMPTY_PLAIN_GLYPH = "░";
-// tmux status-right: explicit bg on fill makes it visible on any background.
-// Empty uses a hollow outline rectangle so it reads as "unused" without color.
+// tmux status-right: ▮ (U+25AE) and ▯ (U+25AF) are the filled/outline pair
+// from the same Geometric Shapes Unicode block, so they render at the same
+// size and baseline across terminal fonts (no cross-block fallback mismatch).
+// Colors are NOT applied: fg-only colors become invisible when they match the
+// status-bar background (e.g. green bar fill on green status-bar bg).
+const BAR_FILL_TMUX_GLYPH = "▮";
 const BAR_EMPTY_TMUX_GLYPH = "▯";
 
 function barGlyph() {
@@ -3092,17 +3098,19 @@ function bar(percent, width, chargeColor = "green", style) {
   if (full > width) full = width;
 
   const glyph = barGlyph();
-  const fill = glyph.repeat(full);
   const empty = width - full;
 
   if (style === "plain") {
-    return `${fill}${BAR_EMPTY_PLAIN_GLYPH.repeat(empty)}`;
+    return `${glyph.repeat(full)}${BAR_EMPTY_PLAIN_GLYPH.repeat(empty)}`;
   }
-  const emptyGlyph = style === "tmux" ? BAR_EMPTY_TMUX_GLYPH : glyph;
-  // tmux: empty portion has no color markup so it inherits the status-bar fg.
-  const emptyStr = empty ? emptyGlyph.repeat(empty) : "";
-  const emptyFormatted = style === "tmux" ? emptyStr : (emptyStr ? colorize(emptyStr, "gray", style) : "");
-  return `${colorize(fill, chargeColor, style)}${emptyFormatted}`;
+  if (style === "tmux") {
+    // No color on either half: fg-only colors become invisible when they match
+    // the status-bar background. Shape alone distinguishes fill from empty.
+    return `${BAR_FILL_TMUX_GLYPH.repeat(full)}${BAR_EMPTY_TMUX_GLYPH.repeat(empty)}`;
+  }
+  const fill = glyph.repeat(full);
+  const emptyStr = empty ? colorize(glyph.repeat(empty), "gray", style) : "";
+  return `${colorize(fill, chargeColor, style)}${emptyStr}`;
 }
 
 function duration(seconds) {
