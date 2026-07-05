@@ -748,16 +748,33 @@ function removeAiBatteryTmuxBlock(text) {
   );
 }
 
-function tmuxStatusBlock() {
-  const battery = `${shQuote(process.execPath)} ${shQuote(fileURLToPath(import.meta.url))} --muted --no-color --bar-width 6 --max-width 80`;
+// Returns the last set -g status-right "..." value from confText, ignoring our managed block.
+// Returns null when no explicit status-right is found.
+function extractExistingStatusRight(confText) {
+  const stripped = removeAiBatteryTmuxBlock(String(confText));
+  const re = /^[ \t]*set(?:-option)?(?:[ \t]+-\w+)*[ \t]+status-right[ \t]+(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')/gm;
+  let last = null;
+  for (let m; (m = re.exec(stripped)) !== null;) last = m[1] ?? m[2] ?? null;
+  return last;
+}
+
+function tmuxStatusBlock(existingStatusRight = null) {
+  const battery = `${shQuote(process.execPath)} ${shQuote(fileURLToPath(import.meta.url))} --muted --bar-width 8 --max-width 80`;
+  const batteryPart = `#(${battery})`;
+  // Preserve the user's existing status-right by prepending the battery to it.
+  // When the block is uninstalled, the earlier set -g status-right line wins back.
+  const statusRightValue = existingStatusRight
+    ? `${batteryPart}  ${existingStatusRight}`
+    : `${batteryPart} `;
+  const rightLength = existingStatusRight ? 150 : 100;
   return [
     "\n# >>> ai-battery tmux >>>",
     "# AI Battery once per session in the tmux status bar; runners inside tmux",
     "# see AI_BATTERY_TMUX_STATUS and skip their per-pane bottom row.",
     "set-environment -g AI_BATTERY_TMUX_STATUS 1",
     "set -g status-interval 10",
-    "set -g status-right-length 100",
-    `set -g status-right "#(${battery}) "`,
+    `set -g status-right-length ${rightLength}`,
+    `set -g status-right "${statusRightValue}"`,
     "# <<< ai-battery tmux <<<",
     ""
   ].join("\n");
@@ -773,7 +790,8 @@ function installTmuxStatus() {
     existing = fs.readFileSync(confPath, "utf8");
   } catch {}
   const withoutBlock = removeAiBatteryTmuxBlock(existing);
-  const next = `${withoutBlock}${tmuxStatusBlock()}`;
+  const existingStatusRight = extractExistingStatusRight(withoutBlock);
+  const next = `${withoutBlock}${tmuxStatusBlock(existingStatusRight)}`;
   if (next === existing) {
     return { ok: true, confPath, changed: false };
   }
@@ -4271,6 +4289,7 @@ export {
   installCodexStatusLine,
   installCodexWrapper,
   installRowPtyHost,
+  extractExistingStatusRight,
   installTmuxStatus,
   normalizeLimit,
   removeAiBatteryTmuxBlock,

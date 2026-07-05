@@ -14,6 +14,7 @@ import {
   installClaudeStatusline,
   installCodexStatusLine,
   installCodexWrapper,
+  extractExistingStatusRight,
   installRowPtyHost,
   installTmuxStatus,
   normalizeLimit,
@@ -314,6 +315,8 @@ test("tmux status block installs, updates in place, and uninstalls cleanly", { s
     assert.match(text, /set -g mouse on/);
     assert.match(text, /AI_BATTERY_TMUX_STATUS 1/);
     assert.match(text, /status-right "#\(/);
+    assert.match(text, /--bar-width 8/);
+    assert.doesNotMatch(text, /--no-color/);
     assert.equal((text.match(/# >>> ai-battery tmux >>>/g) || []).length, 1);
 
     installTmuxStatus();
@@ -324,6 +327,39 @@ test("tmux status block installs, updates in place, and uninstalls cleanly", { s
     assert.equal(removed.changed, true);
     assert.equal(fs.readFileSync(confPath, "utf8"), "set -g mouse on\n");
   });
+});
+
+test("tmux install preserves existing status-right and restores on uninstall", { skip: process.platform === "win32" ? "POSIX-only" : false }, (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const confPath = path.join(tmpDir, "tmux.conf");
+  fs.writeFileSync(confPath, 'set -g mouse on\nset -g status-right " %H:%M "\n');
+
+  withEnv({ AI_BATTERY_TMUX_CONF: confPath }, () => {
+    installTmuxStatus();
+    const text = fs.readFileSync(confPath, "utf8");
+    // Existing status-right must be preserved inside our block (battery prepended)
+    assert.match(text, /status-right "#\(.*\)  %H:%M "/);
+    assert.equal((text.match(/set -g status-right/g) || []).length, 2); // original + our block
+
+    uninstallTmuxStatus();
+    // After removal, original line wins again
+    const restored = fs.readFileSync(confPath, "utf8");
+    assert.equal(restored, 'set -g mouse on\nset -g status-right " %H:%M "\n');
+  });
+});
+
+test("extractExistingStatusRight parses double and single-quoted values", () => {
+  assert.equal(extractExistingStatusRight(""), null);
+  assert.equal(extractExistingStatusRight("set -g mouse on\n"), null);
+  assert.equal(extractExistingStatusRight('set -g status-right " %H:%M "\n'), " %H:%M ");
+  assert.equal(extractExistingStatusRight("set -g status-right ' %H:%M '\n"), " %H:%M ");
+  assert.equal(extractExistingStatusRight("set-option -g status-right \" %H:%M \"\n"), " %H:%M ");
+  // Last value wins
+  assert.equal(extractExistingStatusRight('set -g status-right "first"\nset -g status-right "last"\n'), "last");
+  // Our own block is stripped before extraction
+  const withBlock = 'set -g status-right "orig"\n\n# >>> ai-battery tmux >>>\nset -g status-right "#(battery)  orig"\n# <<< ai-battery tmux <<<\n';
+  assert.equal(extractExistingStatusRight(withBlock), "orig");
 });
 
 test("tmux status-bar detection honors env flag and overrides", () => {
