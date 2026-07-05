@@ -18,6 +18,7 @@ import {
   installTmuxStatus,
   normalizeLimit,
   removeAiBatteryTmuxBlock,
+  tmuxStatusBarActive,
   removeAiBatteryShellPathBlock,
   removeOrRestoreCodexWrapper,
   sameFilePath,
@@ -323,6 +324,17 @@ test("tmux status block installs, updates in place, and uninstalls cleanly", { s
     assert.equal(removed.changed, true);
     assert.equal(fs.readFileSync(confPath, "utf8"), "set -g mouse on\n");
   });
+});
+
+test("tmux status-bar detection honors env flag and overrides", () => {
+  const base = { TMUX: undefined, AI_BATTERY_TMUX: undefined, CLAUDEX_BATTERY_TMUX: undefined, AI_BATTERY_TMUX_STATUS: undefined, CLAUDEX_BATTERY_TMUX_STATUS: undefined };
+
+  assert.equal(withEnv({ ...base }, () => tmuxStatusBarActive()), false);
+  assert.equal(withEnv({ ...base, TMUX: "/tmp/tmux-1000/default,123,0" }, () => tmuxStatusBarActive()), false);
+  assert.equal(withEnv({ ...base, TMUX: "x", AI_BATTERY_TMUX_STATUS: "1" }, () => tmuxStatusBarActive()), true);
+  assert.equal(withEnv({ ...base, AI_BATTERY_TMUX_STATUS: "1" }, () => tmuxStatusBarActive()), false);
+  assert.equal(withEnv({ ...base, TMUX: "x", AI_BATTERY_TMUX_STATUS: "1", AI_BATTERY_TMUX: "row" }, () => tmuxStatusBarActive()), false);
+  assert.equal(withEnv({ ...base, TMUX: "x", AI_BATTERY_TMUX: "status" }, () => tmuxStatusBarActive()), true);
 });
 
 test("tmux block removal leaves untouched configs unchanged", () => {

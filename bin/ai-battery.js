@@ -729,6 +729,14 @@ function shellPathBlock(shimDir) {
   return `\n# >>> ai-battery setup >>>\nexport PATH=${shQuote(shimDir)}:"$PATH"\n# <<< ai-battery setup <<<\n`;
 }
 
+function tmuxStatusBarActive() {
+  if (!process.env.TMUX) return false;
+  const override = String(process.env.AI_BATTERY_TMUX || process.env.CLAUDEX_BATTERY_TMUX || "").toLowerCase();
+  if (override === "row") return false;
+  if (["status", "plain", "off"].includes(override)) return true;
+  return (process.env.AI_BATTERY_TMUX_STATUS || process.env.CLAUDEX_BATTERY_TMUX_STATUS) === "1";
+}
+
 function tmuxConfPath() {
   return process.env.AI_BATTERY_TMUX_CONF || homePath(".tmux.conf");
 }
@@ -741,7 +749,7 @@ function removeAiBatteryTmuxBlock(text) {
 }
 
 function tmuxStatusBlock() {
-  const battery = `${shQuote(process.execPath)} ${shQuote(fileURLToPath(import.meta.url))} --muted --bar-width 6 --max-width 80`;
+  const battery = `${shQuote(process.execPath)} ${shQuote(fileURLToPath(import.meta.url))} --muted --no-color --bar-width 6 --max-width 80`;
   return [
     "\n# >>> ai-battery tmux >>>",
     "# AI Battery once per session in the tmux status bar; runners inside tmux",
@@ -4209,7 +4217,12 @@ async function main() {
         generatedAt: new Date().toISOString(),
         results
       }, { ...args, activeProvider: "claude", leftPadding: 0, maxWidth: contentWidth });
-      console.log(applyLeftPadding(header && usage ? `${header}\n${usage}` : (usage || header), args));
+      // Inside tmux with the status-bar integration, the battery already shows
+      // in tmux's own bar; keep the statusline to the one line tmux can't show.
+      const text = tmuxStatusBarActive()
+        ? (header || usage)
+        : (header && usage ? `${header}\n${usage}` : (usage || header));
+      console.log(applyLeftPadding(text, args));
     }
     return;
   }
@@ -4261,6 +4274,7 @@ export {
   installTmuxStatus,
   normalizeLimit,
   removeAiBatteryTmuxBlock,
+  tmuxStatusBarActive,
   removeOrRestoreCodexWrapper,
   removeAiBatteryShellPathBlock,
   percentValue,
