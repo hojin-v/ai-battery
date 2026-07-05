@@ -14,6 +14,8 @@ const DEFAULT_TAIL_BYTES = 4 * 1024 * 1024;
 const DEFAULT_MAX_FILES = 40;
 const CLAUDE_LIMIT_HIT_TAIL_BYTES = 256 * 1024;
 const CLAUDE_LIMIT_HIT_MAX_FILES = 80;
+const CLAUDE_CODEX_CACHE_SECONDS = 60;
+const CLAUDE_CODEX_FALLBACK_CACHE_SECONDS = 15;
 const DIVIDER = "│";
 const PROVIDER_DIVIDER = "┃";
 const ANSI_RE = /\u001b\[[0-?]*[ -/]*[@-~]/g;
@@ -898,6 +900,25 @@ function sameWindowsPath(left, right) {
   return path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase();
 }
 
+function staleWindowsAiBatteryTempPath(entry) {
+  if (process.platform !== "win32") return false;
+  if (!entry || fs.existsSync(entry)) return false;
+  const relative = path.relative(os.tmpdir(), entry);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) return false;
+  return /^ai-battery-[^\\/]+[\\/]/i.test(relative);
+}
+
+function windowsUserPathWithShim(parts, shimDir) {
+  const filtered = parts.filter((entry) => (
+    !sameWindowsPath(entry, shimDir)
+    && !staleWindowsAiBatteryTempPath(entry)
+  ));
+  return {
+    parts: [shimDir, ...filtered],
+    changed: filtered.length !== parts.length || !sameWindowsPath(parts[0] || "", shimDir)
+  };
+}
+
 function ensureWindowsShimPath(shimDir, originalCommand) {
   const activeNow = pathDirPrecedesOriginal(shimDir, originalCommand);
   if (activeNow) {
@@ -917,9 +938,8 @@ function ensureWindowsShimPath(shimDir, originalCommand) {
   }
 
   const parts = windowsUserPathParts();
-  const filtered = parts.filter((entry) => !sameWindowsPath(entry, shimDir));
-  const changed = filtered.length !== parts.length || !sameWindowsPath(parts[0] || "", shimDir);
-  const next = [shimDir, ...filtered].join(";");
+  const nextPath = windowsUserPathWithShim(parts, shimDir);
+  const next = nextPath.parts.join(";");
   const result = runWindowsPowerShell(`[Environment]::SetEnvironmentVariable('Path', ${psQuote(next)}, 'User')`);
   if (result.status !== 0) {
     return {
@@ -929,9 +949,9 @@ function ensureWindowsShimPath(shimDir, originalCommand) {
     };
   }
   return {
-    changed,
+    changed: nextPath.changed,
     rcPath: "Windows user PATH",
-    note: `${changed ? "Added" : "Kept"} ${shimDir} at the front of the Windows user PATH. Open a new cmd/PowerShell for plain "codex" to use AI Battery.`
+    note: `${nextPath.changed ? "Added" : "Kept"} ${shimDir} at the front of the Windows user PATH. Open a new cmd/PowerShell for plain "codex" to use AI Battery.`
   };
 }
 
@@ -2850,12 +2870,32 @@ function readCodex(options = {}) {
     writeScanCache("codex-status", scan);
   }
 
-  const running = options.includeRunning === false
-    ? Boolean(scan.running)
-    : isProviderRunning("codex");
+  const running = typeof options.runningOverride === "boolean"
+    ? options.runningOverride
+    : (
+        options.includeRunning === false
+          ? Boolean(scan.running)
+          : isProviderRunning("codex")
+      );
   const result = { ...scan, running };
   if (result.ok) result.ageSeconds = cacheAgeSeconds(result.timestamp ?? null);
   return result;
+}
+
+function readCodexForClaudeCapture() {
+  if (process.platform !== "win32") return readCodex();
+
+  const cached = readCodex({
+    cachedOnly: true,
+    maxAgeSeconds: CLAUDE_CODEX_CACHE_SECONDS,
+    runningOverride: false
+  });
+  if (cached) return cached;
+
+  return readCodex({
+    maxAgeSeconds: CLAUDE_CODEX_FALLBACK_CACHE_SECONDS,
+    runningOverride: false
+  });
 }
 
 function scanCodexStatus() {
@@ -2943,8 +2983,10 @@ function usageTotal(usage) {
   ].reduce((sum, value) => sum + (Number(value) || 0), 0);
 }
 
-function readClaude() {
-  const running = isProviderRunning("claude");
+function readClaude(options = {}) {
+  const running = typeof options.runningOverride === "boolean"
+    ? options.runningOverride
+    : isProviderRunning("claude");
   const statuslineCache = readClaudeStatuslineCache();
   if (statuslineCache) return { ...statuslineCache, running };
 
@@ -3526,14 +3568,20 @@ function compactNumber(value) {
   return String(number);
 }
 
+function runningOverrideForProvider(args, provider) {
+  if (args.activeProvider === provider) return true;
+  if (args.activeProvider && process.platform === "win32") return false;
+  return null;
+}
+
 function collect(args) {
   const results = [];
   const includeHidden = args.provider !== "all";
   if ((args.provider === "all" || args.provider === "codex") && (includeHidden || providerVisible("codex"))) {
-    results.push(readCodex());
+    results.push(readCodex({ runningOverride: runningOverrideForProvider(args, "codex") }));
   }
   if ((args.provider === "all" || args.provider === "claude") && (includeHidden || providerVisible("claude"))) {
-    results.push(readClaude());
+    results.push(readClaude({ runningOverride: runningOverrideForProvider(args, "claude") }));
   }
   return {
     generatedAt: new Date().toISOString(),
@@ -4238,9 +4286,7 @@ async function main() {
     if (!args.silent) {
       const results = [];
       if ((args.provider === "all" || args.provider === "codex") && providerVisible("codex")) {
-        const codexData = process.platform === "win32"
-          ? readCodex({ cachedOnly: true, includeRunning: true, maxAgeSeconds: 60 })
-          : readCodex();
+        const codexData = readCodexForClaudeCapture();
         if (codexData) results.push(codexData);
       }
       if ((args.provider === "all" || args.provider === "claude") && providerVisible("claude")) {
@@ -4314,6 +4360,7 @@ export {
   installTmuxStatus,
   normalizeLimit,
   removeAiBatteryTmuxBlock,
+  runningOverrideForProvider,
   tmuxStatusBarActive,
   removeOrRestoreCodexWrapper,
   removeAiBatteryShellPathBlock,
@@ -4324,6 +4371,7 @@ export {
   uninstallCodexWrapper,
   uninstallRowPtyHost,
   uninstallTmuxStatus,
+  windowsUserPathWithShim,
   windowsCscPath
 };
 

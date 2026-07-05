@@ -19,6 +19,7 @@ import {
   installTmuxStatus,
   normalizeLimit,
   removeAiBatteryTmuxBlock,
+  runningOverrideForProvider,
   tmuxStatusBarActive,
   removeAiBatteryShellPathBlock,
   removeOrRestoreCodexWrapper,
@@ -26,7 +27,8 @@ import {
   visibleWidth,
   uninstallClaudeStatusline,
   uninstallCodexWrapper,
-  uninstallTmuxStatus
+  uninstallTmuxStatus,
+  windowsUserPathWithShim
 } from "../bin/ai-battery.js";
 import {
   conPtyBackspaceMode,
@@ -93,6 +95,25 @@ test("fractional ratio fields are still scaled to percentages", () => {
 
   assert.equal(primary.usedPercent, 25);
   assert.equal(primary.remainingPercent, 75);
+});
+
+test("active provider supplies running state without a process scan hint", () => {
+  assert.equal(runningOverrideForProvider({ activeProvider: "codex" }, "codex"), true);
+  const inactive = runningOverrideForProvider({ activeProvider: "codex" }, "claude");
+  assert.equal(inactive, process.platform === "win32" ? false : null);
+  assert.equal(runningOverrideForProvider({ activeProvider: null }, "codex"), null);
+});
+
+test("Windows user PATH update drops stale AI Battery temp shims", { skip: process.platform !== "win32" }, () => {
+  const stale = path.join(os.tmpdir(), "ai-battery-stale-for-path-test", "shim");
+  const shimDir = path.join(os.tmpdir(), "ai-battery-real-for-path-test", "bin");
+  const windowsApps = path.join(os.homedir(), "AppData", "Local", "Microsoft", "WindowsApps");
+  fs.rmSync(path.dirname(stale), { recursive: true, force: true });
+
+  const result = windowsUserPathWithShim([stale, windowsApps], shimDir);
+
+  assert.deepEqual(result.parts, [shimDir, windowsApps]);
+  assert.equal(result.changed, true);
 });
 
 test("CLI entrypoint treats npm bin symlinks as direct execution", (t) => {
@@ -1023,7 +1044,76 @@ test("Claude capture reflects running Codex on Windows", { skip: process.platfor
   });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /\x1b\[97mCodex/);
+  assert.match(result.stdout, /\x1b\[90mCodex/);
+  assert.match(result.stdout.replace(/\x1b\[[0-9;]*m/g, ""), /Codex .*88%/);
+});
+
+test("Claude capture falls back to Codex logs when Windows Codex cache is stale", { skip: process.platform !== "win32" }, (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const homeDir = path.join(tmpDir, "home");
+  const stateDir = path.join(tmpDir, "state");
+  const codexHome = path.join(homeDir, ".codex");
+  const sessionDir = path.join(codexHome, "sessions", "2026", "07", "05");
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.mkdirSync(sessionDir, { recursive: true });
+
+  fs.writeFileSync(path.join(stateDir, "codex-status-scan-cache.json"), `${JSON.stringify({
+    version: 2,
+    capturedAt: "2000-01-01T00:00:00.000Z",
+    value: null
+  })}\n`);
+
+  const capturedAt = new Date().toISOString();
+  const resetAt = new Date(Date.now() + 3600000).toISOString();
+  fs.writeFileSync(path.join(sessionDir, "codex.jsonl"), `${JSON.stringify({
+    timestamp: capturedAt,
+    payload: {
+      rate_limits: {
+        plan_type: "pro",
+        limit_id: "codex",
+        primary: {
+          used_percent: 12,
+          window_minutes: 300,
+          resets_at: resetAt
+        },
+        secondary: {
+          used_percent: 22,
+          window_minutes: 10080,
+          resets_at: resetAt
+        }
+      }
+    }
+  })}\n`);
+
+  const input = {
+    session_id: "codex-stale-cache-test",
+    model: { display_name: "Opus" },
+    workspace: { project_dir: tmpDir },
+    context_window: { remaining_percentage: 83 },
+    terminal: { columns: 100 },
+    transcript_path: ""
+  };
+  const result = spawnSync(process.execPath, [
+    CLI_PATH,
+    "capture-claude",
+    "--muted",
+    "--left-padding",
+    "0"
+  ], {
+    input: `${JSON.stringify(input)}\n`,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: homeDir,
+      CODEX_HOME: codexHome,
+      AI_BATTERY_STATE_DIR: stateDir
+    },
+    timeout: 5000
+  });
+
+  assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout.replace(/\x1b\[[0-9;]*m/g, ""), /Codex .*88%/);
 });
 
