@@ -13,12 +13,15 @@ const ANSI_RE = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 const DEBUG_LOG = process.env.AI_BATTERY_DEBUG_LOG || process.env.CLAUDEX_BATTERY_DEBUG_LOG || "";
 const DEFAULT_COLUMN_GUARD = 4;
 const DEFAULT_LEFT_PADDING = 2;
+const DEFAULT_CODEX_OVERLAY_BOTTOM_OFFSET = 1;
 
 function usage() {
   console.log(`Usage: ai-battery-run-win [--interval SECONDS] [--bar-width N] [--provider auto|all|codex|claude] [--layout auto|reserve|overlay] [--left-padding N] -- COMMAND [ARGS...]
 
 Runs COMMAND and keeps AI Battery on the terminal bottom row.
-On Windows, node-pty enables ConPTY row reservation when available; otherwise AI Battery falls back to a same-console overlay row.`);
+On Windows, the rowpty host (a native ConPTY host with a reserved bottom row) is preferred when its executable
+is available; otherwise AI Battery falls back to a same-console overlay row.
+--layout reserve additionally allows the legacy node-pty/ConPTY path when rowpty is missing.`);
 }
 
 function debugLog(event, details = {}) {
@@ -111,6 +114,18 @@ function columnGuard() {
   return Number.isFinite(value) ? Math.max(0, Math.min(20, Math.floor(value))) : DEFAULT_COLUMN_GUARD;
 }
 
+function overlayBottomOffset(activeProvider) {
+  const raw = Number(process.env.AI_BATTERY_OVERLAY_BOTTOM_OFFSET || process.env.CLAUDEX_BATTERY_OVERLAY_BOTTOM_OFFSET);
+  if (Number.isFinite(raw)) return Math.max(0, Math.min(5, Math.floor(raw)));
+  return activeProvider === "codex" ? DEFAULT_CODEX_OVERLAY_BOTTOM_OFFSET : 0;
+}
+
+function statusRow(rows, bottomOffset = 0) {
+  const safeRows = Math.max(1, Number(rows) || 1);
+  const safeOffset = Math.max(0, Math.min(5, Math.floor(Number(bottomOffset) || 0)));
+  return Math.max(1, safeRows - safeOffset);
+}
+
 function stripAnsi(text) {
   return String(text).replace(ANSI_RE, "");
 }
@@ -147,10 +162,121 @@ function statusOutputText(stdout) {
   return String(stdout || "").replace(/[\r\n]+$/g, "");
 }
 
+function rowptyExePath() {
+  const explicit = process.env.AI_BATTERY_ROWPTY || process.env.CLAUDEX_BATTERY_ROWPTY;
+  if (explicit) return fs.existsSync(explicit) ? explicit : null;
+  const candidates = [];
+  if (process.env.LOCALAPPDATA) {
+    candidates.push(path.join(process.env.LOCALAPPDATA, "ai-battery", "bin", "rowpty.exe"));
+  }
+  candidates.push(path.join(SCRIPT_DIR, "..", "..", "rowpty", "bin", "rowpty.exe"));
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return null;
+}
+
+function quoteWindowsCommandLineArg(value) {
+  const text = String(value ?? "");
+  if (text.length && !/[ \t"]/.test(text)) return text;
+  let quoted = "\"";
+  let backslashes = 0;
+  for (const ch of text) {
+    if (ch === "\\") {
+      backslashes += 1;
+    } else if (ch === "\"") {
+      quoted += "\\".repeat(backslashes * 2 + 1) + "\"";
+      backslashes = 0;
+    } else {
+      quoted += "\\".repeat(backslashes) + ch;
+      backslashes = 0;
+    }
+  }
+  return quoted + "\\".repeat(backslashes * 2) + "\"";
+}
+
+function rowptyStatusCommand(args, activeProvider) {
+  // rowpty substitutes {MAXWIDTH} with (cols - 4) before each status run.
+  return batteryCommand(args, activeProvider, "{MAXWIDTH}")
+    .map(quoteWindowsCommandLineArg)
+    .join(" ");
+}
+
+function runRowPty(args, activeProvider) {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return Promise.resolve(null);
+  const exe = rowptyExePath();
+  if (!exe) {
+    debugLog("rowpty:missing");
+    return Promise.resolve(null);
+  }
+
+  const command = windowsCommand(args.command);
+  const hostArgs = [
+    "--interval", String(Math.max(0.5, args.interval)),
+    "--reserve", "1",
+    "--status-cmd", rowptyStatusCommand(args, activeProvider),
+    "--", command.file, ...command.args
+  ];
+  debugLog("rowpty:start", { exe, hostArgs, size: termSize() });
+  const child = spawn(exe, hostArgs, {
+    stdio: "inherit",
+    cwd: process.cwd(),
+    env: process.env,
+    windowsHide: false
+  });
+
+  return new Promise((resolve) => {
+    child.on("exit", (code, signal) => {
+      debugLog("rowpty:exit", { code, signal });
+      resolve(code ?? (signal ? 1 : 0));
+    });
+    child.on("error", (error) => {
+      debugLog("rowpty:error", { error: error.message });
+      resolve(null);
+    });
+  });
+}
+
+function conPtyBackspaceMode() {
+  // Windows Terminal sends 0x7f for Backspace and 0x08 for Ctrl+Backspace.
+  // Rewriting DEL to BS makes TUIs (Codex, Claude Code) treat every
+  // Backspace as delete-word, so keys pass through untouched by default.
+  const mode = String(process.env.AI_BATTERY_CONPTY_BACKSPACE || process.env.CLAUDEX_BATTERY_CONPTY_BACKSPACE || "passthrough").toLowerCase();
+  return ["bs", "del", "passthrough"].includes(mode) ? mode : "passthrough";
+}
+
+function normalizeConPtyInput(data, mode = conPtyBackspaceMode()) {
+  const text = Buffer.isBuffer(data) ? data.toString("utf8") : String(data || "");
+  if (mode === "passthrough" || mode === "del") return text;
+  return text.replace(/\x7f/g, "\x08");
+}
+
+function conPtyRepaintIntervalMs() {
+  const raw = Number(process.env.AI_BATTERY_CONPTY_REPAINT_MS || process.env.CLAUDEX_BATTERY_CONPTY_REPAINT_MS);
+  if (Number.isFinite(raw)) return Math.max(250, Math.min(5000, Math.floor(raw)));
+  return 1000;
+}
+
+function outputMayClearDisplay(data) {
+  const text = Buffer.isBuffer(data) ? data.toString("utf8") : String(data || "");
+  return /\x1bc|\x1b\[[0-?]*[23]J|\x1b\[\?1049[hl]/.test(text);
+}
+
+function scheduleRepaintBurst(status, timers) {
+  for (const delayMs of [0, 80, 250, 700, 1400]) {
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      status.paint(true);
+    }, delayMs);
+    timers.add(timer);
+  }
+}
+
 class StatusLine {
-  constructor(args, activeProvider) {
+  constructor(args, activeProvider, options = {}) {
     this.args = args;
     this.activeProvider = activeProvider;
+    this.bottomOffset = options.bottomOffset ?? 0;
     this.text = "AI Battery starting...";
     this.nextFetch = 0;
     this.lastLine = "";
@@ -226,11 +352,12 @@ class StatusLine {
     const now = Date.now();
     if (!force && now - this.lastDraw < 150) return;
     const width = Math.max(1, this.cols - 1);
+    const row = statusRow(this.rows, this.bottomOffset);
     const line = fitAnsi(this.text, width, true);
     if (!force && line === this.lastLine) return;
     this.lastLine = line;
     this.lastDraw = now;
-    process.stdout.write(`\x1b7\x1b[0m\x1b[${this.rows};1H\r\x1b[1G${line}\x1b[K\x1b[0m\x1b8`);
+    process.stdout.write(`\x1b7\x1b[0m\x1b[${row};1H\r\x1b[1G${line}\x1b[K\x1b[0m\x1b8`);
   }
 
   draw(force = false) {
@@ -240,7 +367,8 @@ class StatusLine {
 
   clear() {
     this.disposed = true;
-    process.stdout.write(`\x1b7\x1b[0m\x1b[${this.rows};1H\r\x1b[1G\x1b[2K\x1b8`);
+    const row = statusRow(this.rows, this.bottomOffset);
+    process.stdout.write(`\x1b7\x1b[0m\x1b[${row};1H\r\x1b[1G\x1b[2K\x1b8`);
   }
 }
 
@@ -306,8 +434,10 @@ async function loadNodePty() {
 }
 
 async function runConPty(args, activeProvider) {
-  if (args.layout === "overlay") {
-    debugLog("conpty:skipped", { reason: "layout overlay" });
+  // Nested ConPTY (node-pty) breaks host-terminal scrollback and can stall
+  // child output until the next keypress, so it is opt-in via --layout reserve.
+  if (args.layout !== "reserve") {
+    debugLog("conpty:skipped", { reason: `layout ${args.layout}` });
     return null;
   }
 
@@ -318,11 +448,9 @@ async function runConPty(args, activeProvider) {
       stdinTty: Boolean(process.stdin.isTTY),
       stdoutTty: Boolean(process.stdout.isTTY)
     });
-    if (args.layout === "reserve") {
-      console.error("ai-battery-run-win: ConPTY reserve layout is unavailable in this terminal.");
-      return 2;
-    }
-    return null;
+    if (!process.stdin.isTTY || !process.stdout.isTTY) return null;
+    console.error("ai-battery-run-win: ConPTY reserve layout is unavailable in this terminal.");
+    return 2;
   }
 
   const status = new StatusLine(args, activeProvider);
@@ -349,7 +477,7 @@ async function runConPty(args, activeProvider) {
   const oldRaw = process.stdin.isRaw;
   process.stdin.setRawMode?.(true);
   process.stdin.resume();
-  const onInput = (data) => term.write(data.toString());
+  const onInput = (data) => term.write(normalizeConPtyInput(data));
   process.stdin.on("data", onInput);
 
   let drawTimer = null;
@@ -366,23 +494,34 @@ async function runConPty(args, activeProvider) {
   };
   status.onRefresh = () => scheduleDraw(true, 45);
 
+  const timers = new Set();
   const timer = setInterval(() => scheduleDraw(false), Math.max(500, args.interval * 1000));
+  const repaintTimer = setInterval(() => status.paint(true), conPtyRepaintIntervalMs());
   const onResize = () => {
     status.resize();
     term.resize(status.cols, Math.max(1, status.rows - 1));
     scheduleDraw(true, 0);
+    scheduleRepaintBurst(status, timers);
   };
   process.stdout.on("resize", onResize);
+
+  const clearConPtyTimers = () => {
+    clearInterval(timer);
+    clearInterval(repaintTimer);
+    if (drawTimer) clearTimeout(drawTimer);
+    for (const timer of timers) clearTimeout(timer);
+    timers.clear();
+  };
 
   return await new Promise((resolve) => {
     term.onData((data) => {
       process.stdout.write(data);
+      if (outputMayClearDisplay(data)) scheduleRepaintBurst(status, timers);
       scheduleDraw(false);
     });
     term.onExit(({ exitCode }) => {
       debugLog("conpty:exit", { exitCode });
-      clearInterval(timer);
-      if (drawTimer) clearTimeout(drawTimer);
+      clearConPtyTimers();
       process.stdout.off("resize", onResize);
       process.stdin.off("data", onInput);
       process.stdin.setRawMode?.(oldRaw);
@@ -390,6 +529,7 @@ async function runConPty(args, activeProvider) {
       resolve(exitCode ?? 0);
     });
     scheduleDraw(true, 0);
+    scheduleRepaintBurst(status, timers);
   });
 }
 
@@ -397,6 +537,16 @@ function overlayInitialDelayMs() {
   const raw = Number(process.env.AI_BATTERY_OVERLAY_INITIAL_DELAY_MS || process.env.CLAUDEX_BATTERY_OVERLAY_INITIAL_DELAY_MS);
   if (Number.isFinite(raw)) return Math.max(0, Math.min(5000, Math.floor(raw)));
   return 1200;
+}
+
+function overlayRepaintIntervalMs() {
+  const raw = Number(process.env.AI_BATTERY_OVERLAY_REPAINT_MS || process.env.CLAUDEX_BATTERY_OVERLAY_REPAINT_MS);
+  if (Number.isFinite(raw)) return Math.max(250, Math.min(5000, Math.floor(raw)));
+  return 1000;
+}
+
+function scheduleOverlayRepaintBurst(status, timers) {
+  scheduleRepaintBurst(status, timers);
 }
 
 function runOverlay(args, activeProvider) {
@@ -409,11 +559,14 @@ function runOverlay(args, activeProvider) {
     return 2;
   }
 
-  const status = new StatusLine(args, activeProvider);
+  const status = new StatusLine(args, activeProvider, {
+    bottomOffset: overlayBottomOffset(activeProvider)
+  });
   const command = windowsCommand(args.command);
   debugLog("overlay:start", {
     size: termSize(),
     command,
+    bottomOffset: status.bottomOffset,
     initialDelayMs: overlayInitialDelayMs(),
     stdoutColumns: process.stdout.columns,
     stdoutRows: process.stdout.rows,
@@ -427,27 +580,39 @@ function runOverlay(args, activeProvider) {
     windowsHide: false
   });
 
-  const timer = setInterval(() => status.draw(false), Math.max(1000, args.interval * 1000));
+  const timers = new Set();
+  const refreshTimer = setInterval(() => status.draw(false), Math.max(1000, args.interval * 1000));
+  const repaintTimer = setInterval(() => status.paint(true), overlayRepaintIntervalMs());
   const onResize = () => {
     status.resize();
     status.draw(true);
+    scheduleOverlayRepaintBurst(status, timers);
   };
   process.stdout.on("resize", onResize);
-  const firstDraw = setTimeout(() => status.draw(true), overlayInitialDelayMs());
+  const firstDraw = setTimeout(() => {
+    status.draw(true);
+    scheduleOverlayRepaintBurst(status, timers);
+  }, overlayInitialDelayMs());
+  timers.add(firstDraw);
+
+  const clearOverlayTimers = () => {
+    clearInterval(refreshTimer);
+    clearInterval(repaintTimer);
+    for (const timer of timers) clearTimeout(timer);
+    timers.clear();
+  };
 
   return new Promise((resolve) => {
     child.on("exit", (code, signal) => {
       debugLog("overlay:exit", { code, signal });
-      clearInterval(timer);
-      clearTimeout(firstDraw);
+      clearOverlayTimers();
       process.stdout.off("resize", onResize);
       status.clear();
       resolve(code ?? (signal ? 1 : 0));
     });
     child.on("error", (error) => {
       debugLog("overlay:error", { error: error.message });
-      clearInterval(timer);
-      clearTimeout(firstDraw);
+      clearOverlayTimers();
       process.stdout.off("resize", onResize);
       status.clear();
       console.error(`ai-battery-run-win: ${error.message}`);
@@ -499,16 +664,32 @@ async function main() {
     stdoutTty: Boolean(process.stdout.isTTY)
   });
 
-  const ptyExit = await runConPty(args, activeProvider);
-  const exitCode = ptyExit === null
-    ? (process.stdin.isTTY && process.stdout.isTTY ? await runOverlay(args, activeProvider) : await runPlain(args))
-    : ptyExit;
+  let exitCode = null;
+  if (args.layout !== "overlay") {
+    exitCode = await runRowPty(args, activeProvider);
+    if (exitCode === null) exitCode = await runConPty(args, activeProvider);
+  }
+  if (exitCode === null) {
+    exitCode = process.stdin.isTTY && process.stdout.isTTY
+      ? await runOverlay(args, activeProvider)
+      : await runPlain(args);
+  }
   process.exit(exitCode);
 }
 
 export {
+  conPtyBackspaceMode,
+  conPtyRepaintIntervalMs,
+  normalizeConPtyInput,
+  outputMayClearDisplay,
+  overlayBottomOffset,
+  overlayRepaintIntervalMs,
   parseArgs,
+  quoteWindowsCommandLineArg,
   resolveWindowsCommandFile,
+  rowptyExePath,
+  rowptyStatusCommand,
+  statusRow,
   statusOutputText,
   windowsCommand
 };

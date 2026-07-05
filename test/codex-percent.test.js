@@ -14,17 +14,31 @@ import {
   installClaudeStatusline,
   installCodexStatusLine,
   installCodexWrapper,
+  installRowPtyHost,
+  installTmuxStatus,
   normalizeLimit,
+  removeAiBatteryTmuxBlock,
   removeAiBatteryShellPathBlock,
   removeOrRestoreCodexWrapper,
   sameFilePath,
   visibleWidth,
   uninstallClaudeStatusline,
-  uninstallCodexWrapper
+  uninstallCodexWrapper,
+  uninstallTmuxStatus
 } from "../bin/ai-battery.js";
 import {
+  conPtyBackspaceMode,
+  conPtyRepaintIntervalMs,
+  normalizeConPtyInput,
+  outputMayClearDisplay,
+  overlayBottomOffset,
+  overlayRepaintIntervalMs,
   parseArgs as parseWindowsRunnerArgs,
+  quoteWindowsCommandLineArg,
+  rowptyExePath,
+  rowptyStatusCommand,
   statusOutputText,
+  statusRow,
   windowsCommand
 } from "../bin/ai-battery-run-win.js";
 
@@ -243,6 +257,182 @@ test("Windows runner preserves leading statusline padding", () => {
   assert.equal(statusOutputText("  Codex 91%\r\n"), "  Codex 91%");
 });
 
+test("Windows ConPTY input passes DEL backspace through by default", () => {
+  assert.equal(withEnv({
+    AI_BATTERY_CONPTY_BACKSPACE: undefined,
+    CLAUDEX_BATTERY_CONPTY_BACKSPACE: undefined
+  }, () => conPtyBackspaceMode()), "passthrough");
+
+  assert.equal(withEnv({
+    AI_BATTERY_CONPTY_BACKSPACE: undefined,
+    CLAUDEX_BATTERY_CONPTY_BACKSPACE: undefined
+  }, () => normalizeConPtyInput(Buffer.from("abc\x7f"))), "abc\x7f");
+  assert.equal(normalizeConPtyInput(Buffer.from("abc\x7f"), "bs"), "abc\x08");
+  assert.equal(normalizeConPtyInput("abc\x7f", "passthrough"), "abc\x7f");
+  assert.equal(normalizeConPtyInput("abc\x7f", "del"), "abc\x7f");
+
+  assert.equal(withEnv({
+    AI_BATTERY_CONPTY_BACKSPACE: "bs"
+  }, () => conPtyBackspaceMode()), "bs");
+
+  assert.equal(withEnv({
+    AI_BATTERY_CONPTY_BACKSPACE: "unknown-mode"
+  }, () => conPtyBackspaceMode()), "passthrough");
+});
+
+test("rowpty status command carries the {MAXWIDTH} token and provider flags", () => {
+  const args = parseWindowsRunnerArgs(["--interval", "5", "--provider", "codex", "--", "codex"]);
+  const command = rowptyStatusCommand(args, "codex");
+
+  assert.match(command, /--max-width \{MAXWIDTH\}/);
+  assert.match(command, /--active-provider codex/);
+  assert.match(command, /--provider codex/);
+  assert.match(command, /--muted/);
+});
+
+test("rowpty command-line quoting doubles backslashes before quotes", () => {
+  assert.equal(quoteWindowsCommandLineArg("plain"), "plain");
+  assert.equal(quoteWindowsCommandLineArg("C:\\Program Files\\nodejs\\node.exe"), "\"C:\\Program Files\\nodejs\\node.exe\"");
+  assert.equal(quoteWindowsCommandLineArg("say \"hi\""), "\"say \\\"hi\\\"\"");
+  assert.equal(quoteWindowsCommandLineArg("trail\\"), "trail\\");
+  assert.equal(quoteWindowsCommandLineArg("has space\\"), "\"has space\\\\\"");
+  assert.equal(quoteWindowsCommandLineArg(""), "\"\"");
+});
+
+test("tmux status block installs, updates in place, and uninstalls cleanly", { skip: process.platform === "win32" ? "POSIX-only" : false }, (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const confPath = path.join(tmpDir, "tmux.conf");
+  fs.writeFileSync(confPath, "set -g mouse on\n");
+
+  withEnv({ AI_BATTERY_TMUX_CONF: confPath }, () => {
+    const first = installTmuxStatus();
+    assert.equal(first.ok, true);
+    assert.equal(first.changed, true);
+    const text = fs.readFileSync(confPath, "utf8");
+    assert.match(text, /set -g mouse on/);
+    assert.match(text, /AI_BATTERY_TMUX_STATUS 1/);
+    assert.match(text, /status-right "#\(/);
+    assert.equal((text.match(/# >>> ai-battery tmux >>>/g) || []).length, 1);
+
+    installTmuxStatus();
+    const again = fs.readFileSync(confPath, "utf8");
+    assert.equal((again.match(/# >>> ai-battery tmux >>>/g) || []).length, 1);
+
+    const removed = uninstallTmuxStatus();
+    assert.equal(removed.changed, true);
+    assert.equal(fs.readFileSync(confPath, "utf8"), "set -g mouse on\n");
+  });
+});
+
+test("tmux block removal leaves untouched configs unchanged", () => {
+  assert.equal(removeAiBatteryTmuxBlock("set -g mouse on\n"), "set -g mouse on\n");
+  const withBlock = "set -g mouse on\n\n# >>> ai-battery tmux >>>\nset -g status-right \"x\"\n# <<< ai-battery tmux <<<\n";
+  assert.equal(removeAiBatteryTmuxBlock(withBlock), "set -g mouse on\n");
+});
+
+test("vendored rowpty source matches the sibling upstream checkout", (t) => {
+  const upstream = fileURLToPath(new URL("../../rowpty/src/RowPty.cs", import.meta.url));
+  const vendored = fileURLToPath(new URL("../vendor/rowpty/RowPty.cs", import.meta.url));
+  if (!fs.existsSync(upstream)) {
+    t.skip("upstream rowpty checkout is not present");
+    return;
+  }
+
+  const stripHeader = (text) => text.split(/\r?\n/).filter((line) => !line.startsWith("// Vendored from") && !line.startsWith("// change it upstream") && !line.startsWith("// \"ai-battery setup\"") && !line.startsWith("// .NET Framework csc.exe")).join("\n").trim();
+  assert.equal(
+    stripHeader(fs.readFileSync(vendored, "utf8")),
+    fs.readFileSync(upstream, "utf8").replace(/\r?\n/g, "\n").trim(),
+    "vendor/rowpty/RowPty.cs is out of sync with ../rowpty/src/RowPty.cs — run: npm run sync:rowpty"
+  );
+});
+
+test("setup compiles rowpty locally from the vendored source", { skip: process.platform !== "win32" }, (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const first = withEnv({ AI_BATTERY_DATA_DIR: tmpDir }, () => installRowPtyHost());
+  assert.equal(first.ok, true, JSON.stringify(first));
+  assert.equal(first.compiled, true);
+  assert.equal(fs.existsSync(first.exePath), true);
+  assert.equal(fs.existsSync(path.join(tmpDir, "bin", "rowpty.src.sha256")), true);
+  assert.equal(fs.existsSync(path.join(tmpDir, "bin", "conpty.dll")), true);
+  assert.equal(fs.existsSync(path.join(tmpDir, "bin", "OpenConsole.exe")), true);
+
+  const second = withEnv({ AI_BATTERY_DATA_DIR: tmpDir }, () => installRowPtyHost());
+  assert.equal(second.ok, true);
+  assert.equal(second.compiled, false);
+});
+
+test("rowpty executable resolution honors the explicit env override", (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const exePath = path.join(tmpDir, "rowpty.exe");
+  fs.writeFileSync(exePath, "stub");
+
+  assert.equal(withEnv({ AI_BATTERY_ROWPTY: exePath }, () => rowptyExePath()), exePath);
+  assert.equal(withEnv({ AI_BATTERY_ROWPTY: path.join(tmpDir, "missing.exe") }, () => rowptyExePath()), null);
+});
+
+test("Windows ConPTY repaint interval and clear-screen detection are bounded", () => {
+  assert.equal(withEnv({
+    AI_BATTERY_CONPTY_REPAINT_MS: undefined,
+    CLAUDEX_BATTERY_CONPTY_REPAINT_MS: undefined
+  }, () => conPtyRepaintIntervalMs()), 1000);
+
+  assert.equal(withEnv({
+    AI_BATTERY_CONPTY_REPAINT_MS: "50"
+  }, () => conPtyRepaintIntervalMs()), 250);
+
+  assert.equal(withEnv({
+    AI_BATTERY_CONPTY_REPAINT_MS: "9000"
+  }, () => conPtyRepaintIntervalMs()), 5000);
+
+  assert.equal(outputMayClearDisplay("plain output"), false);
+  assert.equal(outputMayClearDisplay("\x1b[2J\x1b[H"), true);
+  assert.equal(outputMayClearDisplay("\x1b[?1049h"), true);
+});
+
+test("Windows overlay repaint interval defaults to quick redraws and is bounded", () => {
+  assert.equal(withEnv({
+    AI_BATTERY_OVERLAY_REPAINT_MS: undefined,
+    CLAUDEX_BATTERY_OVERLAY_REPAINT_MS: undefined
+  }, () => overlayRepaintIntervalMs()), 1000);
+
+  assert.equal(withEnv({
+    AI_BATTERY_OVERLAY_REPAINT_MS: "50"
+  }, () => overlayRepaintIntervalMs()), 250);
+
+  assert.equal(withEnv({
+    AI_BATTERY_OVERLAY_REPAINT_MS: "9000"
+  }, () => overlayRepaintIntervalMs()), 5000);
+});
+
+test("Windows Codex overlay leaves the bottom row for Codex statusline by default", () => {
+  assert.equal(withEnv({
+    AI_BATTERY_OVERLAY_BOTTOM_OFFSET: undefined,
+    CLAUDEX_BATTERY_OVERLAY_BOTTOM_OFFSET: undefined
+  }, () => overlayBottomOffset("codex")), 1);
+
+  assert.equal(withEnv({
+    AI_BATTERY_OVERLAY_BOTTOM_OFFSET: undefined,
+    CLAUDEX_BATTERY_OVERLAY_BOTTOM_OFFSET: undefined
+  }, () => overlayBottomOffset("claude")), 0);
+
+  assert.equal(withEnv({
+    AI_BATTERY_OVERLAY_BOTTOM_OFFSET: "0"
+  }, () => overlayBottomOffset("codex")), 0);
+
+  assert.equal(withEnv({
+    AI_BATTERY_OVERLAY_BOTTOM_OFFSET: "9"
+  }, () => overlayBottomOffset("codex")), 5);
+
+  assert.equal(statusRow(24, 0), 24);
+  assert.equal(statusRow(24, 1), 23);
+  assert.equal(statusRow(1, 5), 1);
+});
+
 test("Windows runner prefers a .cmd sibling over an extensionless npm shim", (t) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
   t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
@@ -458,6 +648,75 @@ test("setup prefers empty ~/.local/bin when it is already before codex on PATH",
   }
 });
 
+test("Windows Codex wrapper runs the Windows runner without forcing a layout", { skip: process.platform !== "win32" }, (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const homeDir = path.join(tmpDir, "home");
+  const stateDir = path.join(tmpDir, "state");
+  const dataDir = path.join(tmpDir, "data");
+  const shimDir = path.join(tmpDir, "shim");
+  const originalDir = path.join(tmpDir, "original");
+  fs.mkdirSync(shimDir, { recursive: true });
+  fs.mkdirSync(originalDir, { recursive: true });
+
+  const originalCodex = path.join(originalDir, CODEX_BIN_NAME);
+  fs.writeFileSync(originalCodex, [
+    "@echo off",
+    "echo wrapped:%AI_BATTERY_WRAPPED_CODEX%",
+    "echo args:%*",
+    ""
+  ].join("\r\n"));
+
+  const env = {
+    HOME: homeDir,
+    XDG_STATE_HOME: stateDir,
+    XDG_DATA_HOME: dataDir,
+    AI_BATTERY_SHIM_DIR: shimDir,
+    AI_BATTERY_SKIP_WINDOWS_PATH_WRITE: "1",
+    AI_BATTERY_RC: path.join(tmpDir, "shellrc"),
+    PATH: `${originalDir}${path.delimiter}${process.env.PATH || ""}`
+  };
+
+  const result = withEnv(env, () => installCodexWrapper({ force: false }));
+  assert.equal(result.ok, true);
+
+  const wrapperText = fs.readFileSync(result.wrapperPath, "utf8");
+  assert.match(wrapperText, /AI_BATTERY_DISABLE_WINDOWS_CODEX_RUNNER/);
+  assert.doesNotMatch(wrapperText, /AI_BATTERY_WIN_LAYOUT/);
+  assert.match(wrapperText, /--provider all --left-padding 2 --/);
+  assert.doesNotMatch(wrapperText, /--provider codex --left-padding 2 --/);
+  assert.equal(wrapperText.includes(`call "${originalCodex}" %*`), true);
+
+  const run = spawnSync("cmd.exe", ["/d", "/s", "/c", "call", result.wrapperPath, "--version"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ...env,
+      AI_BATTERY_DISABLE_WINDOWS_CODEX_RUNNER: ""
+    },
+    timeout: 5000
+  });
+
+  assert.equal(run.status, 0, run.stderr);
+  assert.match(run.stdout, /wrapped:1/);
+  assert.match(run.stdout, /args:--version/);
+
+  const disabled = spawnSync("cmd.exe", ["/d", "/s", "/c", "call", result.wrapperPath, "--version"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      ...env,
+      AI_BATTERY_DISABLE_WINDOWS_CODEX_RUNNER: "1"
+    },
+    timeout: 5000
+  });
+
+  assert.equal(disabled.status, 0, disabled.stderr);
+  assert.match(disabled.stdout, /wrapped:\s*(?:\r?\n|$)/);
+  assert.match(disabled.stdout, /args:--version/);
+});
+
 test("setup codex configures Codex built-in status_line and uninstall restores it", (t) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
   t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
@@ -639,6 +898,83 @@ test("Claude capture output aligns the first and second line starts", (t) => {
   assert.deepEqual(plainLines.map((line) => line.match(/^ */)[0].length), [3, 3]);
   assert.match(plainLines[0].slice(3), /^Opus\b/);
   assert.match(plainLines[1].slice(3), /^Claude\b/);
+});
+
+test("Claude capture reflects running Codex on Windows", { skip: process.platform !== "win32" }, (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const homeDir = path.join(tmpDir, "home");
+  const stateDir = path.join(tmpDir, "state");
+  const codexHome = path.join(homeDir, ".codex");
+  fs.mkdirSync(stateDir, { recursive: true });
+  fs.mkdirSync(codexHome, { recursive: true });
+  const capturedAt = new Date().toISOString();
+  const resetAt = new Date(Date.now() + 3600000).toISOString();
+  fs.writeFileSync(path.join(stateDir, "codex-status-scan-cache.json"), `${JSON.stringify({
+    version: 2,
+    capturedAt,
+    value: {
+      provider: "codex",
+      ok: true,
+      timestamp: capturedAt,
+      source: path.join(codexHome, "sessions", "codex.jsonl"),
+      percentRemaining: 88,
+      percentUsed: 12,
+      primary: {
+        usedPercent: 12,
+        remainingPercent: 88,
+        windowMinutes: 300,
+        resetsAt: resetAt,
+        resetPassed: false
+      },
+      secondary: {
+        usedPercent: 22,
+        remainingPercent: 78,
+        windowMinutes: 10080,
+        resetsAt: resetAt,
+        resetPassed: false
+      }
+    }
+  })}\n`);
+  fs.writeFileSync(path.join(stateDir, "windows-processes-scan-cache.json"), `${JSON.stringify({
+    version: 2,
+    capturedAt,
+    value: [{
+      cmdline: "C:\\Users\\me\\AppData\\Roaming\\npm\\node_modules\\@openai\\codex\\bin\\codex.exe",
+      hasTty: true
+    }]
+  })}\n`);
+
+  const input = {
+    session_id: "codex-running-test",
+    model: { display_name: "Opus" },
+    workspace: { project_dir: tmpDir },
+    context_window: { remaining_percentage: 83 },
+    terminal: { columns: 100 },
+    transcript_path: ""
+  };
+  const result = spawnSync(process.execPath, [
+    CLI_PATH,
+    "capture-claude",
+    "--muted",
+    "--left-padding",
+    "0"
+  ], {
+    input: `${JSON.stringify(input)}\n`,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: homeDir,
+      CODEX_HOME: codexHome,
+      AI_BATTERY_STATE_DIR: stateDir
+    },
+    timeout: 5000
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /\x1b\[97mCodex/);
+  assert.match(result.stdout.replace(/\x1b\[[0-9;]*m/g, ""), /Codex .*88%/);
 });
 
 test("Claude statusLine from another tool is skipped by default and restored after forced install", (t) => {

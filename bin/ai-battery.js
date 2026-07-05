@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import https from "node:https";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+import { rowptyExePath } from "./ai-battery-run-win.js";
 
 const DEFAULT_TAIL_BYTES = 4 * 1024 * 1024;
 const DEFAULT_MAX_FILES = 40;
@@ -29,7 +32,7 @@ const COMMANDS = new Set([
   "uninstall-claude-statusline"
 ]);
 const PROVIDERS = ["codex", "claude"];
-const TEARDOWN_TARGETS = ["codex", "claude", "hud"];
+const TEARDOWN_TARGETS = ["codex", "claude", "hud", "tmux"];
 const CODEX_WRAPPER_MARKER = "AI_BATTERY_MANAGED_CODEX_WRAPPER";
 const CODEX_PREFERRED_BACKUP_SUFFIX = ".ai-battery-original-link";
 const CODEX_TIMESTAMP_BACKUP_MARKER = ".ai-battery-backup-";
@@ -309,7 +312,7 @@ function teardownTargets(targets) {
     } else if (TEARDOWN_TARGETS.includes(target)) {
       selected.add(target);
     } else {
-      throw new Error("target must be one of: codex, claude, hud, all");
+      throw new Error("target must be one of: codex, claude, hud, tmux, all");
     }
   }
   return [...selected];
@@ -592,12 +595,14 @@ function windowsCodexWrapperScript(originalCommand) {
   return `@echo off
 rem ${CODEX_WRAPPER_MARKER}=1
 set "AI_BATTERY_ORIGINAL_CODEX=${command}"
-set "AI_BATTERY_WRAPPED_CODEX=1"
-if exist ${cmdQuote(runner)} (
+if not "%AI_BATTERY_DISABLE_WINDOWS_CODEX_RUNNER%"=="1" if exist ${cmdQuote(runner)} (
+  set "AI_BATTERY_WRAPPED_CODEX=1"
   ${cmdQuote(process.execPath)} ${cmdQuote(runner)} --provider all --left-padding 2 -- ${cmdQuote(command)} %*
-) else (
-${windowsCmdFallbackCommand(command)}
+  exit /b %ERRORLEVEL%
 )
+set "AI_BATTERY_WRAPPED_CODEX="
+${windowsCmdFallbackCommand(command)}
+exit /b %ERRORLEVEL%
 `;
 }
 
@@ -722,6 +727,71 @@ function shellPathBlock(shimDir) {
     return `\n# >>> ai-battery setup >>>\nfish_add_path -p ${shQuote(shimDir)}\n# <<< ai-battery setup <<<\n`;
   }
   return `\n# >>> ai-battery setup >>>\nexport PATH=${shQuote(shimDir)}:"$PATH"\n# <<< ai-battery setup <<<\n`;
+}
+
+function tmuxConfPath() {
+  return process.env.AI_BATTERY_TMUX_CONF || homePath(".tmux.conf");
+}
+
+function removeAiBatteryTmuxBlock(text) {
+  return String(text).replace(
+    /(?:\r?\n)*# >>> ai-battery tmux >>>\r?\n[\s\S]*?# <<< ai-battery tmux <<<(?:\r?\n)?/g,
+    (match, offset) => (offset === 0 ? "" : "\n")
+  );
+}
+
+function tmuxStatusBlock() {
+  const battery = `${shQuote(process.execPath)} ${shQuote(fileURLToPath(import.meta.url))} --muted --bar-width 6 --max-width 80`;
+  return [
+    "\n# >>> ai-battery tmux >>>",
+    "# AI Battery once per session in the tmux status bar; runners inside tmux",
+    "# see AI_BATTERY_TMUX_STATUS and skip their per-pane bottom row.",
+    "set-environment -g AI_BATTERY_TMUX_STATUS 1",
+    "set -g status-interval 10",
+    "set -g status-right-length 100",
+    `set -g status-right "#(${battery}) "`,
+    "# <<< ai-battery tmux <<<",
+    ""
+  ].join("\n");
+}
+
+function installTmuxStatus() {
+  if (process.platform === "win32") {
+    return { skipped: true, reason: "tmux status integration applies to WSL/Linux/macOS" };
+  }
+  const confPath = tmuxConfPath();
+  let existing = "";
+  try {
+    existing = fs.readFileSync(confPath, "utf8");
+  } catch {}
+  const withoutBlock = removeAiBatteryTmuxBlock(existing);
+  const next = `${withoutBlock}${tmuxStatusBlock()}`;
+  if (next === existing) {
+    return { ok: true, confPath, changed: false };
+  }
+  fs.writeFileSync(confPath, next, "utf8");
+  return {
+    ok: true,
+    confPath,
+    changed: true,
+    updated: existing !== withoutBlock,
+    note: `Reload tmux to apply: tmux source-file ${confPath} (new panes then hide the per-pane battery row).`
+  };
+}
+
+function uninstallTmuxStatus() {
+  if (process.platform === "win32") return { skipped: true };
+  const confPath = tmuxConfPath();
+  let existing;
+  try {
+    existing = fs.readFileSync(confPath, "utf8");
+  } catch {
+    return { changed: false, confPath };
+  }
+  const next = removeAiBatteryTmuxBlock(existing);
+  if (next === existing) return { changed: false, confPath };
+  fs.writeFileSync(confPath, next, "utf8");
+  return { changed: true, confPath };
 }
 
 function removeAiBatteryShellPathBlock(text) {
@@ -1453,6 +1523,14 @@ function diagnoseCodex() {
   if (!runnerExists) {
     notes.push(`AI Battery runner is missing or not executable: ${runnerPath}`);
   }
+  const rowpty = process.platform === "win32" ? rowptyExePath() : null;
+  const rowptyConpty = rowpty ? fs.existsSync(path.join(path.dirname(rowpty), "conpty.dll")) : false;
+  if (wrapperInstalled && process.platform === "win32" && !rowpty) {
+    notes.push("rowpty.exe not found, so the Codex bottom row uses the overlay fallback. Run: ai-battery setup codex (compiles it locally with the in-box csc.exe).");
+  }
+  if (rowpty && !rowptyConpty) {
+    notes.push("conpty.dll is not next to rowpty.exe, so it uses the OS built-in ConPTY (lower rendering fidelity). Run: ai-battery setup codex with the node-pty package installed.");
+  }
   if (wrapperInstalled && process.platform !== "win32" && !python3) {
     notes.push("Codex wrapper needs python3 for the POSIX PTY row. Install Python 3, then run plain \"codex\" again.");
   }
@@ -1471,6 +1549,7 @@ function diagnoseCodex() {
     wrapperInstalled,
     runnerPath,
     runnerExists,
+    rowpty: process.platform === "win32" ? { path: rowpty, installed: Boolean(rowpty), bundledConpty: rowptyConpty } : null,
     statusLine,
     python3,
     originalCommand: configuredOriginal,
@@ -1508,11 +1587,174 @@ async function runDoctor() {
   };
 }
 
+function windowsCscPath() {
+  const windir = process.env.WINDIR || "C:\\Windows";
+  const candidates = [
+    path.join(windir, "Microsoft.NET", "Framework64", "v4.0.30319", "csc.exe"),
+    path.join(windir, "Microsoft.NET", "Framework", "v4.0.30319", "csc.exe")
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+}
+
+function rowptyVendorSourcePath() {
+  return path.join(scriptDir(), "..", "vendor", "rowpty", "RowPty.cs");
+}
+
+function nodePtyConptyDir() {
+  const arch = process.arch === "arm64" ? "win32-arm64" : "win32-x64";
+  const dir = path.join(scriptDir(), "..", "node_modules", "node-pty", "prebuilds", arch, "conpty");
+  return fs.existsSync(path.join(dir, "conpty.dll")) ? dir : null;
+}
+
+function replacePossiblyLockedFile(sourcePath, targetPath) {
+  // A live rowpty session keeps its image and conpty.dll locked; renaming the
+  // old file aside still works while the process runs.
+  try {
+    fs.copyFileSync(sourcePath, targetPath);
+    return;
+  } catch (error) {
+    if (!["EBUSY", "EPERM", "EACCES", "ETXTBSY"].includes(error.code)) throw error;
+  }
+  let parked = `${targetPath}.old`;
+  try {
+    fs.unlinkSync(parked);
+  } catch (error) {
+    // A previous parked copy still locked by an older live session blocks its
+    // name; park under a unique name instead.
+    if (error.code !== "ENOENT") parked = `${targetPath}.old-${Date.now()}`;
+  }
+  fs.renameSync(targetPath, parked);
+  fs.copyFileSync(sourcePath, targetPath);
+}
+
+function sweepParkedRowPtyFiles(binDir) {
+  let entries;
+  try {
+    entries = fs.readdirSync(binDir);
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (/^(rowpty\.exe|conpty\.dll|OpenConsole\.exe)\.old(-\d+)?$/i.test(entry)) {
+      try {
+        fs.unlinkSync(path.join(binDir, entry));
+      } catch {
+        // Still locked by a live session; the next setup run collects it.
+      }
+    }
+  }
+}
+
+function installRowPtyHost() {
+  if (process.platform !== "win32") {
+    return { skipped: true, reason: "rowpty host is Windows-only" };
+  }
+  const sourcePath = rowptyVendorSourcePath();
+  if (!fs.existsSync(sourcePath)) {
+    return { skipped: true, reason: `vendored rowpty source not found: ${sourcePath}` };
+  }
+  const csc = windowsCscPath();
+  if (!csc) {
+    return { skipped: true, reason: ".NET Framework csc.exe not found under %WINDIR%\\Microsoft.NET" };
+  }
+
+  const binDir = path.join(dataDir(), "bin");
+  const exePath = path.join(binDir, "rowpty.exe");
+  const hashPath = path.join(binDir, "rowpty.src.sha256");
+  const sourceHash = crypto.createHash("sha256").update(fs.readFileSync(sourcePath)).digest("hex");
+  const installedHash = (() => {
+    try {
+      return fs.readFileSync(hashPath, "utf8").trim();
+    } catch {
+      return null;
+    }
+  })();
+
+  sweepParkedRowPtyFiles(binDir);
+  let compiled = false;
+  if (!fs.existsSync(exePath) || installedHash !== sourceHash) {
+    fs.mkdirSync(binDir, { recursive: true });
+    const buildPath = path.join(binDir, `rowpty.build-${process.pid}.exe`);
+    const result = spawnSync(csc, ["/nologo", "/optimize+", `/out:${buildPath}`, sourcePath], {
+      encoding: "utf8",
+      timeout: 120000,
+      windowsHide: true
+    });
+    if (result.status !== 0) {
+      try {
+        fs.unlinkSync(buildPath);
+      } catch {}
+      const detail = `${result.stdout || ""}${result.stderr || ""}`.trim() || result.error?.message || `exit ${result.status}`;
+      return { error: `csc.exe failed to compile rowpty: ${detail}` };
+    }
+    replacePossiblyLockedFile(buildPath, exePath);
+    try {
+      fs.unlinkSync(buildPath);
+    } catch {}
+    fs.writeFileSync(hashPath, `${sourceHash}\n`);
+    compiled = true;
+  }
+
+  const conptyDir = nodePtyConptyDir();
+  if (conptyDir) {
+    for (const name of ["conpty.dll", "OpenConsole.exe"]) {
+      const from = path.join(conptyDir, name);
+      const to = path.join(binDir, name);
+      const fromStat = safeStat(from);
+      const toStat = safeStat(to);
+      if (!toStat || toStat.size !== fromStat?.size) {
+        replacePossiblyLockedFile(from, to);
+      }
+    }
+  }
+
+  return {
+    ok: true,
+    exePath,
+    compiled,
+    conpty: conptyDir ? "bundled (Microsoft-signed, from node-pty)" : "OS built-in fallback"
+  };
+}
+
+function uninstallRowPtyHost() {
+  if (process.platform !== "win32") return { skipped: true };
+  const binDir = path.join(dataDir(), "bin");
+  sweepParkedRowPtyFiles(binDir);
+  const removed = [];
+  for (const name of ["rowpty.exe", "conpty.dll", "OpenConsole.exe", "rowpty.src.sha256"]) {
+    const target = path.join(binDir, name);
+    try {
+      fs.unlinkSync(target);
+      removed.push(name);
+    } catch {}
+  }
+  return { removed };
+}
+
+function setupTargets(targets) {
+  const requested = targets.length ? targets : ["all"];
+  const selected = new Set();
+  for (const target of requested) {
+    if (target === "all") {
+      // "all" keeps tmux opt-in: its block overrides the user's status-right.
+      PROVIDERS.forEach((provider) => selected.add(provider));
+    } else if (PROVIDERS.includes(target) || target === "tmux") {
+      selected.add(target);
+    } else {
+      throw new Error("target must be one of: codex, claude, tmux, all");
+    }
+  }
+  return [...selected];
+}
+
 function runSetup(args) {
-  const targets = providerTargets(args.targets);
+  const targets = setupTargets(args.targets);
   const results = {};
   if (targets.includes("claude")) {
     results.claude = installClaudeStatusline(args);
+  }
+  if (targets.includes("tmux")) {
+    results.tmux = installTmuxStatus();
   }
   if (targets.includes("codex")) {
     const statusLine = installCodexStatusLine(args);
@@ -1520,6 +1762,9 @@ function runSetup(args) {
       ...installCodexWrapper(args),
       statusLine
     };
+    if (process.platform === "win32") {
+      results.codex.rowpty = installRowPtyHost();
+    }
   }
   return results;
 }
@@ -1597,6 +1842,10 @@ function runTeardown(args) {
   }
   if (targets.includes("codex")) {
     runStep("codex", uninstallCodexWrapper);
+    runStep("rowpty", uninstallRowPtyHost);
+  }
+  if (targets.includes("tmux")) {
+    runStep("tmux", uninstallTmuxStatus);
   }
   if (targets.includes("hud")) {
     runStep("hud", uninstallHud);
@@ -3798,8 +4047,27 @@ async function main() {
           console.log(`Codex status_line already configured: ${result.codex.statusLine.configPath}`);
         }
       }
+      if (result.tmux) {
+        if (result.tmux.ok) {
+          console.log(`tmux status bar ${result.tmux.changed ? "configured" : "already configured"}: ${result.tmux.confPath}`);
+          if (result.tmux.note) console.log(result.tmux.note);
+        } else if (result.tmux.skipped) {
+          console.log(`tmux integration skipped: ${result.tmux.reason}`);
+        }
+      }
+      if (result.codex?.rowpty) {
+        const rowpty = result.codex.rowpty;
+        if (rowpty.ok) {
+          console.log(`rowpty host ${rowpty.compiled ? "compiled locally from vendored source" : "already up to date"}: ${rowpty.exePath} (ConPTY: ${rowpty.conpty})`);
+        } else if (rowpty.error) {
+          console.log(`rowpty host build failed: ${rowpty.error}`);
+          console.log("Codex bottom row will use the overlay fallback until this is resolved.");
+        } else if (rowpty.skipped) {
+          console.log(`rowpty host skipped: ${rowpty.reason}`);
+        }
+      }
       if (process.platform === "win32" && result.codex) {
-        console.log("Windows terminal note: Codex uses a native Windows runner. It reserves the row with node-pty/ConPTY when available and falls back to an overlay row otherwise. Open a new cmd/PowerShell after setup.");
+        console.log("Windows terminal note: Codex uses a native Windows runner. When rowpty.exe is installed (compiled locally by setup), the bottom row is reserved like on WSL/macOS; otherwise AI Battery draws a same-console overlay row. Open a new cmd/PowerShell after setup.");
       }
       console.log("To remove AI Battery cleanly later, run: ai-battery uninstall");
       const note = codexRestartNote();
@@ -3846,6 +4114,10 @@ async function main() {
       console.log(`Codex wrapper: ${result.codex.wrapperInstalled ? "installed" : "missing"} (${result.codex.wrapperPath})`);
       console.log(`Codex status_line: ${result.codex.statusLine.configured ? "configured" : "missing"} (${result.codex.statusLine.configPath})`);
       console.log(`AI Battery runner: ${result.codex.runnerExists ? "found" : "missing"} (${result.codex.runnerPath})`);
+      if (result.codex.rowpty) {
+        const conptyLabel = result.codex.rowpty.bundledConpty ? "bundled ConPTY" : "OS ConPTY";
+        console.log(`rowpty host: ${result.codex.rowpty.installed ? `found, ${conptyLabel} (${result.codex.rowpty.path})` : "missing (overlay fallback)"}`);
+      }
       console.log(`python3: ${result.codex.python3 || "not found"}`);
       console.log(`PATH uses wrapper: ${result.codex.activeIsWrapper ? "yes" : "no"}`);
       console.log(`Inside Codex: ${result.codex.insideCodex ? "yes" : "no"}`);
@@ -3920,7 +4192,7 @@ async function main() {
       const results = [];
       if ((args.provider === "all" || args.provider === "codex") && providerVisible("codex")) {
         const codexData = process.platform === "win32"
-          ? readCodex({ cachedOnly: true, includeRunning: false, maxAgeSeconds: 60 })
+          ? readCodex({ cachedOnly: true, includeRunning: true, maxAgeSeconds: 60 })
           : readCodex();
         if (codexData) results.push(codexData);
       }
@@ -3985,14 +4257,20 @@ export {
   installClaudeStatusline,
   installCodexStatusLine,
   installCodexWrapper,
+  installRowPtyHost,
+  installTmuxStatus,
   normalizeLimit,
+  removeAiBatteryTmuxBlock,
   removeOrRestoreCodexWrapper,
   removeAiBatteryShellPathBlock,
   percentValue,
   sameFilePath,
   visibleWidth,
   uninstallClaudeStatusline,
-  uninstallCodexWrapper
+  uninstallCodexWrapper,
+  uninstallRowPtyHost,
+  uninstallTmuxStatus,
+  windowsCscPath
 };
 
 function sameFilePath(leftPath, rightPath) {

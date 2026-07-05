@@ -50,7 +50,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | `ai-battery` | 지원 | 지원 | 지원 | 지원 | Node.js 18 이상이 필요합니다. |
 | `ai-battery --watch` | 지원 | 지원 | 지원 | 지원 | 터미널 안에서 주기적으로 갱신합니다. |
 | Claude statusLine | 지원 | 지원 | 지원 | 지원 | Claude Code `statusLine`에 `node <script>` 명령을 저장합니다. |
-| Codex terminal row | 지원 | 지원 | 지원 | 지원 | Windows는 `node-pty`/ConPTY가 있으면 reserved row, 없으면 overlay fallback을 사용합니다. WSL/Linux/macOS는 POSIX PTY와 `python3`를 사용합니다. |
+| Codex terminal row | 지원 | 지원 | 지원 | 지원 | Windows는 `rowpty.exe`(전용 ConPTY host)가 있으면 하단 row를 예약하고, 없으면 같은 콘솔에 덧그리는 overlay row로 동작합니다. WSL/Linux/macOS는 POSIX PTY와 `python3`를 사용합니다. |
 | `ai-battery setup codex` | 지원 | 지원 | 지원 | 지원 | Codex `[tui].status_line`을 맞추고, Windows는 `codex.cmd` wrapper, WSL/Linux/macOS는 POSIX shell wrapper를 설치합니다. |
 | `ai-battery hud` | 지원 | 지원 | 미지원 | 지원 | Windows/WSL은 PowerShell/WinForms HUD, macOS는 menu bar status item입니다. |
 
@@ -169,7 +169,15 @@ ai-battery setup codex
 
 Codex setup은 `~/.codex/config.toml`의 `[tui]`에 `model-with-reasoning`, `current-dir`, `git-branch` status line을 설정합니다. 기존 값이 있으면 uninstall 복구용으로 백업합니다. Codex wrapper는 기존 `codex` 명령을 직접 덮어쓰지 않습니다. `~/.local/bin`이 이미 PATH에서 원본 `codex`보다 앞에 있고 `~/.local/bin/codex`가 비어 있거나 AI Battery 관리 파일이면 그 위치에 wrapper를 둬서 바로 잡히게 합니다. 그렇지 않으면 `~/.local/share/ai-battery/bin/codex`에 관리형 wrapper를 만들고, 필요한 경우 셸 설정에 이 디렉터리를 PATH 앞쪽으로 추가합니다. `~/.local/bin/codex` 같은 공용 위치에 이미 다른 파일이 있으면 덮어쓰지 않습니다. 새 터미널부터 `codex`가 자동으로 AI Battery 하단 행과 함께 실행됩니다. 같은 터미널에서 이미 `codex`를 실행한 적이 있으면 셸 캐시 때문에 `hash -r`이 한 번 필요할 수 있고, PATH 추가가 필요한 경우에는 `setup` 출력에 표시되는 `source ...` 명령을 실행하세요.
 
-Windows native `cmd`/PowerShell에서는 `codex.cmd` wrapper가 Windows runner를 실행합니다. `node-pty`가 설치되어 있으면 ConPTY로 Codex 화면을 한 줄 짧게 띄워 하단 row를 예약하고, `node-pty`가 없거나 로드되지 않으면 같은 콘솔의 하단에 overlay row를 다시 그리는 fallback을 사용합니다. Claude statusLine은 일반 `cmd`/PowerShell 프롬프트가 아니라 Claude Code 안에서만 표시됩니다.
+Windows native `cmd`/PowerShell에서는 `codex.cmd` wrapper가 Windows runner를 실행합니다. runner는 `rowpty.exe`(별도 rowpty 프로젝트의 전용 ConPTY host)가 있으면 WSL과 같은 방식으로 하단 row를 예약합니다: 자식 프로그램은 한 줄 짧은 화면을 쓰고, 상태줄은 출력이 잠잠해진 시점에만 그려져 깜빡임 없이 하단에 고정됩니다. `rowpty.exe`는 바이너리로 배포되지 않습니다 — `ai-battery setup`이 패키지에 동봉된 소스(`vendor/rowpty/RowPty.cs`)를 Windows 내장 .NET Framework `csc.exe`로 사용자 머신에서 직접 컴파일해 `%LOCALAPPDATA%\ai-battery\bin`에 설치하고, 그 옆에 Microsoft 서명된 최신 ConPTY(`conpty.dll`/`OpenConsole.exe`, node-pty 패키지에서 복사)를 배치합니다. 서명 없는 다운로드 바이너리가 없으므로 SmartScreen/Defender류 평판 경고를 원천적으로 피하고, 소스가 텍스트로 열려 있어 감사할 수 있습니다. 직접 빌드한 exe를 쓰려면 `AI_BATTERY_ROWPTY` 환경변수로 지정합니다. rowpty가 없으면 같은 콘솔에 덧그리는 overlay layout으로 동작하며(`AI_BATTERY_WIN_LAYOUT=overlay`로 강제 가능), legacy `node-pty` reserve는 `AI_BATTERY_WIN_LAYOUT=reserve`이면서 rowpty가 없을 때만 사용됩니다. Claude statusLine은 일반 `cmd`/PowerShell 프롬프트가 아니라 Claude Code 안에서만 표시됩니다.
+
+tmux에서는 pane마다 하단 행을 예약하면 같은 전역 배터리가 pane 수만큼 중복 표시됩니다. 대신 tmux의 status bar에 세션당 한 번만 표시할 수 있습니다.
+
+```bash
+ai-battery setup tmux
+```
+
+`~/.tmux.conf`에 관리 블록을 추가해 status-right에 배터리를 표시하고(10초 간격 갱신), 이 tmux 안에서 실행되는 `codex`는 pane별 배터리 행을 생략하고 pane 전체를 사용합니다. 적용하려면 `tmux source-file ~/.tmux.conf` 후 새 pane을 여세요. 이 블록은 기존 `status-right` 설정을 덮어쓰므로 `setup all`에 포함되지 않는 opt-in입니다. 해제는 `ai-battery uninstall tmux`, tmux 안에서도 pane별 행을 유지하려면 `AI_BATTERY_TMUX=row`를 설정합니다. Claude statusLine은 Claude Code 내부 UI라 tmux 여부와 무관하게 그대로 표시됩니다.
 
 Codex 하단 행이 보이지 않으면 진단을 실행합니다.
 
@@ -305,7 +313,7 @@ Codex는 최근 세션 로그에서 `rate_limits` 이벤트를 찾습니다. Cla
 
 ## Source Environment
 
-기본 CLI는 Node.js 18 이상이 있으면 Windows native, WSL, Linux, macOS에서 실행됩니다. Windows native의 Codex terminal row는 Node runner를 사용하며, optional `node-pty`가 있으면 ConPTY reserved row를 사용하고 없으면 overlay fallback을 사용합니다. WSL/Linux/macOS의 `ai-battery-run`은 Python 3와 POSIX PTY를 사용합니다. HUD는 Windows/WSL에서는 PowerShell/WinForms, macOS에서는 내장 `osascript`와 AppleScriptObjC를 사용합니다.
+기본 CLI는 Node.js 18 이상이 있으면 Windows native, WSL, Linux, macOS에서 실행됩니다. Windows native의 Codex terminal row는 `rowpty.exe`(전용 ConPTY host, .NET Framework 4.8 내장 csc.exe로 빌드)가 있으면 reserved row를 사용하고, 없으면 Node runner의 same-console overlay row로 동작합니다. WSL/Linux/macOS의 `ai-battery-run`은 Python 3와 POSIX PTY를 사용합니다. HUD는 Windows/WSL에서는 PowerShell/WinForms, macOS에서는 내장 `osascript`와 AppleScriptObjC를 사용합니다.
 
 Codex 데이터는 기본적으로 `~/.codex/sessions`를 읽습니다. 다른 위치를 쓰고 있다면 `CODEX_HOME`을 설정하세요.
 

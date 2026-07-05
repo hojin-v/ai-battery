@@ -251,12 +251,30 @@ class StatusLine:
         os.write(sys.stdout.fileno(), payload.encode("ascii"))
 
 
+def tmux_status_bar_active():
+    if not os.environ.get("TMUX"):
+        return False
+    override = (os.environ.get("AI_BATTERY_TMUX") or os.environ.get("CLAUDEX_BATTERY_TMUX") or "").lower()
+    if override == "row":
+        return False
+    if override in ("status", "plain", "off"):
+        return True
+    flag = os.environ.get("AI_BATTERY_TMUX_STATUS") or os.environ.get("CLAUDEX_BATTERY_TMUX_STATUS")
+    return flag == "1"
+
+
 def main():
     interval, bar_width, provider, layout, left_padding, command = parse_args(sys.argv[1:])
     command_provider = infer_provider(command)
     if provider == "auto":
         provider = command_provider
     layout = resolve_layout(layout, command_provider)
+
+    # Inside tmux with the status-bar integration, the battery already shows
+    # once per session in tmux's own bar; skip the per-pane reserved row and
+    # hand the pane to the child untouched.
+    if tmux_status_bar_active():
+        os.execvp(command[0], command)
 
     if not os.isatty(sys.stdin.fileno()) or not os.isatty(sys.stdout.fileno()):
         print(

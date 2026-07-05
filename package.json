@@ -29,11 +29,13 @@
     "bin/ai-battery-hud.js",
     "bin/ai-battery-macos-status.applescript",
     "bin/ai-battery-hud.ps1",
+    "vendor/rowpty/RowPty.cs",
     "docs/*.svg",
     "README.md"
   ],
   "scripts": {
     "start": "node ./bin/ai-battery.js",
+    "sync:rowpty": "node ./scripts/sync-rowpty.mjs",
     "check": "node --check ./bin/ai-battery.js && node --check ./bin/ai-battery-hud.js && node --check ./bin/ai-battery-run-win.js && node --test",
     "test": "node --test"
   },
