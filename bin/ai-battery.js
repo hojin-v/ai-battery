@@ -2247,6 +2247,21 @@ function claudeCommandIsBackground(cmdline) {
     || cmdline.includes("--bg-spare");
 }
 
+function codexCommandIsBackground(cmdline) {
+  const tokens = commandLineTokens(cmdline);
+  if (!tokens.length) return false;
+
+  let commandIndex = -1;
+  const firstBase = commandTokenBasename(tokens[0]).toLowerCase();
+  if (tokenMatchesProviderExecutable(tokens[0], "codex")) {
+    commandIndex = 0;
+  } else if (/^node(?:\.exe)?$/i.test(firstBase) && tokenMatchesProviderExecutable(tokens[1], "codex")) {
+    commandIndex = 1;
+  }
+
+  return commandIndex >= 0 && tokens[commandIndex + 1] === "app-server";
+}
+
 function commandLineTokens(cmdline) {
   return (String(cmdline || "").match(/"(?:(?:\\.|[^"\\])*)"|'[^']*'|\S+/g) || [])
     .map((token) => token.replace(/^"(.*)"$/s, "$1").replace(/^'(.*)'$/s, "$1").replace(/\\"/g, "\""))
@@ -2299,6 +2314,7 @@ function aiBatteryRunnerCommandTokens(tokens) {
 
 function commandMatchesProvider(cmdline, provider) {
   const text = String(cmdline || "");
+  if (provider === "codex" && codexCommandIsBackground(text)) return false;
   if (provider === "claude" && claudeCommandIsBackground(text)) return false;
   if (
     text.includes("ai-battery.js")

@@ -401,6 +401,8 @@ test("provider process matching ignores status commands and plain arguments", ()
   assert.equal(commandMatchesProvider("node /opt/ai-battery/bin/ai-battery-run-win.js --provider all -- C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd", "codex"), true);
   assert.equal(commandMatchesProvider("python3 /opt/ai-battery/bin/ai-battery-run --provider all -- /usr/local/bin/codex", "codex"), true);
   assert.equal(commandMatchesProvider("node /usr/local/lib/node_modules/@openai/codex/bin/codex.js", "codex"), true);
+  assert.equal(commandMatchesProvider("/Applications/Codex.app/Contents/Resources/codex app-server --listen stdio://", "codex"), false);
+  assert.equal(commandMatchesProvider("node /usr/local/lib/node_modules/@openai/codex/bin/codex.js app-server --listen stdio://", "codex"), false);
   assert.equal(commandMatchesProvider("claude daemon run --bg-spare /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js", "claude"), false);
 });
 
@@ -412,6 +414,9 @@ test("provider running state requires a foreground TTY off Windows", () => {
 
   assert.equal(providerRunningInProcesses("codex", commands, "darwin"), false);
   assert.equal(providerRunningInProcesses("codex", [{ ...commands[0], hasTty: true }], "darwin"), true);
+  assert.equal(providerRunningInProcesses("codex", [
+    { cmdline: "/Applications/Codex.app/Contents/Resources/codex app-server --listen stdio://", hasTty: true }
+  ], "darwin"), false);
   assert.equal(providerRunningInProcesses("codex", [commands[0]], "win32"), true);
 });
 
