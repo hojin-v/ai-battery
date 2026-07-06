@@ -1,6 +1,6 @@
 # AI Battery
 
-[한국어](README.md) · [English](README.en.md) · [日本語](README.ja.md) · [中文](README.zh.md) · [Español](README.es.md)
+[한국어](../../../README.md) · [English](../en/) · [日本語](../ja/) · [中文](../zh/) · [Español](../es/)
 
 Codex 和 Claude 使用量电量计
 
@@ -20,7 +20,7 @@ Codex 和 Claude 使用量电量计
 
 Codex 会读取本地会话日志中的 `rate_limits` 事件；Claude Code 会缓存 `statusLine` hook 传入的 rate-limit payload。如果 Claude 记录了真实的 429 rate-limit hit，则在对应 reset 之前将该限制显示为 0%。默认输出保持为紧凑的一行：正在运行的工具显示为白色，未运行的工具显示为灰色，只有电量条会根据余量变为绿色、橙色或红色。
 
-<img src="docs/terminal-preview.svg" alt="AI Battery terminal preview showing green and red battery bars" width="940">
+<img src="../../terminal-preview.svg" alt="AI Battery terminal preview showing green and red battery bars" width="940">
 
 Markdown 的文本 fallback 会省略电量条，以避免不同渲染器中块字符高度差异带来的问题。在真实终端中，ANSI 颜色和块状电量条会一起渲染。
 
@@ -234,7 +234,7 @@ ai-battery-run --interval 1 --provider all codex
 
 Claude Code 通过内置 `statusLine` hook 提供 rate-limit 使用率和 reset 时间。AI Battery 会将其与 Claude JSONL 中真实的 429 rate-limit hit 记录一起反映。安装后，Claude 会渲染两行。
 
-<img src="docs/claude-statusline-preview.svg" alt="Claude statusLine preview showing colored AI Battery bars" width="940">
+<img src="../../claude-statusline-preview.svg" alt="Claude statusLine preview showing colored AI Battery bars" width="940">
 
 ```text
 Opus high · ~/Projects · main                               83% context left

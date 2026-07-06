@@ -1,6 +1,6 @@
 # AI Battery
 
-[한국어](README.md) · [English](README.en.md) · [日本語](README.ja.md) · [中文](README.zh.md) · [Español](README.es.md)
+[한국어](../../../README.md) · [English](../en/) · [日本語](../ja/) · [中文](../zh/) · [Español](../es/)
 
 Medidor de batería de uso para Codex y Claude
 
@@ -20,7 +20,7 @@ Una herramienta de estado para terminal que muestra el uso restante de Codex y C
 
 Para Codex, lee eventos `rate_limits` desde los registros de sesiones locales. Para Claude Code, almacena en caché el payload de rate-limit que entrega el hook `statusLine`. Si Claude registra un 429 rate-limit hit real, ese límite se refleja como 0% hasta su reset correspondiente. La salida predeterminada se mantiene compacta en una sola línea: las herramientas en ejecución se muestran en blanco, las inactivas en gris, y solo la barra de batería cambia de color según el uso restante: verde, naranja o rojo.
 
-<img src="docs/terminal-preview.svg" alt="AI Battery terminal preview showing green and red battery bars" width="940">
+<img src="../../terminal-preview.svg" alt="AI Battery terminal preview showing green and red battery bars" width="940">
 
 El fallback de texto en Markdown omite la barra para evitar diferencias de altura en caracteres de bloque según el renderizador. En una terminal real, los colores ANSI y las barras de bloque se renderizan juntos.
 
@@ -234,7 +234,7 @@ ai-battery-run --interval 1 --provider all codex
 
 Claude Code proporciona el uso de rate-limit y las horas de reset mediante el hook integrado `statusLine`. AI Battery combina eso con registros reales de 429 rate-limit hit en los JSONL de Claude. Después de la instalación, Claude renderiza dos líneas.
 
-<img src="docs/claude-statusline-preview.svg" alt="Claude statusLine preview showing colored AI Battery bars" width="940">
+<img src="../../claude-statusline-preview.svg" alt="Claude statusLine preview showing colored AI Battery bars" width="940">
 
 ```text
 Opus high · ~/Projects · main                               83% context left
