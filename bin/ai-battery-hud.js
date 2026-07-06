@@ -661,6 +661,20 @@ function runPowerShell(command) {
   });
 }
 
+function refreshWslHudScriptCopy() {
+  if (!useWsl) return null;
+  const result = runPowerShell([
+    "$dir = Join-Path $env:LOCALAPPDATA 'ai-battery'",
+    "New-Item -ItemType Directory -Force -Path $dir | Out-Null",
+    "$hud = Join-Path $dir 'ai-battery-hud.ps1'",
+    `Copy-Item ${psSingleQuote(hudScript)} $hud -Force -ErrorAction Stop`,
+    "Write-Output $hud"
+  ].join("; "));
+  if (result.status !== 0) return null;
+  const output = (result.stdout || "").trim().split(/\r?\n/).filter(Boolean).pop();
+  return output || null;
+}
+
 function hudProcessStatus() {
   const query = "$hud = Get-CimInstance Win32_Process | Where-Object { "
     + "$_.ProcessId -ne $PID -and "
@@ -756,6 +770,7 @@ if (subcommand === "autostart") {
   process.exit(0);
 }
 
+const launchHudScript = stop ? hudScript : (refreshWslHudScriptCopy() || hudScript);
 const wasRunning = (!foreground && !once && !stop)
   ? hudProcessStatus().startsWith("running ")
   : false;
@@ -782,7 +797,7 @@ if (useWsl) {
   hudScriptArgs.push("-UseWsl");
 }
 
-const psArgs = powerShellCommandArgs(hudScript, hudScriptArgs);
+const psArgs = powerShellCommandArgs(launchHudScript, hudScriptArgs);
 
 if (foreground || once || stop) {
   const result = spawnSync(powershell, psArgs, { stdio: "inherit", windowsHide: true });
