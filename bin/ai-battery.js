@@ -48,6 +48,8 @@ const MENU_BAR_WARNING = "#FF9F0A";
 const MENU_BAR_DANGER = "#FF453A";
 const MENU_BAR_OUTLINE_OPACITY = "0.42";
 const MENU_DETAIL_OUTLINE_OPACITY = "0.14";
+const MENU_DIM_TEXT = "#A1A1AA";
+const MENU_DIM_OUTLINE_OPACITY = "0.24";
 
 function parseArgs(argv) {
   const args = {
@@ -3923,15 +3925,9 @@ function imageDataUri(filePath) {
   return `data:${mime};base64,${fs.readFileSync(filePath).toString("base64")}`;
 }
 
-function menuBarBatteryColor(percent) {
+function menuBatteryColor(percent, running = true) {
+  if (!running) return MENU_DIM_TEXT;
   if (typeof percent !== "number") return MENU_BAR_WHITE;
-  if (percent <= 20) return MENU_BAR_DANGER;
-  if (percent <= 40) return MENU_BAR_WARNING;
-  return MENU_BAR_WHITE;
-}
-
-function menuDetailBatteryColor(percent) {
-  if (typeof percent !== "number") return "none";
   if (percent <= 20) return MENU_BAR_DANGER;
   if (percent <= 40) return MENU_BAR_WARNING;
   return MENU_DETAIL_GREEN;
@@ -3980,6 +3976,7 @@ function renderMenuBarImage(snapshot) {
 
   visibleResults.forEach((result, index) => {
     const x = startX + (index * providerWidth);
+    const running = result.running === true;
     const percent = typeof result.percentRemaining === "number" ? clamp(result.percentRemaining, 0, 100) : null;
     const meterX = x + 23;
     const meterY = 3;
@@ -3991,16 +3988,18 @@ function renderMenuBarImage(snapshot) {
     const meterInnerWidth = meterWidth - 4;
     const meterInnerHeight = meterHeight - 3.4;
     const fillWidth = percent === null ? 0 : Math.max(percent > 0 ? 2 : 0, Math.round((percent / 100) * meterInnerWidth));
-    const fill = menuBarBatteryColor(percent);
+    const fill = menuBatteryColor(percent, running);
     const label = percent === null ? "--" : `${Math.round(percent)}%`;
     const labelX = meterX + (meterWidth / 2);
+    const textFill = running ? MENU_BAR_WHITE : MENU_DIM_TEXT;
+    const outlineOpacity = running ? MENU_BAR_OUTLINE_OPACITY : MENU_DIM_OUTLINE_OPACITY;
 
     items.push(menuBarImageIcon(result.provider, x, 3));
-    items.push(`<rect x="${meterX}" y="${meterY}" width="${meterWidth}" height="${meterHeight}" rx="2.5" fill="none" stroke="${MENU_BAR_WHITE}" stroke-opacity="${MENU_BAR_OUTLINE_OPACITY}" stroke-width="${meterStroke}"/>`);
+    items.push(`<rect x="${meterX}" y="${meterY}" width="${meterWidth}" height="${meterHeight}" rx="2.5" fill="none" stroke="${MENU_BAR_WHITE}" stroke-opacity="${outlineOpacity}" stroke-width="${meterStroke}"/>`);
     if (fillWidth > 0) {
       items.push(`<rect x="${meterInnerX}" y="${meterInnerY}" width="${fillWidth}" height="${meterInnerHeight}" rx="0.8" fill="${fill}"/>`);
     }
-    items.push(`<text x="${labelX}" y="21" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="9.5" font-weight="650" fill="${MENU_BAR_WHITE}">${svgEscape(label)}</text>`);
+    items.push(`<text x="${labelX}" y="21" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="9.5" font-weight="650" fill="${textFill}">${svgEscape(label)}</text>`);
   });
 
   if (!items.length) {
@@ -4059,21 +4058,26 @@ function renderMenuDetailImage(snapshot) {
     const y = verticalPadding + (index * rowHeight);
     const baseline = y + 22;
     const provider = result.provider === "codex" ? "Codex" : result.provider === "claude" ? "Claude" : "AI";
+    const running = result.running === true;
     const percent = typeof result.percentRemaining === "number" ? clamp(result.percentRemaining, 0, 100) : null;
     const fillWidth = percent === null ? 0 : Math.max(percent > 0 ? 3 : 0, Math.round((percent / 100) * barWidth));
-    const fill = menuDetailBatteryColor(percent);
+    const fill = menuBatteryColor(percent, running);
     const percentText = percent === null ? "--%" : `${Math.round(percent)}%`;
     const metaText = result.ok ? menuDetailMetaText(result) : "unavailable";
     const barY = baseline - barHeight;
+    const primaryFill = running ? "#F5F5F7" : MENU_DIM_TEXT;
+    const metaFill = running ? MENU_DIM_TEXT : "#8E8E93";
+    const trackOpacity = running ? "0.10" : "0.06";
+    const outlineOpacity = running ? MENU_DETAIL_OUTLINE_OPACITY : MENU_DIM_OUTLINE_OPACITY;
 
-    items.push(`<text x="14" y="${baseline}" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="13" font-weight="650" fill="#F5F5F7">${svgEscape(provider)}</text>`);
-    items.push(`<rect x="${barX}" y="${barY}" width="${barWidth}" height="${barHeight}" rx="4" fill="#FFFFFF" fill-opacity="0.10" stroke="#FFFFFF" stroke-opacity="${MENU_DETAIL_OUTLINE_OPACITY}" stroke-width="1"/>`);
+    items.push(`<text x="14" y="${baseline}" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="13" font-weight="650" fill="${primaryFill}">${svgEscape(provider)}</text>`);
+    items.push(`<rect x="${barX}" y="${barY}" width="${barWidth}" height="${barHeight}" rx="4" fill="#FFFFFF" fill-opacity="${trackOpacity}" stroke="#FFFFFF" stroke-opacity="${outlineOpacity}" stroke-width="1"/>`);
     if (fillWidth > 0) {
       items.push(`<rect x="${barX}" y="${barY}" width="${fillWidth}" height="${barHeight}" rx="4" fill="${fill}"/>`);
     }
-    items.push(`<text x="${barX + barWidth + 12}" y="${baseline}" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="13" font-weight="700" fill="#F5F5F7">${svgEscape(percentText)}</text>`);
+    items.push(`<text x="${barX + barWidth + 12}" y="${baseline}" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="13" font-weight="700" fill="${primaryFill}">${svgEscape(percentText)}</text>`);
     if (metaText) {
-      items.push(`<text x="${width - 14}" y="${baseline}" text-anchor="end" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="13" font-weight="550" fill="#A1A1AA">${svgEscape(metaText)}</text>`);
+      items.push(`<text x="${width - 14}" y="${baseline}" text-anchor="end" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="13" font-weight="550" fill="${metaFill}">${svgEscape(metaText)}</text>`);
     }
   });
 
@@ -4486,6 +4490,8 @@ export {
   removeAiBatteryShellPathBlock,
   percentValue,
   providerRunningInProcesses,
+  renderMenuBarImage,
+  renderMenuDetailImage,
   rowptyDiagnostic,
   sameFilePath,
   visibleWidth,

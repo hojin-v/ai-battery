@@ -25,6 +25,8 @@ import {
   removeAiBatteryShellPathBlock,
   removeOrRestoreCodexWrapper,
   providerRunningInProcesses,
+  renderMenuBarImage,
+  renderMenuDetailImage,
   rowptyDiagnostic,
   sameFilePath,
   visibleWidth,
@@ -51,6 +53,10 @@ import {
   statusRow,
   windowsCommand
 } from "../bin/ai-battery-run-win.js";
+import {
+  macHudCommandMatches,
+  macHudPidsFromPsOutput
+} from "../bin/ai-battery-hud.js";
 
 const CLI_PATH = fileURLToPath(new URL("../bin/ai-battery.js", import.meta.url));
 const HUD_SH_PATH = fileURLToPath(new URL("../bin/ai-battery-hud", import.meta.url));
@@ -161,11 +167,27 @@ test("legacy HUD launcher delegates to the macOS-capable JS entrypoint", { skip:
   assert.match(result.stdout.trim(), /^(AI --|◎|✳)/);
 });
 
+test("macOS HUD process matching survives install path changes", () => {
+  const oldInstall = "osascript /usr/local/lib/node_modules/ai-battery/bin/ai-battery-macos-status.applescript HOME='/Users/me' '/usr/local/bin/node' '/usr/local/lib/node_modules/ai-battery/bin/ai-battery.js' --menu-bar-image 2>/dev/null HOME='/Users/me' '/usr/local/bin/node' '/usr/local/lib/node_modules/ai-battery/bin/ai-battery.js' --menu-detail-image 2>/dev/null HOME='/Users/me' '/usr/local/bin/node' '/usr/local/lib/node_modules/ai-battery/bin/ai-battery.js' --no-color 2>/dev/null 10";
+  const newInstall = "osascript /Users/me/Projects/ai-battery/bin/ai-battery-macos-status.applescript HOME='/Users/me' '/usr/local/bin/node' '/Users/me/Projects/ai-battery/bin/ai-battery.js' --menu-bar-image 2>/dev/null HOME='/Users/me' '/usr/local/bin/node' '/Users/me/Projects/ai-battery/bin/ai-battery.js' --menu-detail-image 2>/dev/null HOME='/Users/me' '/usr/local/bin/node' '/Users/me/Projects/ai-battery/bin/ai-battery.js' --no-color 2>/dev/null 10";
+  const similarButNotHud = "/bin/zsh -c rg ai-battery-macos-status.applescript";
+
+  assert.equal(macHudCommandMatches(oldInstall), true);
+  assert.equal(macHudCommandMatches(newInstall), true);
+  assert.equal(macHudCommandMatches(similarButNotHud), false);
+  assert.deepEqual(macHudPidsFromPsOutput([
+    ` 101 ${oldInstall}`,
+    ` 202 ${newInstall}`,
+    ` 303 ${similarButNotHud}`,
+    ` 404 ${oldInstall}`
+  ].join("\n"), 404), [101, 202]);
+});
+
 test("menu bar image renderer writes an SVG with provider icons", (t) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
   t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
-  const result = spawnSync(process.execPath, [CLI_PATH, "--menu-bar-image"], {
+  const result = spawnSync(process.execPath, [CLI_PATH, "--active-provider", "codex", "--menu-bar-image"], {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -221,7 +243,7 @@ test("menu detail image renderer writes connected color bars", (t) => {
     }
   })}\n`);
 
-  const result = spawnSync(process.execPath, [CLI_PATH, "--provider", "claude", "--menu-detail-image"], {
+  const result = spawnSync(process.execPath, [CLI_PATH, "--provider", "claude", "--active-provider", "claude", "--menu-detail-image"], {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -244,6 +266,51 @@ test("menu detail image renderer writes connected color bars", (t) => {
   assert.doesNotMatch(svg, /[█░▰▱]/);
   assert.match(svg, /#FF9F0A/);
   assert.match(svg, /5h [0-9:-]+ · 7d 63%/);
+});
+
+test("macOS menu images dim inactive providers without activity badges", (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const stateDir = path.join(tmpDir, "state");
+  const resetsAt = new Date(Date.now() + (90 * 60 * 1000)).toISOString();
+  const snapshot = {
+    generatedAt: new Date().toISOString(),
+    results: [
+      {
+        provider: "codex",
+        ok: true,
+        running: true,
+        percentRemaining: 82,
+        primary: { windowMinutes: 300, resetsAt, resetPassed: false },
+        secondary: { windowMinutes: 10080, remainingPercent: 67, resetsAt, resetPassed: false }
+      },
+      {
+        provider: "claude",
+        ok: true,
+        running: false,
+        percentRemaining: 35,
+        primary: { windowMinutes: 300, resetsAt, resetPassed: false },
+        secondary: { windowMinutes: 10080, remainingPercent: 51, resetsAt, resetPassed: false }
+      }
+    ]
+  };
+
+  withEnv({
+    HOME: tmpDir,
+    AI_BATTERY_STATE_DIR: stateDir
+  }, () => {
+    const menuBarSvg = fs.readFileSync(renderMenuBarImage(snapshot), "utf8");
+    const detailSvg = fs.readFileSync(renderMenuDetailImage(snapshot), "utf8");
+
+    assert.doesNotMatch(menuBarSvg, /data-activity=/);
+    assert.doesNotMatch(detailSvg, />Running<|>Idle</);
+    assert.match(menuBarSvg, /fill="#30D158"/);
+    assert.match(menuBarSvg, /<text x="91" y="21"[^>]+fill="#A1A1AA">35%<\/text>/);
+    assert.doesNotMatch(menuBarSvg, /#FF9F0A/);
+    assert.match(detailSvg, /<text x="14" y="30"[^>]+fill="#F5F5F7">Codex<\/text>/);
+    assert.match(detailSvg, /<text x="14" y="66"[^>]+fill="#A1A1AA">Claude<\/text>/);
+    assert.match(detailSvg, /<rect x="86" y="58" width="42" height="8" rx="4" fill="#A1A1AA"\/>/);
+  });
 });
 
 test("managed shell PATH block removal preserves surrounding rc content", () => {

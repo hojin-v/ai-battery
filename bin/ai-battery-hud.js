@@ -104,6 +104,15 @@ function waitForFile(filePath, timeoutMs = 3500) {
   return false;
 }
 
+function isDirectRun() {
+  if (!process.argv[1]) return false;
+  try {
+    return fs.realpathSync(process.argv[1]) === scriptPath;
+  } catch {
+    return false;
+  }
+}
+
 function snapshotHasWeekly(jsonText) {
   try {
     const snapshot = JSON.parse(jsonText);
@@ -221,16 +230,35 @@ function macCommands(options) {
 }
 
 function macHudPids() {
-  const result = spawnSync("pgrep", ["-f", macStatusPath], {
+  const result = spawnSync("ps", ["-axo", "pid=,args="], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"]
   });
   if (result.status !== 0) return [];
-  return (result.stdout || "")
-    .trim()
-    .split(/\s+/)
-    .map((pid) => Number(pid))
-    .filter((pid) => Number.isInteger(pid) && pid > 0 && pid !== process.pid);
+  return macHudPidsFromPsOutput(result.stdout, process.pid);
+}
+
+function macHudCommandMatches(cmdline) {
+  const text = String(cmdline || "").trim();
+  if (!text.includes("ai-battery-macos-status.applescript")) return false;
+  if (!text.includes("--menu-bar-image") || !text.includes("--menu-detail-image")) return false;
+  return path.basename(text.split(/\s+/, 1)[0] || "") === "osascript";
+}
+
+function macHudPidsFromPsOutput(output, ownPid = process.pid) {
+  return String(output || "")
+    .split(/\r?\n/)
+    .map((line) => {
+      const match = line.match(/^\s*(\d+)\s+(.*)$/);
+      if (!match) return null;
+      return { pid: Number(match[1]), cmdline: match[2] };
+    })
+    .filter((proc) => proc
+      && Number.isInteger(proc.pid)
+      && proc.pid > 0
+      && proc.pid !== ownPid
+      && macHudCommandMatches(proc.cmdline))
+    .map((proc) => proc.pid);
 }
 
 function macLaunchAgentPath() {
@@ -368,23 +396,30 @@ function runMacHud(cliArgs) {
   process.exit(0);
 }
 
-if (process.platform === "darwin") {
-  runMacHud(process.argv.slice(2));
-}
-
 const useWsl = isWsl();
 const powershell = "powershell.exe";
 
-if (!useWsl && process.platform !== "win32") {
-  console.error("ai-battery-hud: desktop HUD needs Windows (native or WSL) or macOS.");
-  console.error("On Linux terminals use: ai-battery --watch");
-  process.exit(1);
+function runDesktopHud(cliArgs) {
+  if (process.platform === "darwin") {
+    runMacHud(cliArgs);
+    return;
+  }
+
+  if (!useWsl && process.platform !== "win32") {
+    console.error("ai-battery-hud: desktop HUD needs Windows (native or WSL) or macOS.");
+    console.error("On Linux terminals use: ai-battery --watch");
+    process.exit(1);
+  }
+
+  if (!commandExists(powershell)) {
+    console.error("ai-battery-hud: powershell.exe is required for the Windows HUD.");
+    process.exit(1);
+  }
+
+  runWindowsHud(cliArgs);
 }
 
-if (!commandExists(powershell)) {
-  console.error("ai-battery-hud: powershell.exe is required for the Windows HUD.");
-  process.exit(1);
-}
+function runWindowsHud(cliArgs) {
 
 const filteredArgs = [];
 let foreground = false;
@@ -393,7 +428,6 @@ let stop = false;
 let subcommand = null;
 let autostartAction = "status";
 
-const cliArgs = process.argv.slice(2);
 for (let i = 0; i < cliArgs.length; i += 1) {
   const arg = cliArgs[i];
   if (arg === "-Foreground" || arg === "--foreground") {
@@ -596,3 +630,13 @@ if (readyPath && !waitForFile(readyPath)) {
   console.log("AI Battery HUD started. Drag it to place it; right-click and choose Exit to close.");
 }
 if (readyPath) fs.rmSync(readyPath, { force: true });
+}
+
+if (isDirectRun()) {
+  runDesktopHud(process.argv.slice(2));
+}
+
+export {
+  macHudCommandMatches,
+  macHudPidsFromPsOutput
+};
