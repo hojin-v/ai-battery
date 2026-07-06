@@ -25,6 +25,7 @@ import {
   removeAiBatteryShellPathBlock,
   removeOrRestoreCodexWrapper,
   providerRunningInProcesses,
+  rowptyDiagnostic,
   sameFilePath,
   visibleWidth,
   uninstallClaudeStatusline,
@@ -469,6 +470,35 @@ test("rowpty executable resolution honors the explicit env override", (t) => {
 
   assert.equal(withEnv({ AI_BATTERY_ROWPTY: exePath }, () => rowptyExePath()), exePath);
   assert.equal(withEnv({ AI_BATTERY_ROWPTY: path.join(tmpDir, "missing.exe") }, () => rowptyExePath()), null);
+});
+
+test("Codex doctor rowpty diagnostic reports bundled ConPTY request without ReferenceError", (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const exePath = path.join(tmpDir, "rowpty.exe");
+  fs.writeFileSync(exePath, "stub");
+
+  assert.equal(rowptyDiagnostic(exePath, "linux"), null);
+  assert.deepEqual(withEnv({
+    AI_BATTERY_ROWPTY_CONPTY: undefined,
+    CLAUDEX_BATTERY_ROWPTY_CONPTY: undefined
+  }, () => rowptyDiagnostic(exePath, "win32")), {
+    path: exePath,
+    installed: true,
+    bundledConpty: false,
+    bundledConptyRequested: false
+  });
+
+  fs.writeFileSync(path.join(tmpDir, "conpty.dll"), "stub");
+  assert.deepEqual(withEnv({
+    AI_BATTERY_ROWPTY_CONPTY: "bundled"
+  }, () => rowptyDiagnostic(exePath, "win32")), {
+    path: exePath,
+    installed: true,
+    bundledConpty: true,
+    bundledConptyRequested: true
+  });
 });
 
 test("rowpty spawn defaults to the OS ConPTY provider for faster startup", () => {

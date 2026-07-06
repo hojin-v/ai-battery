@@ -1532,6 +1532,25 @@ function codexRunnerExists(runnerPath = codexRunnerPath()) {
   return isExecutable(runnerPath);
 }
 
+function requestedRowptyConptyMode() {
+  return String(process.env.AI_BATTERY_ROWPTY_CONPTY || process.env.CLAUDEX_BATTERY_ROWPTY_CONPTY || "os").toLowerCase();
+}
+
+function bundledRowptyConptyRequested() {
+  return ["bundled", "node-pty", "nodepty", "auto", "default"].includes(requestedRowptyConptyMode());
+}
+
+function rowptyDiagnostic(rowpty, platform = process.platform) {
+  if (platform !== "win32") return null;
+  const bundledConpty = rowpty ? fs.existsSync(path.join(path.dirname(rowpty), "conpty.dll")) : false;
+  return {
+    path: rowpty,
+    installed: Boolean(rowpty),
+    bundledConpty,
+    bundledConptyRequested: bundledRowptyConptyRequested()
+  };
+}
+
 function diagnoseCodex() {
   const config = readConfig();
   const configuredWrapper = config.codexWrapper?.wrapperPath || codexWrapperPathInDir(defaultCodexShimDir());
@@ -1574,13 +1593,11 @@ function diagnoseCodex() {
     notes.push(`AI Battery runner is missing or not executable: ${runnerPath}`);
   }
   const rowpty = process.platform === "win32" ? rowptyExePath() : null;
-  const rowptyConpty = rowpty ? fs.existsSync(path.join(path.dirname(rowpty), "conpty.dll")) : false;
-  const requestedRowptyConpty = String(process.env.AI_BATTERY_ROWPTY_CONPTY || process.env.CLAUDEX_BATTERY_ROWPTY_CONPTY || "os").toLowerCase();
-  const bundledRowptyConptyRequested = ["bundled", "node-pty", "nodepty", "auto", "default"].includes(requestedRowptyConpty);
+  const rowptyInfo = rowptyDiagnostic(rowpty);
   if (wrapperInstalled && process.platform === "win32" && !rowpty) {
     notes.push("rowpty.exe not found, so the Codex bottom row uses the overlay fallback. Run: ai-battery setup codex (compiles it locally with the in-box csc.exe).");
   }
-  if (rowpty && bundledRowptyConptyRequested && !rowptyConpty) {
+  if (rowpty && rowptyInfo?.bundledConptyRequested && !rowptyInfo.bundledConpty) {
     notes.push("Bundled ConPTY was requested, but conpty.dll is not next to rowpty.exe. Run: ai-battery setup codex with the node-pty package installed, or unset AI_BATTERY_ROWPTY_CONPTY to use the faster OS ConPTY default.");
   }
   if (wrapperInstalled && process.platform !== "win32" && !python3) {
@@ -1601,9 +1618,7 @@ function diagnoseCodex() {
     wrapperInstalled,
     runnerPath,
     runnerExists,
-    rowpty: process.platform === "win32"
-      ? { path: rowpty, installed: Boolean(rowpty), bundledConpty: rowptyConpty, bundledConptyRequested }
-      : null,
+    rowpty: rowptyInfo,
     statusLine,
     python3,
     originalCommand: configuredOriginal,
@@ -4471,6 +4486,7 @@ export {
   removeAiBatteryShellPathBlock,
   percentValue,
   providerRunningInProcesses,
+  rowptyDiagnostic,
   sameFilePath,
   visibleWidth,
   uninstallClaudeStatusline,
