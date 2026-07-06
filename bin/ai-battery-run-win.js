@@ -14,6 +14,7 @@ const DEBUG_LOG = process.env.AI_BATTERY_DEBUG_LOG || process.env.CLAUDEX_BATTER
 const DEFAULT_COLUMN_GUARD = 4;
 const DEFAULT_LEFT_PADDING = 2;
 const DEFAULT_CODEX_OVERLAY_BOTTOM_OFFSET = 1;
+const DEFAULT_VSCODE_CODEX_OVERLAY_BOTTOM_OFFSET = 2;
 
 function usage() {
   console.log(`Usage: ai-battery-run-win [--interval SECONDS] [--bar-width N] [--provider auto|all|codex|claude] [--layout auto|reserve|overlay] [--left-padding N] -- COMMAND [ARGS...]
@@ -117,13 +118,21 @@ function columnGuard() {
 function overlayBottomOffset(activeProvider) {
   const raw = Number(process.env.AI_BATTERY_OVERLAY_BOTTOM_OFFSET || process.env.CLAUDEX_BATTERY_OVERLAY_BOTTOM_OFFSET);
   if (Number.isFinite(raw)) return Math.max(0, Math.min(5, Math.floor(raw)));
-  return activeProvider === "codex" ? DEFAULT_CODEX_OVERLAY_BOTTOM_OFFSET : 0;
+  if (activeProvider !== "codex") return 0;
+  return isVsCodeTerminal()
+    ? DEFAULT_VSCODE_CODEX_OVERLAY_BOTTOM_OFFSET
+    : DEFAULT_CODEX_OVERLAY_BOTTOM_OFFSET;
 }
 
 function statusRow(rows, bottomOffset = 0) {
   const safeRows = Math.max(1, Number(rows) || 1);
   const safeOffset = Math.max(0, Math.min(5, Math.floor(Number(bottomOffset) || 0)));
   return Math.max(1, safeRows - safeOffset);
+}
+
+function isVsCodeTerminal() {
+  return String(process.env.TERM_PROGRAM || "").toLowerCase() === "vscode"
+    || Boolean(process.env.VSCODE_INJECTION);
 }
 
 function stripAnsi(text) {
@@ -702,6 +711,7 @@ async function main() {
 export {
   conPtyBackspaceMode,
   conPtyRepaintIntervalMs,
+  isVsCodeTerminal,
   normalizeConPtyInput,
   outputMayClearDisplay,
   overlayBottomOffset,

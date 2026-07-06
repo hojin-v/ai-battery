@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import {
   bar,
   claudeHeader,
+  commandMatchesProvider,
   codexStatusLineMatches,
   codexWrapperScript,
   installClaudeStatusline,
@@ -23,6 +24,7 @@ import {
   tmuxStatusBarActive,
   removeAiBatteryShellPathBlock,
   removeOrRestoreCodexWrapper,
+  providerRunningInProcesses,
   sameFilePath,
   visibleWidth,
   uninstallClaudeStatusline,
@@ -33,6 +35,7 @@ import {
 import {
   conPtyBackspaceMode,
   conPtyRepaintIntervalMs,
+  isVsCodeTerminal,
   normalizeConPtyInput,
   outputMayClearDisplay,
   overlayBottomOffset,
@@ -324,6 +327,26 @@ test("rowpty command-line quoting doubles backslashes before quotes", () => {
   assert.equal(quoteWindowsCommandLineArg(""), "\"\"");
 });
 
+test("provider process matching ignores status commands and plain arguments", () => {
+  assert.equal(commandMatchesProvider("grep codex README.md", "codex"), false);
+  assert.equal(commandMatchesProvider("node /opt/ai-battery/bin/ai-battery.js --json --provider codex", "codex"), false);
+  assert.equal(commandMatchesProvider("node /opt/ai-battery/bin/ai-battery-run-win.js --provider all -- C:\\Users\\me\\AppData\\Roaming\\npm\\codex.cmd", "codex"), true);
+  assert.equal(commandMatchesProvider("python3 /opt/ai-battery/bin/ai-battery-run --provider all -- /usr/local/bin/codex", "codex"), true);
+  assert.equal(commandMatchesProvider("node /usr/local/lib/node_modules/@openai/codex/bin/codex.js", "codex"), true);
+  assert.equal(commandMatchesProvider("claude daemon run --bg-spare /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js", "claude"), false);
+});
+
+test("provider running state requires a foreground TTY off Windows", () => {
+  const commands = [
+    { cmdline: "node /usr/local/lib/node_modules/@openai/codex/bin/codex.js", hasTty: false },
+    { cmdline: "node /opt/ai-battery/bin/ai-battery.js --json --provider codex", hasTty: true }
+  ];
+
+  assert.equal(providerRunningInProcesses("codex", commands, "darwin"), false);
+  assert.equal(providerRunningInProcesses("codex", [{ ...commands[0], hasTty: true }], "darwin"), true);
+  assert.equal(providerRunningInProcesses("codex", [commands[0]], "win32"), true);
+});
+
 test("tmux status block installs, updates in place, and uninstalls cleanly", { skip: process.platform === "win32" ? "POSIX-only" : false }, (t) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
   t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
@@ -516,24 +539,42 @@ test("Windows overlay repaint interval defaults to quick redraws and is bounded"
 test("Windows Codex overlay leaves the bottom row for Codex statusline by default", () => {
   assert.equal(withEnv({
     AI_BATTERY_OVERLAY_BOTTOM_OFFSET: undefined,
-    CLAUDEX_BATTERY_OVERLAY_BOTTOM_OFFSET: undefined
+    CLAUDEX_BATTERY_OVERLAY_BOTTOM_OFFSET: undefined,
+    TERM_PROGRAM: undefined,
+    VSCODE_INJECTION: undefined
   }, () => overlayBottomOffset("codex")), 1);
 
   assert.equal(withEnv({
     AI_BATTERY_OVERLAY_BOTTOM_OFFSET: undefined,
-    CLAUDEX_BATTERY_OVERLAY_BOTTOM_OFFSET: undefined
+    CLAUDEX_BATTERY_OVERLAY_BOTTOM_OFFSET: undefined,
+    TERM_PROGRAM: "vscode",
+    VSCODE_INJECTION: undefined
+  }, () => overlayBottomOffset("codex")), 2);
+
+  assert.equal(withEnv({
+    AI_BATTERY_OVERLAY_BOTTOM_OFFSET: undefined,
+    CLAUDEX_BATTERY_OVERLAY_BOTTOM_OFFSET: undefined,
+    TERM_PROGRAM: "vscode",
+    VSCODE_INJECTION: undefined
   }, () => overlayBottomOffset("claude")), 0);
 
   assert.equal(withEnv({
-    AI_BATTERY_OVERLAY_BOTTOM_OFFSET: "0"
+    AI_BATTERY_OVERLAY_BOTTOM_OFFSET: "0",
+    TERM_PROGRAM: "vscode"
   }, () => overlayBottomOffset("codex")), 0);
 
   assert.equal(withEnv({
     AI_BATTERY_OVERLAY_BOTTOM_OFFSET: "9"
   }, () => overlayBottomOffset("codex")), 5);
 
+  assert.equal(withEnv({
+    TERM_PROGRAM: "vscode",
+    VSCODE_INJECTION: undefined
+  }, () => isVsCodeTerminal()), true);
+
   assert.equal(statusRow(24, 0), 24);
   assert.equal(statusRow(24, 1), 23);
+  assert.equal(statusRow(24, 2), 22);
   assert.equal(statusRow(1, 5), 1);
 });
 

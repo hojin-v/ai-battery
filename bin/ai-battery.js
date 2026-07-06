@@ -779,7 +779,7 @@ function tmuxStatusBlock(existingStatusRight = null) {
     "# see AI_BATTERY_TMUX_STATUS and skip their per-pane bottom row.",
     "set-environment -g AI_BATTERY_TMUX_STATUS 1",
     "set -g status-interval 10",
-    `set -g status-right-length ${rightLength}`,
+    `set-option -g status-right-length ${rightLength}`,
     `set -g status-right "${statusRightValue}"`,
     "# <<< ai-battery tmux <<<",
     ""
@@ -2207,31 +2207,123 @@ function shellArg(value) {
   return `'${text.replace(/'/g, "'\\''")}'`;
 }
 
+const PROVIDER_EXECUTABLE_RE = {
+  codex: /^codex(?:\.(?:cmd|exe|bat|js|mjs|cjs))?$/i,
+  claude: /^(?:claude|claude-code)(?:\.(?:cmd|exe|bat|js|mjs|cjs))?$/i
+};
+const PROVIDER_PACKAGE_MARKERS = {
+  codex: ["@openai/codex"],
+  claude: ["@anthropic-ai/claude-code", "claude-code"]
+};
+const AI_BATTERY_RUNNER_RE = /^(?:ai-battery-run|claudex-battery-run|ai-battery-run-win\.js)$/i;
+const RUNNER_OPTIONS_WITH_VALUES = new Set([
+  "--interval",
+  "--bar-width",
+  "--provider",
+  "--layout",
+  "--left-padding"
+]);
+
 function claudeCommandIsBackground(cmdline) {
   return /(^|\s)daemon\s+run(\s|$)/.test(cmdline)
     || cmdline.includes("--bg-pty-host")
     || cmdline.includes("--bg-spare");
 }
 
+function commandLineTokens(cmdline) {
+  return (String(cmdline || "").match(/"(?:(?:\\.|[^"\\])*)"|'[^']*'|\S+/g) || [])
+    .map((token) => token.replace(/^"(.*)"$/s, "$1").replace(/^'(.*)'$/s, "$1").replace(/\\"/g, "\""))
+    .filter(Boolean);
+}
+
+function commandTokenBasename(token) {
+  return String(token || "")
+    .replace(/^["']|["']$/g, "")
+    .split(/[\\/]/)
+    .filter(Boolean)
+    .pop() || "";
+}
+
+function tokenMatchesProviderExecutable(token, provider) {
+  return Boolean(PROVIDER_EXECUTABLE_RE[provider]?.test(commandTokenBasename(token)));
+}
+
+function tokenMatchesProviderPackage(token, provider) {
+  const lower = String(token || "").toLowerCase();
+  return (PROVIDER_PACKAGE_MARKERS[provider] || []).some((marker) => lower.includes(marker));
+}
+
+function commandInvokesAiBatteryRunner(tokens) {
+  return tokens.some((token) => AI_BATTERY_RUNNER_RE.test(commandTokenBasename(token)));
+}
+
+function tokensAfterLastSeparator(tokens) {
+  const index = tokens.lastIndexOf("--");
+  return index >= 0 ? tokens.slice(index + 1) : [];
+}
+
+function aiBatteryRunnerCommandTokens(tokens) {
+  const runnerIndex = tokens.findIndex((token) => AI_BATTERY_RUNNER_RE.test(commandTokenBasename(token)));
+  if (runnerIndex < 0) return [];
+
+  for (let i = runnerIndex + 1; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token === "--") return tokens.slice(i + 1);
+    if (token.startsWith("--")) {
+      const option = token.split("=", 1)[0];
+      if (RUNNER_OPTIONS_WITH_VALUES.has(option) && !token.includes("=")) i += 1;
+      continue;
+    }
+    if (token.startsWith("-")) continue;
+    return tokens.slice(i);
+  }
+  return [];
+}
+
 function commandMatchesProvider(cmdline, provider) {
+  const text = String(cmdline || "");
+  if (provider === "claude" && claudeCommandIsBackground(text)) return false;
   if (
-    cmdline.includes("ai-battery.js")
-    && !cmdline.includes("@openai/codex")
-    && !cmdline.includes("@anthropic-ai/claude-code")
-    && !cmdline.includes("claude-code")
+    text.includes("ai-battery.js")
+    && !tokenMatchesProviderPackage(text, "codex")
+    && !tokenMatchesProviderPackage(text, "claude")
   ) {
     return false;
   }
 
+  const tokens = commandLineTokens(text);
+  if (!tokens.length) return false;
+
+  if (tokens.some((token) => tokenMatchesProviderPackage(token, provider))) return true;
+
+  const firstBase = commandTokenBasename(tokens[0]).toLowerCase();
+  if (tokenMatchesProviderExecutable(tokens[0], provider)) return true;
+  if (/^node(?:\.exe)?$/i.test(firstBase) && tokenMatchesProviderExecutable(tokens[1], provider)) return true;
+
+  const runnerCommand = commandInvokesAiBatteryRunner(tokens)
+    ? aiBatteryRunnerCommandTokens(tokens)
+    : [];
+  if (runnerCommand.some((token) => tokenMatchesProviderExecutable(token, provider))) return true;
+
+  const afterSeparator = tokensAfterLastSeparator(tokens);
+  if (
+    /^(?:rowpty(?:\.exe)?|cmd(?:\.exe)?)$/i.test(firstBase)
+    && afterSeparator.some((token) => tokenMatchesProviderExecutable(token, provider))
+  ) {
+    return true;
+  }
+
+  if (/^cmd(?:\.exe)?$/i.test(firstBase)) {
+    const callIndex = tokens.findIndex((token) => /^call$/i.test(token));
+    if (callIndex >= 0 && tokens.slice(callIndex + 1).some((token) => tokenMatchesProviderExecutable(token, provider))) {
+      return true;
+    }
+  }
+
   if (provider === "codex") {
-    return /(^|\s|[\\/])codex(\.cmd|\.exe)?(\s|$)/i.test(cmdline) || cmdline.includes("@openai/codex");
+    return false;
   }
-  if (provider === "claude") {
-    if (claudeCommandIsBackground(cmdline)) return false;
-    return /(^|\s|[\\/])claude(\.cmd|\.exe)?(\s|$)/i.test(cmdline)
-      || cmdline.includes("@anthropic-ai/claude-code")
-      || cmdline.includes("claude-code");
-  }
+  if (provider === "claude") return false;
   return false;
 }
 
@@ -2355,14 +2447,18 @@ function scanProcessCommands() {
   return commands;
 }
 
-function isProviderRunning(provider) {
-  const needsTty = provider === "claude" && process.platform !== "win32";
-  return scanProcessCommands().some((proc) => {
+function providerRunningInProcesses(provider, processes, platform = process.platform) {
+  const needsTty = platform !== "win32";
+  return processes.some((proc) => {
     if (!commandMatchesProvider(proc.cmdline, provider)) return false;
     if (!needsTty) return true;
     if (proc.hasTty === undefined) proc.hasTty = processHasControllingTty(proc.pid);
     return proc.hasTty;
   });
+}
+
+function isProviderRunning(provider) {
+  return providerRunningInProcesses(provider, scanProcessCommands());
 }
 
 function readStdin() {
@@ -4357,6 +4453,7 @@ async function main() {
 export {
   bar,
   claudeHeader,
+  commandMatchesProvider,
   codexStatusLineMatches,
   codexWrapperScript,
   firstPercentValue,
@@ -4373,6 +4470,7 @@ export {
   removeOrRestoreCodexWrapper,
   removeAiBatteryShellPathBlock,
   percentValue,
+  providerRunningInProcesses,
   sameFilePath,
   visibleWidth,
   uninstallClaudeStatusline,
