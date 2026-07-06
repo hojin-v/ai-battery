@@ -9,7 +9,14 @@ property refreshTimer : missing value
 property titleCommand : ""
 property detailCommand : ""
 property tooltipCommand : ""
+property stateCommand : ""
 property refreshInterval : 10
+property activeRefreshInterval : 10
+property readyRefreshInterval : 10
+property idleRefreshInterval : 30
+property fastRefreshInterval : 2
+property fastUntilDate : missing value
+property lastHudState : ""
 
 on run argv
   if (count of argv) < 2 then error "ai-battery macOS status item requires title and detail commands"
@@ -22,6 +29,7 @@ on run argv
     try
       set refreshInterval to (item 4 of argv) as real
     end try
+    if (count of argv) is greater than or equal to 5 then set stateCommand to item 5 of argv
   else
     if (count of argv) is greater than or equal to 3 then
       try
@@ -29,6 +37,7 @@ on run argv
       end try
     end if
   end if
+  my configureIntervals_()
 
   current application's NSApplication's sharedApplication()
   current application's NSApp's setActivationPolicy:(current application's NSApplicationActivationPolicyAccessory)
@@ -39,6 +48,7 @@ on run argv
   statusItem's button()'s setToolTip:"AI Battery"
 
   set statusMenu to current application's NSMenu's alloc()'s initWithTitle:"AI Battery"
+  statusMenu's setDelegate:me
   set detailItem to current application's NSMenuItem's alloc()'s initWithTitle:"Loading..." action:(missing value) keyEquivalent:""
   detailItem's setEnabled:false
   statusMenu's addItem:detailItem
@@ -54,16 +64,76 @@ on run argv
 
   statusItem's setMenu:statusMenu
   my refresh_(missing value)
-
-  set refreshTimer to current application's NSTimer's scheduledTimerWithTimeInterval:refreshInterval target:me selector:"refresh:" userInfo:(missing value) repeats:true
-  current application's NSRunLoop's currentRunLoop()'s addTimer:refreshTimer forMode:(current application's NSRunLoopCommonModes)
   current application's NSApp's |run|()
 end run
+
+on configureIntervals_()
+  set activeRefreshInterval to refreshInterval
+  if activeRefreshInterval is greater than 10 then set activeRefreshInterval to 10
+
+  set readyRefreshInterval to refreshInterval
+  if readyRefreshInterval is less than 10 then set readyRefreshInterval to 10
+  if readyRefreshInterval is greater than 15 then set readyRefreshInterval to 15
+
+  set idleRefreshInterval to refreshInterval * 3
+  if idleRefreshInterval is less than 30 then set idleRefreshInterval to 30
+  if idleRefreshInterval is greater than 60 then set idleRefreshInterval to 60
+
+  set fastRefreshInterval to 2
+  if refreshInterval is less than 2 then set fastRefreshInterval to refreshInterval
+end configureIntervals_
+
+on scheduleRefresh_(secondsUntilRefresh)
+  try
+    refreshTimer's invalidate()
+  end try
+  set refreshTimer to current application's NSTimer's scheduledTimerWithTimeInterval:secondsUntilRefresh target:me selector:"refresh:" userInfo:(missing value) repeats:false
+  current application's NSRunLoop's currentRunLoop()'s addTimer:refreshTimer forMode:(current application's NSRunLoopCommonModes)
+end scheduleRefresh_
+
+on fastWindowActive_()
+  if fastUntilDate is missing value then return false
+  try
+    set secondsLeft to (fastUntilDate's timeIntervalSinceNow()) as real
+    if secondsLeft is greater than 0 then return true
+  end try
+  return false
+end fastWindowActive_
+
+on startFastWindow_(secondsToRun)
+  set fastUntilDate to current application's NSDate's dateWithTimeIntervalSinceNow:(secondsToRun)
+end startFastWindow_
+
+on refreshIntervalForState_(hudState)
+  if (my fastWindowActive_()) then return fastRefreshInterval
+  if hudState is "background-running" then return fastRefreshInterval
+  if hudState is "foreground-running" then return activeRefreshInterval
+  if hudState is "background-ready" then return readyRefreshInterval
+  return idleRefreshInterval
+end refreshIntervalForState_
+
+on updateFastWindowForState_(hudState)
+  if hudState is "" then return
+  if lastHudState is "" then
+    set lastHudState to hudState
+    return
+  end if
+  if hudState is not lastHudState then
+    set lastHudState to hudState
+    my startFastWindow_(45)
+  end if
+end updateFastWindowForState_
+
+on menuWillOpen_(sender)
+  my startFastWindow_(30)
+  my refresh_(missing value)
+end menuWillOpen_
 
 on refresh_(sender)
   set titleText to "AI --"
   set detailText to "AI Battery unavailable"
   set tooltipText to "AI Battery unavailable"
+  set hudState to ""
   set imagePath to ""
   set menuImage to missing value
   set detailImage to missing value
@@ -79,6 +149,12 @@ on refresh_(sender)
   try
     set tooltipText to (do shell script (tooltipCommand as text))
   end try
+
+  if stateCommand is not "" then
+    try
+      set hudState to (do shell script (stateCommand as text))
+    end try
+  end if
 
   if imagePath is "" then set imagePath to "AI --"
   if detailText is "" then set detailText to "AI Battery unavailable"
@@ -123,6 +199,8 @@ on refresh_(sender)
   end if
 
   statusItem's button()'s setToolTip:tooltipText
+  my updateFastWindowForState_(hudState)
+  my scheduleRefresh_(my refreshIntervalForState_(hudState))
 end refresh_
 
 on quit_(sender)

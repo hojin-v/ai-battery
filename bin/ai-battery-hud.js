@@ -225,7 +225,8 @@ function macCommands(options) {
   return {
     title: `${envPrefix} ${node} ${batteryJs} --menu-bar-image${providerArgs} 2>/dev/null`,
     detailImage: `${envPrefix} ${node} ${batteryJs} --menu-detail-image${providerArgs} 2>/dev/null`,
-    detail: `${envPrefix} ${node} ${batteryJs} --no-color${providerArgs} 2>/dev/null`
+    detail: `${envPrefix} ${node} ${batteryJs} --no-color${providerArgs} 2>/dev/null`,
+    state: `${envPrefix} ${node} ${batteryJs} --hud-state${providerArgs} 2>/dev/null`
   };
 }
 
@@ -379,7 +380,8 @@ function runMacHud(cliArgs) {
     commands.title,
     commands.detailImage,
     commands.detail,
-    String(options.interval)
+    String(options.interval),
+    commands.state
   ];
 
   if (options.foreground) {

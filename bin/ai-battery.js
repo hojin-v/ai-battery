@@ -16,6 +16,7 @@ const CLAUDE_LIMIT_HIT_TAIL_BYTES = 256 * 1024;
 const CLAUDE_LIMIT_HIT_MAX_FILES = 80;
 const CLAUDE_CODEX_CACHE_SECONDS = 60;
 const CLAUDE_CODEX_FALLBACK_CACHE_SECONDS = 15;
+const BACKGROUND_USAGE_RUNNING_SECONDS = 5 * 60;
 const DIVIDER = "│";
 const PROVIDER_DIVIDER = "┃";
 const ANSI_RE = /\u001b\[[0-?]*[ -/]*[@-~]/g;
@@ -67,6 +68,7 @@ function parseArgs(argv) {
     menuBar: false,
     menuBarImage: false,
     menuDetailImage: false,
+    hudState: false,
     silent: false,
     force: false,
     header: true,
@@ -130,6 +132,9 @@ function parseArgs(argv) {
       args.style = "plain";
     } else if (arg === "--menu-detail-image") {
       args.menuDetailImage = true;
+      args.style = "plain";
+    } else if (arg === "--hud-state") {
+      args.hudState = true;
       args.style = "plain";
     } else if (arg === "--version" || arg === "-v") {
       args.version = true;
@@ -2031,6 +2036,28 @@ function codexSessionMeta(filePath) {
   }
 }
 
+function codexUsageLooksBackground(meta) {
+  if (!meta) return false;
+  const text = [
+    meta.originator,
+    meta.source,
+    meta.client?.name,
+    meta.clientInfo?.name,
+    meta.client_info?.name
+  ].filter(Boolean).join(" ").toLowerCase();
+  if (!text) return false;
+  if (text.includes("codex-tui") || /\bcli\b/.test(text)) return false;
+  return (
+    text.includes("remote")
+    || text.includes("mobile")
+    || text.includes("desktop")
+    || text.includes("codex app")
+    || text.includes("codex_app")
+    || text.includes("vscode")
+    || text.includes("vs code")
+  );
+}
+
 function sameOrNestedPath(a, b) {
   if (!a || !b) return false;
   const left = path.resolve(a);
@@ -2492,6 +2519,10 @@ function providerRunningInProcesses(provider, processes, platform = process.plat
 
 function isProviderRunning(provider) {
   return providerRunningInProcesses(provider, scanProcessCommands());
+}
+
+function codexBackgroundReadyInProcesses(processes) {
+  return processes.some((proc) => codexCommandIsBackground(proc.cmdline));
 }
 
 function readStdin() {
@@ -3005,14 +3036,18 @@ function readCodex(options = {}) {
     writeScanCache("codex-status", scan);
   }
 
+  const processes = options.includeRunning === false ? null : scanProcessCommands();
   const running = typeof options.runningOverride === "boolean"
     ? options.runningOverride
     : (
         options.includeRunning === false
           ? Boolean(scan.running)
-          : isProviderRunning("codex")
+          : providerRunningInProcesses("codex", processes)
       );
-  const result = { ...scan, running };
+  const backgroundReady = processes
+    ? codexBackgroundReadyInProcesses(processes)
+    : Boolean(scan.backgroundReady);
+  const result = { ...scan, running, backgroundReady };
   if (result.ok) result.ageSeconds = cacheAgeSeconds(result.timestamp ?? null);
   return result;
 }
@@ -3075,18 +3110,24 @@ function scanCodexStatus() {
 
   const primary = normalizeLimit(rateLimits.primary);
   const secondary = normalizeLimit(rateLimits.secondary);
+  const sessionMeta = codexSessionMeta(match.file);
+  const timestamp = match.json.timestamp ?? null;
 
   return {
     provider: "codex",
     ok: true,
     planType: rateLimits.plan_type ?? null,
     limitId: rateLimits.limit_id ?? null,
-    timestamp: match.json.timestamp ?? null,
+    timestamp,
     source: match.file,
     percentRemaining: primary?.remainingPercent ?? null,
     percentUsed: primary?.usedPercent ?? null,
     primary,
     secondary,
+    usageUpdate: {
+      timestamp,
+      background: codexUsageLooksBackground(sessionMeta)
+    },
     approvalPolicy,
     sandboxMode,
     collaborationMode,
@@ -3759,6 +3800,14 @@ function renderMenuBar(snapshot) {
   return parts.length ? parts.join("  ") : "AI --";
 }
 
+function renderHudState(snapshot) {
+  const results = snapshot.results.filter(Boolean);
+  if (results.some((result) => result.running === true)) return "foreground-running";
+  if (results.some(codexBackgroundUsageRunning)) return "background-running";
+  if (results.some((result) => result.provider === "codex" && result.backgroundReady === true)) return "background-ready";
+  return "idle";
+}
+
 function svgEscape(value) {
   return String(value)
     .replace(/&/g, "&amp;")
@@ -4058,11 +4107,44 @@ function menuDetailMetaText(result) {
   return parts.join(" · ");
 }
 
+function shortAgeText(timestamp) {
+  const seconds = cacheAgeSeconds(timestamp);
+  if (typeof seconds !== "number") return null;
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return new Date(timestamp).toISOString().slice(0, 10);
+}
+
+function codexBackgroundUsageRunning(result) {
+  if (result?.provider !== "codex" || result.running === true) return false;
+  if (result.usageUpdate?.background !== true) return false;
+  const seconds = cacheAgeSeconds(result.usageUpdate?.timestamp ?? result.timestamp ?? null);
+  return typeof seconds === "number" && seconds <= BACKGROUND_USAGE_RUNNING_SECONDS;
+}
+
+function menuDetailUsageUpdateText(result) {
+  if (result.provider !== "codex" || result.running === true) return null;
+  if (codexBackgroundUsageRunning(result)) {
+    const timestamp = result.usageUpdate?.timestamp ?? result.timestamp ?? null;
+    const age = shortAgeText(timestamp);
+    if (age) return `local idle · background running · updated ${age}`;
+  }
+  if (result.backgroundReady === true) return "local idle · background ready";
+  return null;
+}
+
 function renderMenuDetailImage(snapshot) {
   const visibleResults = snapshot.results.filter(Boolean);
   const rows = visibleResults.length ? visibleResults : [{ provider: "ai", ok: false }];
   const width = 392;
-  const rowHeight = 36;
+  const usageTexts = rows.map(menuDetailUsageUpdateText);
+  const hasUsageText = usageTexts.some(Boolean);
+  const rowHeight = hasUsageText ? 46 : 36;
   const verticalPadding = 8;
   const height = (rows.length * rowHeight) + (verticalPadding * 2);
   const barX = 86;
@@ -4072,7 +4154,9 @@ function renderMenuDetailImage(snapshot) {
 
   rows.forEach((result, index) => {
     const y = verticalPadding + (index * rowHeight);
-    const baseline = y + 22;
+    const baseline = y + (hasUsageText ? 19 : 22);
+    const usageBaseline = y + 38;
+    const usageText = usageTexts[index];
     const provider = result.provider === "codex" ? "Codex" : result.provider === "claude" ? "Claude" : "AI";
     const running = result.running === true;
     const percent = typeof result.percentRemaining === "number" ? clamp(result.percentRemaining, 0, 100) : null;
@@ -4094,6 +4178,9 @@ function renderMenuDetailImage(snapshot) {
     items.push(`<text x="${barX + barWidth + 12}" y="${baseline}" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="13" font-weight="700" fill="${primaryFill}">${svgEscape(percentText)}</text>`);
     if (metaText) {
       items.push(`<text x="${width - 14}" y="${baseline}" text-anchor="end" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="13" font-weight="550" fill="${metaFill}">${svgEscape(metaText)}</text>`);
+    }
+    if (usageText) {
+      items.push(`<text x="${width - 14}" y="${usageBaseline}" text-anchor="end" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif" font-size="10.5" font-weight="500" fill="#8E8E93">${svgEscape(usageText)}</text>`);
     }
   });
 
@@ -4129,6 +4216,7 @@ function applyLeftPadding(output, args) {
 
 function render(snapshot, args) {
   if (args.json) return JSON.stringify(snapshot, null, 2);
+  if (args.hudState) return renderHudState(snapshot);
   if (args.menuBarImage) return renderMenuBarImage(snapshot);
   if (args.menuDetailImage) return renderMenuDetailImage(snapshot);
   if (args.menuBar) return renderMenuBar(snapshot);
@@ -4489,6 +4577,7 @@ export {
   bar,
   claudeHeader,
   commandMatchesProvider,
+  codexBackgroundReadyInProcesses,
   codexStatusLineMatches,
   codexWrapperScript,
   firstPercentValue,
@@ -4506,6 +4595,7 @@ export {
   removeAiBatteryShellPathBlock,
   percentValue,
   providerRunningInProcesses,
+  renderHudState,
   renderMenuBarImage,
   renderMenuDetailImage,
   rowptyDiagnostic,

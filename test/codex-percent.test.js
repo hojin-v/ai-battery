@@ -10,6 +10,7 @@ import {
   bar,
   claudeHeader,
   commandMatchesProvider,
+  codexBackgroundReadyInProcesses,
   codexStatusLineMatches,
   codexWrapperScript,
   installClaudeStatusline,
@@ -25,6 +26,7 @@ import {
   removeAiBatteryShellPathBlock,
   removeOrRestoreCodexWrapper,
   providerRunningInProcesses,
+  renderHudState,
   renderMenuBarImage,
   renderMenuDetailImage,
   rowptyDiagnostic,
@@ -313,6 +315,243 @@ test("macOS menu images dim inactive providers without activity badges", (t) => 
   });
 });
 
+test("Codex App session metadata marks usage updates as background", (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const homeDir = path.join(tmpDir, "home");
+  const stateDir = path.join(tmpDir, "state");
+  const codexHome = path.join(homeDir, ".codex");
+  const sessionDir = path.join(codexHome, "sessions", "2026", "07", "06");
+  fs.mkdirSync(sessionDir, { recursive: true });
+
+  const capturedAt = new Date().toISOString();
+  const resetAt = new Date(Date.now() + 3600000).toISOString();
+  fs.writeFileSync(path.join(sessionDir, "codex-app.jsonl"), [
+    JSON.stringify({
+      type: "session_meta",
+      payload: {
+        originator: "Codex Desktop",
+        source: "vscode",
+        cwd: tmpDir
+      }
+    }),
+    JSON.stringify({
+      timestamp: capturedAt,
+      payload: {
+        rate_limits: {
+          plan_type: "pro",
+          limit_id: "codex",
+          primary: {
+            used_percent: 14,
+            window_minutes: 300,
+            resets_at: resetAt
+          },
+          secondary: {
+            used_percent: 31,
+            window_minutes: 10080,
+            resets_at: resetAt
+          }
+        }
+      }
+    }),
+    ""
+  ].join("\n"));
+
+  const result = spawnSync(process.execPath, [CLI_PATH, "--provider", "codex", "--json"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: homeDir,
+      CODEX_HOME: codexHome,
+      AI_BATTERY_STATE_DIR: stateDir
+    },
+    timeout: 5000
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const snapshot = JSON.parse(result.stdout);
+  const codex = snapshot.results[0];
+  assert.equal(codex.provider, "codex");
+  assert.equal(codex.usageUpdate.timestamp, capturedAt);
+  assert.equal(codex.usageUpdate.background, true);
+});
+
+test("macOS menu detail shows reflected usage while Codex is locally idle", (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const stateDir = path.join(tmpDir, "state");
+  const resetsAt = new Date(Date.now() + (90 * 60 * 1000)).toISOString();
+  const snapshot = {
+    generatedAt: new Date().toISOString(),
+    results: [
+      {
+        provider: "codex",
+        ok: true,
+        running: false,
+        timestamp: new Date().toISOString(),
+        usageUpdate: {
+          timestamp: new Date().toISOString(),
+          background: true
+        },
+        percentRemaining: 74,
+        primary: { windowMinutes: 300, resetsAt, resetPassed: false },
+        secondary: { windowMinutes: 10080, remainingPercent: 68, resetsAt, resetPassed: false }
+      }
+    ]
+  };
+
+  withEnv({
+    HOME: tmpDir,
+    AI_BATTERY_STATE_DIR: stateDir
+  }, () => {
+    const detailSvg = fs.readFileSync(renderMenuDetailImage(snapshot), "utf8");
+
+    assert.match(detailSvg, /height="62"/);
+    assert.match(detailSvg, /<text x="14" y="27"[^>]+fill="#A1A1AA">Codex<\/text>/);
+    assert.match(detailSvg, /<rect x="86" y="19" width="89" height="8" rx="4" fill="#A1A1AA"\/>/);
+    assert.match(detailSvg, /local idle · background running · updated [0-9]+s ago/);
+    assert.doesNotMatch(detailSvg, />Running<|>Idle</);
+  });
+});
+
+test("macOS menu detail hides reflected usage note while Codex is locally running", (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const stateDir = path.join(tmpDir, "state");
+  const resetsAt = new Date(Date.now() + (90 * 60 * 1000)).toISOString();
+  const snapshot = {
+    generatedAt: new Date().toISOString(),
+    results: [
+      {
+        provider: "codex",
+        ok: true,
+        running: true,
+        usageUpdate: {
+          timestamp: new Date().toISOString(),
+          background: true
+        },
+        percentRemaining: 74,
+        primary: { windowMinutes: 300, resetsAt, resetPassed: false },
+        secondary: { windowMinutes: 10080, remainingPercent: 68, resetsAt, resetPassed: false }
+      }
+    ]
+  };
+
+  withEnv({
+    HOME: tmpDir,
+    AI_BATTERY_STATE_DIR: stateDir
+  }, () => {
+    const detailSvg = fs.readFileSync(renderMenuDetailImage(snapshot), "utf8");
+
+    assert.match(detailSvg, /<text x="14" y="30"[^>]+fill="#F5F5F7">Codex<\/text>/);
+    assert.match(detailSvg, /<rect x="86" y="22" width="89" height="8" rx="4" fill="#30D158"\/>/);
+    assert.doesNotMatch(detailSvg, /usage reflected/);
+    assert.doesNotMatch(detailSvg, />Running<|>Idle</);
+  });
+});
+
+test("macOS menu detail does not call local CLI usage background", (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const stateDir = path.join(tmpDir, "state");
+  const resetsAt = new Date(Date.now() + (90 * 60 * 1000)).toISOString();
+  const snapshot = {
+    generatedAt: new Date().toISOString(),
+    results: [
+      {
+        provider: "codex",
+        ok: true,
+        running: false,
+        usageUpdate: {
+          timestamp: new Date().toISOString(),
+          background: false
+        },
+        percentRemaining: 74,
+        primary: { windowMinutes: 300, resetsAt, resetPassed: false },
+        secondary: { windowMinutes: 10080, remainingPercent: 68, resetsAt, resetPassed: false }
+      }
+    ]
+  };
+
+  withEnv({
+    HOME: tmpDir,
+    AI_BATTERY_STATE_DIR: stateDir
+  }, () => {
+    const detailSvg = fs.readFileSync(renderMenuDetailImage(snapshot), "utf8");
+
+    assert.match(detailSvg, /height="52"/);
+    assert.doesNotMatch(detailSvg, /background running/);
+    assert.doesNotMatch(detailSvg, />Running<|>Idle</);
+  });
+});
+
+test("macOS menu detail shows background ready while Codex is locally idle", (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const stateDir = path.join(tmpDir, "state");
+  const resetsAt = new Date(Date.now() + (90 * 60 * 1000)).toISOString();
+  const snapshot = {
+    generatedAt: new Date().toISOString(),
+    results: [
+      {
+        provider: "codex",
+        ok: true,
+        running: false,
+        backgroundReady: true,
+        usageUpdate: {
+          timestamp: new Date().toISOString(),
+          background: false
+        },
+        percentRemaining: 74,
+        primary: { windowMinutes: 300, resetsAt, resetPassed: false },
+        secondary: { windowMinutes: 10080, remainingPercent: 68, resetsAt, resetPassed: false }
+      }
+    ]
+  };
+
+  withEnv({
+    HOME: tmpDir,
+    AI_BATTERY_STATE_DIR: stateDir
+  }, () => {
+    const detailSvg = fs.readFileSync(renderMenuDetailImage(snapshot), "utf8");
+
+    assert.match(detailSvg, /height="62"/);
+    assert.match(detailSvg, /local idle · background ready/);
+    assert.doesNotMatch(detailSvg, /background running/);
+    assert.doesNotMatch(detailSvg, />Running<|>Idle</);
+  });
+});
+
+test("HUD state prioritizes foreground, recent background usage, and background ready", () => {
+  const now = new Date().toISOString();
+  const old = new Date(Date.now() - (10 * 60 * 1000)).toISOString();
+
+  assert.equal(renderHudState({ results: [{ provider: "codex", running: true }] }), "foreground-running");
+  assert.equal(renderHudState({
+    results: [{
+      provider: "codex",
+      running: false,
+      usageUpdate: { timestamp: now, background: true }
+    }]
+  }), "background-running");
+  assert.equal(renderHudState({
+    results: [{
+      provider: "codex",
+      running: false,
+      backgroundReady: true,
+      usageUpdate: { timestamp: old, background: true }
+    }]
+  }), "background-ready");
+  assert.equal(renderHudState({
+    results: [{
+      provider: "codex",
+      running: false,
+      usageUpdate: { timestamp: now, background: false }
+    }]
+  }), "idle");
+});
+
 test("managed shell PATH block removal preserves surrounding rc content", () => {
   const rc = [
     "export BEFORE=1",
@@ -404,6 +643,12 @@ test("provider process matching ignores status commands and plain arguments", ()
   assert.equal(commandMatchesProvider("/Applications/Codex.app/Contents/Resources/codex app-server --listen stdio://", "codex"), false);
   assert.equal(commandMatchesProvider("node /usr/local/lib/node_modules/@openai/codex/bin/codex.js app-server --listen stdio://", "codex"), false);
   assert.equal(commandMatchesProvider("claude daemon run --bg-spare /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js", "claude"), false);
+  assert.equal(codexBackgroundReadyInProcesses([
+    { cmdline: "/Applications/Codex.app/Contents/Resources/codex app-server --listen stdio://" }
+  ]), true);
+  assert.equal(codexBackgroundReadyInProcesses([
+    { cmdline: "node /usr/local/lib/node_modules/@openai/codex/bin/codex.js" }
+  ]), false);
 });
 
 test("provider running state requires a foreground TTY off Windows", () => {
