@@ -56,8 +56,11 @@ import {
   windowsCommand
 } from "../bin/ai-battery-run-win.js";
 import {
+  describeWindowsHudOptions,
   macHudCommandMatches,
-  macHudPidsFromPsOutput
+  macHudPidsFromPsOutput,
+  parseWindowsHudArgs,
+  windowsHudUsage
 } from "../bin/ai-battery-hud.js";
 
 const CLI_PATH = fileURLToPath(new URL("../bin/ai-battery.js", import.meta.url));
@@ -183,6 +186,46 @@ test("macOS HUD process matching survives install path changes", () => {
     ` 303 ${similarButNotHud}`,
     ` 404 ${oldInstall}`
   ].join("\n"), 404), [101, 202]);
+});
+
+test("Windows HUD friendly aliases translate to PowerShell options", () => {
+  assert.deepEqual(parseWindowsHudArgs(["--dark", "white", "--no-backdrop", "--solid"]).filteredArgs, [
+    "-Backdrop",
+    "off",
+    "-Text",
+    "light",
+    "-Transparent",
+    "solid"
+  ]);
+
+  assert.deepEqual(parseWindowsHudArgs(["light", "black"]).filteredArgs, [
+    "-Text",
+    "dark"
+  ]);
+
+  assert.deepEqual(parseWindowsHudArgs(["--backdrop"]).filteredArgs, [
+    "-Backdrop",
+    "on",
+    "-Text",
+    "light"
+  ]);
+
+  const autostart = parseWindowsHudArgs(["autostart", "on", "light", "black", "--backdrop"]);
+  assert.equal(autostart.subcommand, "autostart");
+  assert.equal(autostart.autostartAction, "on");
+  assert.deepEqual(autostart.filteredArgs, [
+    "-Backdrop",
+    "on",
+    "-Text",
+    "dark"
+  ]);
+
+  assert.deepEqual(parseWindowsHudArgs(["-Mode", "tray"]).filteredArgs, ["-Mode", "tray"]);
+  assert.throws(() => parseWindowsHudArgs(["wat"]), /unknown HUD option: wat/);
+  assert.match(windowsHudUsage(), /ai-battery hud light\s+light taskbar -> black text/);
+  assert.match(windowsHudUsage(), /ai-battery hud black\s+black text/);
+  assert.equal(describeWindowsHudOptions(parseWindowsHudArgs(["black"]).filteredArgs), "black text");
+  assert.equal(describeWindowsHudOptions(parseWindowsHudArgs(["--backdrop"]).filteredArgs), "backdrop on, white text");
 });
 
 test("menu bar image renderer writes an SVG with provider icons", (t) => {

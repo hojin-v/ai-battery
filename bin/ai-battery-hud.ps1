@@ -7,6 +7,9 @@ param(
   [string]$BatteryCommandBase64 = "",
   [string]$InitialJsonBase64 = "",
   [int]$Width = 282,
+  [string]$Backdrop = $(if ($env:AI_BATTERY_HUD_BACKDROP) { $env:AI_BATTERY_HUD_BACKDROP } elseif ($env:CLAUDEX_BATTERY_HUD_BACKDROP) { $env:CLAUDEX_BATTERY_HUD_BACKDROP } else { "off" }),
+  [string]$Text = $(if ($env:AI_BATTERY_HUD_TEXT) { $env:AI_BATTERY_HUD_TEXT } elseif ($env:CLAUDEX_BATTERY_HUD_TEXT) { $env:CLAUDEX_BATTERY_HUD_TEXT } else { "light" }),
+  [string]$Transparent = "",
   [double]$Opacity = $(if ($env:AI_BATTERY_HUD_OPACITY) { [double]$env:AI_BATTERY_HUD_OPACITY } elseif ($env:CLAUDEX_BATTERY_HUD_OPACITY) { [double]$env:CLAUDEX_BATTERY_HUD_OPACITY } else { 1.0 }),
   [switch]$Locked,
   [switch]$Movable,
@@ -461,13 +464,42 @@ function Get-PercentColor([Nullable[int]]$Percent) {
   return [System.Drawing.Color]::FromArgb(80, 220, 120)
 }
 
-function Get-ActivityColor($Result) {
-  if ($Result -and $Result.running) { return [System.Drawing.Color]::FromArgb(235, 235, 235) }
+function Test-HudDarkText {
+  $normalized = ([string]$Text).Trim().ToLowerInvariant()
+  return @("dark", "black", "ink", "light-taskbar", "lightbar") -contains $normalized
+}
+
+function Get-HudActiveTextColor {
+  if ($script:hudDarkText) { return [System.Drawing.Color]::FromArgb(28, 28, 28) }
+  return [System.Drawing.Color]::FromArgb(235, 235, 235)
+}
+
+function Get-HudMutedTextColor {
+  if ($script:hudDarkText) { return [System.Drawing.Color]::FromArgb(88, 88, 88) }
   return [System.Drawing.Color]::FromArgb(145, 145, 145)
 }
 
-function Get-DividerColor {
+function Get-HudDividerColor {
+  if ($script:hudDarkText) { return [System.Drawing.Color]::FromArgb(100, 100, 100) }
   return [System.Drawing.Color]::FromArgb(132, 132, 132)
+}
+
+function Get-HudBatteryTextColor([bool]$Running) {
+  if ($script:hudDarkText) {
+    if ($Running) { return [System.Drawing.Color]::FromArgb(20, 20, 20) }
+    return [System.Drawing.Color]::FromArgb(78, 78, 78)
+  }
+  if ($Running) { return [System.Drawing.Color]::FromArgb(255, 255, 255) }
+  return [System.Drawing.Color]::FromArgb(235, 235, 235)
+}
+
+function Get-ActivityColor($Result) {
+  if ($Result -and $Result.running) { return Get-HudActiveTextColor }
+  return Get-HudMutedTextColor
+}
+
+function Get-DividerColor {
+  return Get-HudDividerColor
 }
 
 function Format-Parts($Result, [string]$Name) {
@@ -793,14 +825,22 @@ function New-HudBitmapSurface([int]$Width, [int]$Height) {
 }
 
 function Test-HudTransparentSurface {
-  $value = $env:AI_BATTERY_HUD_TRANSPARENT
+  $value = $Transparent
+  if (-not $value) { $value = $env:AI_BATTERY_HUD_TRANSPARENT }
   if (-not $value) { $value = $env:CLAUDEX_BATTERY_HUD_TRANSPARENT }
   if (-not $value) { return $true }
   $normalized = ([string]$value).Trim().ToLowerInvariant()
   return -not (@("0", "false", "no", "off", "solid") -contains $normalized)
 }
 
+function Test-HudContrastBackdrop {
+  $normalized = ([string]$Backdrop).Trim().ToLowerInvariant()
+  if (-not $normalized) { $normalized = "off" }
+  return @("1", "true", "yes", "on", "solid", "backdrop") -contains $normalized
+}
+
 Update-HudDpiScale
+$script:hudDarkText = Test-HudDarkText
 
 function Get-LineText($Parts) {
   return "$($Parts.Prefix)[battery]$($Parts.Suffix)"
@@ -952,17 +992,26 @@ function New-BatteryImage([Nullable[int]]$Percent, [bool]$Running = $true, [int]
 
   $outlineColor = [System.Drawing.Color]::FromArgb(170, 170, 170)
   $mutedColor = [System.Drawing.Color]::FromArgb(120, 120, 120)
+  if ($script:hudDarkText) {
+    $outlineColor = [System.Drawing.Color]::FromArgb(58, 58, 58)
+    $mutedColor = [System.Drawing.Color]::FromArgb(98, 98, 98)
+  }
   $activeOutlineColor = if ($Running) { $outlineColor } else { $mutedColor }
   # The fill always keeps its charge color (matching the terminal bar);
   # running state is signalled by the outline and text colors instead.
   $fillColor = Get-PercentColor $Percent
   $outlinePen = [System.Drawing.Pen]::new($(if ($null -eq $Percent) { $mutedColor } else { $activeOutlineColor }), 1.0)
   $fillBrush = [System.Drawing.SolidBrush]::new($fillColor)
-  # A solid dark interior keeps the desktop from bleeding through the empty
-  # part of the battery, so the percent text stays readable on any wallpaper.
-  $interiorBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(46, 46, 46))
+  $interiorColor = if ($script:hudDarkText) {
+    [System.Drawing.Color]::FromArgb(246, 246, 246)
+  } else {
+    # A solid dark interior keeps the desktop from bleeding through the empty
+    # part of the battery, so the percent text stays readable on any wallpaper.
+    [System.Drawing.Color]::FromArgb(46, 46, 46)
+  }
+  $interiorBrush = [System.Drawing.SolidBrush]::new($interiorColor)
   $terminalBrush = [System.Drawing.SolidBrush]::new($(if ($null -eq $Percent) { $mutedColor } else { $activeOutlineColor }))
-  $textBrush = [System.Drawing.SolidBrush]::new($(if ($Running) { [System.Drawing.Color]::FromArgb(255, 255, 255) } else { [System.Drawing.Color]::FromArgb(235, 235, 235) }))
+  $textBrush = [System.Drawing.SolidBrush]::new((Get-HudBatteryTextColor $Running))
   $batteryText = if ($null -eq $Percent) { "--" } else { [string][int]$Percent }
   $fontSize = if ($batteryText.Length -ge 3) { 4.4 } elseif ($batteryText.Length -ge 2) { 5.1 } else { 5.8 }
   $batteryFont = $null
@@ -1221,12 +1270,23 @@ $form.TopMost = $true
 $form.ShowInTaskbar = $false
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
 $script:hudTransparentSurface = Test-HudTransparentSurface
+$script:hudContrastBackdrop = Test-HudContrastBackdrop
+$script:hudChromeBackColor = [System.Drawing.Color]::FromArgb(24, 24, 24)
 if ($script:hudTransparentSurface) {
-  $transparentBackColor = [System.Drawing.Color]::FromArgb(18, 18, 18)
+  $transparentBackColor = if ($script:hudDarkText -and (-not $script:hudContrastBackdrop)) {
+    [System.Drawing.Color]::FromArgb(254, 254, 254)
+  } else {
+    [System.Drawing.Color]::FromArgb(18, 18, 18)
+  }
   $form.BackColor = $transparentBackColor
   $form.TransparencyKey = $transparentBackColor
 } else {
-  $form.BackColor = [System.Drawing.Color]::FromArgb(24, 24, 24)
+  $form.BackColor = $script:hudChromeBackColor
+}
+$script:hudSurfaceBackColor = if ($script:hudContrastBackdrop -or (-not $script:hudTransparentSurface)) {
+  $script:hudChromeBackColor
+} else {
+  $form.BackColor
 }
 $form.Opacity = [math]::Max(0.2, [math]::Min(1.0, $Opacity))
 
@@ -1243,7 +1303,7 @@ $panel.Padding = if ($Mode -eq "floating" -or $Mode -eq "statusline") {
 } else {
   New-HudPadding 10 7 10 6
 }
-$panel.BackColor = $form.BackColor
+$panel.BackColor = $script:hudSurfaceBackColor
 $panel.RowStyles.Add([System.Windows.Forms.RowStyle]::new([System.Windows.Forms.SizeType]::Percent, 50)) | Out-Null
 $panel.RowStyles.Add([System.Windows.Forms.RowStyle]::new([System.Windows.Forms.SizeType]::Percent, 50)) | Out-Null
 $panel.ColumnStyles.Add([System.Windows.Forms.ColumnStyle]::new([System.Windows.Forms.SizeType]::Percent, 100)) | Out-Null
@@ -1255,7 +1315,7 @@ function New-HudRow {
   $row.WrapContents = $false
   $row.Margin = [System.Windows.Forms.Padding]::new(0)
   $row.Padding = [System.Windows.Forms.Padding]::new(0)
-  $row.BackColor = $form.BackColor
+  $row.BackColor = $script:hudSurfaceBackColor
   return $row
 }
 
@@ -1266,7 +1326,7 @@ function New-HudLabel([int]$RightMargin = 0) {
   $label.Height = Scale-HudValue 18
   $label.Font = $font
   $label.UseCompatibleTextRendering = $false
-  $label.BackColor = $form.BackColor
+  $label.BackColor = $script:hudSurfaceBackColor
   $label.Margin = New-HudPadding 0 0 $RightMargin 0
   $label.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
   return $label
@@ -1277,8 +1337,8 @@ function New-HudIconBox {
   $box.Width = Scale-HudValue 40
   $box.Height = Scale-HudValue 18
   $box.SizeMode = [System.Windows.Forms.PictureBoxSizeMode]::Zoom
-  $box.BackColor = $form.BackColor
-  $box.ForeColor = [System.Drawing.Color]::White
+  $box.BackColor = $script:hudSurfaceBackColor
+  $box.ForeColor = Get-HudBatteryTextColor $true
   $box.Margin = New-HudPadding 0 0 2 0
   $box.add_Paint({
     param($sender, $event)
@@ -1316,7 +1376,7 @@ function New-HudLineIconBox {
   $box.Width = Scale-HudValue 21
   $box.Height = Scale-HudValue 18
   $box.SizeMode = [System.Windows.Forms.PictureBoxSizeMode]::CenterImage
-  $box.BackColor = $form.BackColor
+  $box.BackColor = $script:hudSurfaceBackColor
   $box.Margin = New-HudPadding 3 0 0 0
   return $box
 }
@@ -1359,12 +1419,32 @@ foreach ($label in @($codexIconLabel, $claudeIconLabel)) {
 $codexHudControls = @($codexPrefixLabel, $codexIconLabel, $codexDivider1, $codexResetLabel, $codexDivider2, $codexWeekLabel, $codexExtraLabel)
 $claudeHudControls = @($claudePrefixLabel, $claudeIconLabel, $claudeDivider1, $claudeResetLabel, $claudeDivider2, $claudeWeekLabel, $claudeExtraLabel)
 
+function Test-PointInBounds($Bounds, [System.Drawing.Point]$Point) {
+  if (-not $Bounds) { return $false }
+  return $Bounds.Contains($Point)
+}
+
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
 $menu.Font = $font
+$menu.AutoClose = $true
+$script:hudMenuOpenedAt = [datetime]::UtcNow
+$script:hudMenuLastInsideAt = [datetime]::UtcNow
+$script:hudMenuReadyForOutsideClick = $false
 $exitItem = $menu.Items.Add("Exit")
 $exitItem.add_Click({ $form.Close() })
+$menu.add_Opened({
+  $script:hudMenuOpenedAt = [datetime]::UtcNow
+  $script:hudMenuLastInsideAt = [datetime]::UtcNow
+  $script:hudMenuReadyForOutsideClick = $false
+})
+function Hide-HudMenu {
+  if ($menu -and -not $menu.IsDisposed -and $menu.Visible) {
+    $menu.Close([System.Windows.Forms.ToolStripDropDownCloseReason]::CloseCalled)
+  }
+}
 $form.ContextMenuStrip = $menu
 $panel.ContextMenuStrip = $menu
+
 foreach ($label in $codexHudControls) {
   $label.ContextMenuStrip = $menu
   $codexRow.Controls.Add($label) | Out-Null
@@ -1737,6 +1817,7 @@ function Ensure-HudTopMost {
 function Set-HudHiddenForFullscreen([bool]$Hidden) {
   $script:hudHiddenForFullscreen = $Hidden
   if ($Hidden) {
+    Hide-HudMenu
     if ($hitForm -and -not $hitForm.IsDisposed -and $hitForm.Visible) {
       [AiBatteryNative]::ShowWindow($hitForm.Handle, [AiBatteryNative]::SW_HIDE) | Out-Null
       $hitForm.Hide()
@@ -1775,6 +1856,38 @@ function Update-HudVisibilityForFullscreen {
 }
 
 $script:fullscreenCheckPending = $false
+
+function Update-HudMenuAutoHide {
+  if (-not $menu -or $menu.IsDisposed -or -not $menu.Visible) { return }
+  $now = [datetime]::UtcNow
+  $point = [System.Windows.Forms.Cursor]::Position
+  $insideMenu = Test-PointInBounds $menu.Bounds $point
+  $insideHud = Test-PointInBounds $form.Bounds $point
+  if ($hitForm -and -not $hitForm.IsDisposed) {
+    $insideHud = $insideHud -or (Test-PointInBounds $hitForm.Bounds $point)
+  }
+
+  if ($insideMenu -or $insideHud) {
+    $script:hudMenuLastInsideAt = $now
+  }
+
+  $buttons = [System.Windows.Forms.Control]::MouseButtons
+  if (-not $script:hudMenuReadyForOutsideClick) {
+    if ($buttons -eq [System.Windows.Forms.MouseButtons]::None) {
+      $script:hudMenuReadyForOutsideClick = $true
+    }
+    return
+  }
+
+  if ($buttons -ne [System.Windows.Forms.MouseButtons]::None -and -not $insideMenu) {
+    Hide-HudMenu
+    return
+  }
+
+  if ((-not $insideMenu) -and (-not $insideHud) -and (($now - $script:hudMenuLastInsideAt).TotalMilliseconds -gt 1500)) {
+    Hide-HudMenu
+  }
+}
 
 function Request-FullscreenCheck {
   if (-not $form -or $form.IsDisposed) { return }
@@ -1843,11 +1956,7 @@ function Set-HudBatteryImage($Box, [Nullable[int]]$Percent, [bool]$Running) {
   $oldImage = $Box.Image
   $Box.Image = New-BatteryImage $Percent $Running 36 16 $false
   $Box.AccessibleName = if ($null -eq $Percent) { "--" } else { [string][int]$Percent }
-  $Box.ForeColor = if ($Running) {
-    [System.Drawing.Color]::FromArgb(255, 255, 255)
-  } else {
-    [System.Drawing.Color]::FromArgb(235, 235, 235)
-  }
+  $Box.ForeColor = Get-HudBatteryTextColor $Running
   $Box.Visible = $true
   $Box.Tag = $true
   $Box.Invalidate()
@@ -2121,7 +2230,7 @@ function Resize-HudToContent {
 
 function Show-HudMessage([string]$Message) {
   $codexPrefixLabel.Text = $Message
-  $codexPrefixLabel.ForeColor = [System.Drawing.Color]::FromArgb(145, 145, 145)
+  $codexPrefixLabel.ForeColor = Get-HudMutedTextColor
   $codexPrefixLabel.Width = (Get-LabelTextWidth $codexPrefixLabel) + (Scale-HudValue 1)
   $codexPrefixLabel.Visible = $true
   $codexPrefixLabel.Tag = $true
@@ -2233,6 +2342,9 @@ $timer.add_Tick({ Invoke-HudPump })
 $topMostTimer = New-Object System.Windows.Forms.Timer
 $topMostTimer.Interval = 150
 $topMostTimer.add_Tick({ Update-HudVisibilityForFullscreen })
+$menuAutoHideTimer = New-Object System.Windows.Forms.Timer
+$menuAutoHideTimer.Interval = 50
+$menuAutoHideTimer.add_Tick({ Update-HudMenuAutoHide })
 $form.add_FormClosed({
   if ($canMove) {
     Write-HudPosition $form.Location
@@ -2241,6 +2353,8 @@ $form.add_FormClosed({
   $timer.Dispose()
   $topMostTimer.Stop()
   $topMostTimer.Dispose()
+  $menuAutoHideTimer.Stop()
+  $menuAutoHideTimer.Dispose()
   Stop-FullscreenEventHooks
   Stop-SnapshotFetch
   foreach ($box in @($codexIconLabel, $claudeIconLabel)) {
@@ -2248,6 +2362,9 @@ $form.add_FormClosed({
       $box.Image.Dispose()
       $box.Image = $null
     }
+  }
+  if ($menu -and -not $menu.IsDisposed) {
+    $menu.Dispose()
   }
   $font.Dispose()
   $symbolFont.Dispose()
@@ -2292,4 +2409,5 @@ if ($ClickThrough) {
 $timer.Start()
 Start-FullscreenEventHooks
 $topMostTimer.Start()
+$menuAutoHideTimer.Start()
 [System.Windows.Forms.Application]::Run($form)

@@ -401,6 +401,214 @@ function runMacHud(cliArgs) {
 const useWsl = isWsl();
 const powershell = "powershell.exe";
 
+function normalizeHudTextOption(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["black", "dark", "ink"].includes(normalized)) return "dark";
+  if (["white", "light", "bright"].includes(normalized)) return "light";
+  throw new Error("--text must be one of: black or white");
+}
+
+function hudTextForTaskbar(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["light", "white-taskbar", "light-taskbar", "lightbar"].includes(normalized)) return "dark";
+  if (["dark", "black-taskbar", "dark-taskbar", "darkbar"].includes(normalized)) return "light";
+  throw new Error("taskbar color must be one of: light or dark");
+}
+
+function normalizeHudBackdropOption(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (["1", "true", "yes", "on", "solid", "backdrop"].includes(normalized)) return "on";
+  if (["0", "false", "no", "off", "none", "transparent"].includes(normalized)) return "off";
+  throw new Error("--backdrop must be one of: on, off");
+}
+
+function optionValue(cliArgs, index, optionName) {
+  const next = cliArgs[index + 1];
+  if (!next || String(next).startsWith("-")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return next;
+}
+
+function windowsHudUsage() {
+  return [
+    "Taskbar color:",
+    "  ai-battery hud light     light taskbar -> black text",
+    "  ai-battery hud dark      dark taskbar -> white text",
+    "",
+    "Text color:",
+    "  ai-battery hud black     black text",
+    "  ai-battery hud white     white text",
+    "",
+    "Other:",
+    "  ai-battery hud stop",
+    "  ai-battery hud status",
+    "  ai-battery hud --backdrop",
+    "  ai-battery hud autostart on light"
+  ].join("\n");
+}
+
+function describeWindowsHudOptions(filteredArgs) {
+  const descriptions = [];
+  for (let i = 0; i < filteredArgs.length; i += 1) {
+    const option = String(filteredArgs[i]).toLowerCase();
+    const value = filteredArgs[i + 1];
+    if (option === "-text") {
+      descriptions.push(value === "dark" ? "black text" : "white text");
+      i += 1;
+    } else if (option === "-backdrop") {
+      descriptions.push(value === "on" ? "backdrop on" : "backdrop off");
+      i += 1;
+    } else if (option === "-transparent") {
+      descriptions.push(value === "solid" ? "solid background" : "transparent background");
+      i += 1;
+    }
+  }
+
+  return [...new Set(descriptions)].join(", ");
+}
+
+const HUD_PASSTHROUGH_OPTIONS_WITH_VALUE = new Set([
+  "-batterycommand",
+  "-batterycommandbase64",
+  "-initialjsonbase64",
+  "-interval",
+  "-mode",
+  "-opacity",
+  "-position",
+  "-readypath",
+  "-width"
+]);
+
+const HUD_PASSTHROUGH_SWITCHES = new Set([
+  "-clickthrough",
+  "-locked",
+  "-movable",
+  "-once",
+  "-stopexisting",
+  "-usewsl"
+]);
+
+function parseWindowsHudArgs(cliArgs) {
+  const passthroughArgs = [];
+  let textMode = null;
+  let backdropMode = null;
+  let transparentMode = null;
+  let foreground = false;
+  let once = false;
+  let stop = false;
+  let subcommand = null;
+  let autostartAction = "status";
+
+  const setTextMode = (value) => {
+    textMode = normalizeHudTextOption(value);
+  };
+  const setBackdropMode = (value) => {
+    backdropMode = normalizeHudBackdropOption(value);
+    if (backdropMode === "on" && textMode === null) {
+      textMode = "light";
+    }
+  };
+  const optionalBackdropValue = (value) => {
+    try {
+      return normalizeHudBackdropOption(value);
+    } catch {
+      return null;
+    }
+  };
+
+  for (let i = 0; i < cliArgs.length; i += 1) {
+    const arg = cliArgs[i];
+    const lowerArg = String(arg).toLowerCase();
+    if (arg === "-Foreground" || arg === "--foreground") {
+      foreground = true;
+    } else if (arg === "-Movable" || arg === "--movable") {
+      passthroughArgs.push("-Movable");
+    } else if (arg === "-Once" || arg === "--once") {
+      once = true;
+      passthroughArgs.push("-Once");
+    } else if (arg === "-Stop" || arg === "--stop" || arg === "stop") {
+      stop = true;
+      passthroughArgs.push("-StopExisting");
+    } else if (arg === "start") {
+      // Launching is the default action.
+    } else if (arg === "status") {
+      subcommand = "status";
+    } else if (arg === "autostart") {
+      subcommand = "autostart";
+      const next = cliArgs[i + 1];
+      if (next === "on" || next === "off" || next === "status") {
+        autostartAction = next;
+        i += 1;
+      }
+    } else if (lowerArg === "--black" || lowerArg === "black") {
+      setTextMode("black");
+    } else if (lowerArg === "--white" || lowerArg === "white") {
+      setTextMode("white");
+    } else if (lowerArg === "--light" || lowerArg === "light") {
+      textMode = hudTextForTaskbar("light");
+    } else if (lowerArg === "--dark" || lowerArg === "dark") {
+      textMode = hudTextForTaskbar("dark");
+    } else if (lowerArg === "--text" || lowerArg === "--hud-text") {
+      setTextMode(optionValue(cliArgs, i, arg));
+      i += 1;
+    } else if (lowerArg.startsWith("--text=") || lowerArg.startsWith("--hud-text=")) {
+      setTextMode(arg.slice(arg.indexOf("=") + 1));
+    } else if (lowerArg === "--backdrop") {
+      const next = cliArgs[i + 1];
+      const backdropValue = next && !String(next).startsWith("-") ? optionalBackdropValue(next) : null;
+      if (backdropValue) {
+        setBackdropMode(backdropValue);
+        i += 1;
+      } else {
+        setBackdropMode("on");
+      }
+    } else if (lowerArg.startsWith("--backdrop=")) {
+      setBackdropMode(arg.slice(arg.indexOf("=") + 1));
+    } else if (lowerArg === "-backdrop") {
+      setBackdropMode(optionValue(cliArgs, i, arg));
+      i += 1;
+    } else if (lowerArg === "--no-backdrop") {
+      setBackdropMode("off");
+    } else if (lowerArg === "--solid") {
+      transparentMode = "solid";
+    } else if (lowerArg === "--transparent") {
+      transparentMode = "on";
+    } else if (lowerArg === "-transparent") {
+      transparentMode = optionValue(cliArgs, i, arg);
+      i += 1;
+    } else if (lowerArg === "-text") {
+      setTextMode(optionValue(cliArgs, i, arg));
+      i += 1;
+    } else if (arg.startsWith("-")) {
+      if (HUD_PASSTHROUGH_OPTIONS_WITH_VALUE.has(lowerArg)) {
+        passthroughArgs.push(arg, optionValue(cliArgs, i, arg));
+        i += 1;
+      } else if (HUD_PASSTHROUGH_SWITCHES.has(lowerArg)) {
+        passthroughArgs.push(arg);
+      } else {
+        throw new Error(`unknown HUD option: ${arg}`);
+      }
+    } else {
+      throw new Error(`unknown HUD option: ${arg}`);
+    }
+  }
+
+  const filteredArgs = [...passthroughArgs];
+  if (backdropMode !== null) filteredArgs.push("-Backdrop", backdropMode);
+  if (textMode !== null) filteredArgs.push("-Text", textMode);
+  if (transparentMode !== null) filteredArgs.push("-Transparent", transparentMode);
+
+  return {
+    filteredArgs,
+    foreground,
+    once,
+    stop,
+    subcommand,
+    autostartAction
+  };
+}
+
 function runDesktopHud(cliArgs) {
   if (process.platform === "darwin") {
     runMacHud(cliArgs);
@@ -422,41 +630,16 @@ function runDesktopHud(cliArgs) {
 }
 
 function runWindowsHud(cliArgs) {
-
-const filteredArgs = [];
-let foreground = false;
-let once = false;
-let stop = false;
-let subcommand = null;
-let autostartAction = "status";
-
-for (let i = 0; i < cliArgs.length; i += 1) {
-  const arg = cliArgs[i];
-  if (arg === "-Foreground" || arg === "--foreground") {
-    foreground = true;
-  } else if (arg === "-Movable" || arg === "--movable") {
-    filteredArgs.push("-Movable");
-  } else if (arg === "-Once" || arg === "--once") {
-    once = true;
-    filteredArgs.push("-Once");
-  } else if (arg === "-Stop" || arg === "--stop" || arg === "stop") {
-    stop = true;
-    filteredArgs.push("-StopExisting");
-  } else if (arg === "start") {
-    // Launching is the default action.
-  } else if (arg === "status") {
-    subcommand = "status";
-  } else if (arg === "autostart") {
-    subcommand = "autostart";
-    const next = cliArgs[i + 1];
-    if (next === "on" || next === "off" || next === "status") {
-      autostartAction = next;
-      i += 1;
-    }
-  } else {
-    filteredArgs.push(arg);
+const parsedArgs = (() => {
+  try {
+    return parseWindowsHudArgs(cliArgs);
+  } catch (error) {
+    console.error(`ai-battery-hud: ${error.message}`);
+    console.error(windowsHudUsage());
+    process.exit(1);
   }
-}
+})();
+const { filteredArgs, foreground, once, stop, subcommand, autostartAction } = parsedArgs;
 
 const hudScript = useWsl ? wslPath(ps1Path) : ps1Path;
 const nodePath = process.execPath;
@@ -504,6 +687,10 @@ function autostartEnable() {
   // launches the copy so sign-in start never depends on WSL being up. The HUD
   // must run as a separate PowerShell process whose command line contains
   // ai-battery-hud.ps1: stop/status and single-instance cleanup match it.
+  const autostartExtraArgs = filteredArgs
+    .filter((arg) => arg !== "-Once" && arg !== "-StopExisting")
+    .map(psSingleQuote)
+    .join(" ");
   const autostartScript = [
     "# Generated by: ai-battery hud autostart on",
     `$src = ${psSingleQuote(hudScript)}`,
@@ -511,7 +698,9 @@ function autostartEnable() {
     "try { Copy-Item $src $hud -Force -ErrorAction Stop } catch { }",
     `$battery = ${psSingleQuote(batteryCommand)}`,
     "$batteryB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($battery))",
-    "$invoke = '& ' + \"'\" + ($hud -replace \"'\", \"''\") + \"'\" + ' -BatteryCommandBase64 ' + $batteryB64" + (useWsl ? " + ' -UseWsl'" : ""),
+    "$invoke = '& ' + \"'\" + ($hud -replace \"'\", \"''\") + \"'\" + ' -BatteryCommandBase64 ' + $batteryB64"
+      + (autostartExtraArgs ? ` + ${psSingleQuote(` ${autostartExtraArgs}`)}` : "")
+      + (useWsl ? " + ' -UseWsl'" : ""),
     "$argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', ('\"' + ($invoke -replace '\"', '\\\"') + '\"')) -join ' '",
     "Start-Process -WindowStyle Hidden -FilePath 'powershell.exe' -ArgumentList $argList",
     ""
@@ -567,6 +756,9 @@ if (subcommand === "autostart") {
   process.exit(0);
 }
 
+const wasRunning = (!foreground && !once && !stop)
+  ? hudProcessStatus().startsWith("running ")
+  : false;
 const initialJson = stop ? null : prefetchInitialJson(batteryCommand, useWsl);
 const readyPath = (!useWsl && process.platform === "win32" && !foreground && !once && !stop)
   ? path.join(os.tmpdir(), `ai-battery-hud-ready-${process.pid}-${Date.now()}.json`)
@@ -629,7 +821,12 @@ if (useWsl) {
 if (readyPath && !waitForFile(readyPath)) {
   console.log("AI Battery HUD start requested, but no visible window was confirmed. Run: ai-battery hud --foreground");
 } else {
-  console.log("AI Battery HUD started. Drag it to place it; right-click and choose Exit to close.");
+  const detail = describeWindowsHudOptions(filteredArgs);
+  const action = wasRunning ? (detail ? "updated" : "restarted") : "started";
+  console.log(`AI Battery HUD ${action}${detail ? `: ${detail}` : ""}.`);
+  if (!wasRunning) {
+    console.log("Drag to move. Right-click to exit.");
+  }
 }
 if (readyPath) fs.rmSync(readyPath, { force: true });
 }
@@ -640,5 +837,8 @@ if (isDirectRun()) {
 
 export {
   macHudCommandMatches,
-  macHudPidsFromPsOutput
+  macHudPidsFromPsOutput,
+  describeWindowsHudOptions,
+  parseWindowsHudArgs,
+  windowsHudUsage
 };

@@ -272,6 +272,11 @@ Claude [battery:76] │ 5h 00:47 │ 7d 59%
 | `ai-battery hud -Once` | 콘솔에서 한 번만 출력합니다. |
 | `ai-battery hud -Interval 2` | 갱신 주기를 바꿉니다. |
 | `ai-battery hud -Mode tray` | Windows tray icon 모드로 실행합니다. macOS에서는 menu bar item이 기본입니다. |
+| `ai-battery hud light` / `ai-battery hud dark` | Windows floating HUD를 밝은 작업표시줄용 검은 글자 또는 어두운 작업표시줄용 흰 글자로 바꿉니다. |
+| `ai-battery hud black` / `ai-battery hud white` | 글자색을 직접 검은색 또는 흰색으로 바꿉니다. |
+| `ai-battery hud --backdrop` / `ai-battery hud --no-backdrop` | Windows floating HUD 글자 뒤 어두운 backing을 켜거나 끕니다. |
+
+Windows floating HUD는 기본적으로 투명 배경에 밝은 글자로 표시합니다. 밝은 작업표시줄에서는 `ai-battery hud light`, 어두운 작업표시줄에서는 `ai-battery hud dark`를 쓰면 됩니다. 글자색으로 직접 고르려면 `ai-battery hud black` 또는 `ai-battery hud white`를 쓰세요. 로그인 자동 실행에도 같은 모드를 저장하려면 `ai-battery hud autostart on light`처럼 붙이면 됩니다.
 
 Windows autostart는 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`에 사용자 단위로 등록됩니다. Windows native에서는 WSL 없이 바로 실행되고, WSL에서 등록한 경우에는 HUD 스크립트 사본을 `%LOCALAPPDATA%\ai-battery`에 둡니다. macOS autostart는 `~/Library/LaunchAgents/com.ai-battery.hud.plist`로 등록됩니다. ai-battery를 업데이트한 뒤에는 `ai-battery hud autostart on`을 다시 실행해 등록 경로를 갱신하세요.
 
