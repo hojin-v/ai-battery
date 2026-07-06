@@ -257,6 +257,8 @@ public static class AiBatteryNative {
   public const int ProcessPowerThrottling = 4;
   public const uint PROCESS_POWER_THROTTLING_CURRENT_VERSION = 1;
   public const uint PROCESS_POWER_THROTTLING_EXECUTION_SPEED = 0x1;
+  public const int PROCESS_PER_MONITOR_DPI_AWARE = 2;
+  public const int DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4;
   public const int OBJID_WINDOW = 0;
   public const int GWL_EXSTYLE = -20;
   public const int WS_EX_TRANSPARENT = 0x20;
@@ -281,6 +283,14 @@ public static class AiBatteryNative {
   public const UInt32 SWP_NOMOVE = 0x0002;
   public const UInt32 SWP_NOACTIVATE = 0x0010;
   public const UInt32 SWP_SHOWWINDOW = 0x0040;
+  [DllImport("user32.dll", SetLastError=true)]
+  public static extern bool SetProcessDPIAware();
+  [DllImport("shcore.dll")]
+  public static extern int SetProcessDpiAwareness(int value);
+  [DllImport("user32.dll", SetLastError=true)]
+  public static extern bool SetProcessDpiAwarenessContext(IntPtr dpiContext);
+  [DllImport("user32.dll")]
+  public static extern uint GetDpiForWindow(IntPtr hWnd);
   [DllImport("user32.dll")]
   public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")]
@@ -324,6 +334,30 @@ public static class AiBatteryNative {
 }
 "@
 Add-Type -TypeDefinition $nativeCode
+
+function Enable-HudDpiAwareness {
+  try {
+    $context = [IntPtr]::new([AiBatteryNative]::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
+    if ([AiBatteryNative]::SetProcessDpiAwarenessContext($context)) { return "per-monitor-v2" }
+  } catch {
+    # Fall through to older Windows APIs.
+  }
+
+  try {
+    if ([AiBatteryNative]::SetProcessDpiAwareness([AiBatteryNative]::PROCESS_PER_MONITOR_DPI_AWARE) -eq 0) { return "per-monitor" }
+  } catch {
+    # Fall through to system DPI awareness.
+  }
+
+  try {
+    if ([AiBatteryNative]::SetProcessDPIAware()) { return "system" }
+  } catch {
+    # DPI awareness is a quality improvement; the HUD can still run without it.
+  }
+
+  return "default"
+}
+$script:hudDpiAwareness = Enable-HudDpiAwareness
 
 function Disable-ProcessPowerThrottling {
   # When a fullscreen app is in the foreground, Windows applies EcoQoS power
@@ -685,7 +719,88 @@ if ($Once) {
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+try {
+  [System.Windows.Forms.Application]::SetHighDpiMode([System.Windows.Forms.HighDpiMode]::PerMonitorV2) | Out-Null
+} catch {
+  # Windows PowerShell/.NET Framework does not expose SetHighDpiMode; the
+  # native DPI awareness call above covers that runtime.
+}
 [System.Windows.Forms.Application]::EnableVisualStyles()
+try {
+  [System.Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false)
+} catch {
+  # The default is already GDI text rendering on older WinForms.
+}
+
+function Get-HudDpi {
+  try {
+    if ($form -and -not $form.IsDisposed -and $form.Handle -ne [IntPtr]::Zero) {
+      $windowDpi = [AiBatteryNative]::GetDpiForWindow($form.Handle)
+      if ($windowDpi -gt 0) { return [int]$windowDpi }
+    }
+  } catch {
+    # Fall back to the desktop graphics DPI below.
+  }
+
+  $graphics = $null
+  try {
+    $graphics = [System.Drawing.Graphics]::FromHwnd([IntPtr]::Zero)
+    if ($graphics.DpiX -gt 0) { return [int][math]::Round($graphics.DpiX) }
+  } catch {
+    # Use the WinForms baseline when the desktop DPI cannot be queried.
+  } finally {
+    if ($graphics) { $graphics.Dispose() }
+  }
+
+  return 96
+}
+
+function Update-HudDpiScale {
+  $dpi = [math]::Max(96, (Get-HudDpi))
+  $script:hudDpi = [int]$dpi
+  $script:hudScale = [double]$script:hudDpi / 96.0
+}
+
+function Scale-HudValue([double]$Value) {
+  if ($Value -eq 0) { return 0 }
+  $scaled = [int][math]::Round($Value * $script:hudScale)
+  if ($Value -gt 0) { return [math]::Max(1, $scaled) }
+  return $scaled
+}
+
+function New-HudPadding([int]$Left, [int]$Top, [int]$Right, [int]$Bottom) {
+  return [System.Windows.Forms.Padding]::new(
+    (Scale-HudValue $Left),
+    (Scale-HudValue $Top),
+    (Scale-HudValue $Right),
+    (Scale-HudValue $Bottom)
+  )
+}
+
+function New-HudBitmapSurface([int]$Width, [int]$Height) {
+  $scale = [math]::Max(1.0, [double]$script:hudScale)
+  $bitmapWidth = [math]::Max(1, [int][math]::Round($Width * $scale))
+  $bitmapHeight = [math]::Max(1, [int][math]::Round($Height * $scale))
+  $bitmap = [System.Drawing.Bitmap]::new($bitmapWidth, $bitmapHeight)
+  $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+  if ([math]::Abs($scale - 1.0) -gt 0.001) {
+    $graphics.ScaleTransform([single]$scale, [single]$scale)
+  }
+  return @{
+    Bitmap = $bitmap
+    Graphics = $graphics
+  }
+}
+
+function Test-HudTransparentSurface {
+  $value = $env:AI_BATTERY_HUD_TRANSPARENT
+  if (-not $value) { $value = $env:CLAUDEX_BATTERY_HUD_TRANSPARENT }
+  if (-not $value) { return $true }
+  $normalized = ([string]$value).Trim().ToLowerInvariant()
+  return -not (@("0", "false", "no", "off", "solid") -contains $normalized)
+}
+
+Update-HudDpiScale
 
 function Get-LineText($Parts) {
   return "$($Parts.Prefix)[battery]$($Parts.Suffix)"
@@ -724,8 +839,8 @@ function New-ProviderTrayIcon([string]$ProviderLabel, [Nullable[int]]$Percent, [
   $graphics.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
   $graphics.Clear([System.Drawing.Color]::Transparent)
 
-  $outlineColor = [System.Drawing.Color]::FromArgb(232, 232, 232)
-  $mutedColor = [System.Drawing.Color]::FromArgb(145, 145, 145)
+  $outlineColor = [System.Drawing.Color]::FromArgb(170, 170, 170)
+  $mutedColor = [System.Drawing.Color]::FromArgb(120, 120, 120)
   $activeOutlineColor = if ($Running) { $outlineColor } else { $mutedColor }
   $fillColor = if ($Running) { Get-PercentColor $Percent } else { $mutedColor }
   $textColor = if ($Running) { [System.Drawing.Color]::FromArgb(245, 245, 245) } else { $mutedColor }
@@ -786,8 +901,8 @@ function New-SingleBatteryTrayIcon([Nullable[int]]$Percent) {
   $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
   $graphics.Clear([System.Drawing.Color]::Transparent)
 
-  $outlineColor = [System.Drawing.Color]::FromArgb(232, 232, 232)
-  $mutedColor = [System.Drawing.Color]::FromArgb(145, 145, 145)
+  $outlineColor = [System.Drawing.Color]::FromArgb(170, 170, 170)
+  $mutedColor = [System.Drawing.Color]::FromArgb(120, 120, 120)
   $fillColor = Get-PercentColor $Percent
   $outlinePen = [System.Drawing.Pen]::new($(if ($null -eq $Percent) { $mutedColor } else { $outlineColor }), 2)
   $fillBrush = [System.Drawing.SolidBrush]::new($fillColor)
@@ -826,39 +941,43 @@ function New-SingleBatteryTrayIcon([Nullable[int]]$Percent) {
   return $icon
 }
 
-function New-BatteryImage([Nullable[int]]$Percent, [bool]$Running = $true, [int]$Width = 34, [int]$Height = 16) {
-  $bitmap = [System.Drawing.Bitmap]::new($Width, $Height)
-  $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+function New-BatteryImage([Nullable[int]]$Percent, [bool]$Running = $true, [int]$Width = 36, [int]$Height = 16, [bool]$DrawText = $true) {
+  $surface = New-HudBitmapSurface $Width $Height
+  $bitmap = $surface.Bitmap
+  $graphics = $surface.Graphics
   $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-  $graphics.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
+  $graphics.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::ClearTypeGridFit
+  $graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
   $graphics.Clear([System.Drawing.Color]::Transparent)
 
-  $outlineColor = [System.Drawing.Color]::FromArgb(232, 232, 232)
-  $mutedColor = [System.Drawing.Color]::FromArgb(145, 145, 145)
+  $outlineColor = [System.Drawing.Color]::FromArgb(170, 170, 170)
+  $mutedColor = [System.Drawing.Color]::FromArgb(120, 120, 120)
   $activeOutlineColor = if ($Running) { $outlineColor } else { $mutedColor }
   # The fill always keeps its charge color (matching the terminal bar);
   # running state is signalled by the outline and text colors instead.
   $fillColor = Get-PercentColor $Percent
-  $outlinePen = [System.Drawing.Pen]::new($(if ($null -eq $Percent) { $mutedColor } else { $activeOutlineColor }), 1.6)
+  $outlinePen = [System.Drawing.Pen]::new($(if ($null -eq $Percent) { $mutedColor } else { $activeOutlineColor }), 1.0)
   $fillBrush = [System.Drawing.SolidBrush]::new($fillColor)
   # A solid dark interior keeps the desktop from bleeding through the empty
   # part of the battery, so the percent text stays readable on any wallpaper.
   $interiorBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(46, 46, 46))
   $terminalBrush = [System.Drawing.SolidBrush]::new($(if ($null -eq $Percent) { $mutedColor } else { $activeOutlineColor }))
-  $textBrush = [System.Drawing.SolidBrush]::new($(if ($Running) { [System.Drawing.Color]::FromArgb(250, 250, 250) } else { [System.Drawing.Color]::FromArgb(210, 210, 210) }))
-  $textHaloBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb(200, 15, 15, 15))
-  $fontSize = if ($null -eq $Percent) { 7.8 } elseif ($Percent -ge 100) { 7.2 } else { 8.2 }
-  $batteryFont = [System.Drawing.Font]::new("Segoe UI", $fontSize, [System.Drawing.FontStyle]::Bold)
+  $textBrush = [System.Drawing.SolidBrush]::new($(if ($Running) { [System.Drawing.Color]::FromArgb(255, 255, 255) } else { [System.Drawing.Color]::FromArgb(235, 235, 235) }))
+  $batteryText = if ($null -eq $Percent) { "--" } else { [string][int]$Percent }
+  $fontSize = if ($batteryText.Length -ge 3) { 4.4 } elseif ($batteryText.Length -ge 2) { 5.1 } else { 5.8 }
+  $batteryFont = $null
   $centerFormat = [System.Drawing.StringFormat]::new()
   $centerFormat.Alignment = [System.Drawing.StringAlignment]::Center
   $centerFormat.LineAlignment = [System.Drawing.StringAlignment]::Center
+  $centerFormat.Trimming = [System.Drawing.StringTrimming]::None
+  $centerFormat.FormatFlags = [System.Drawing.StringFormatFlags]::NoWrap
 
   try {
     $bodyX = 1
     $bodyY = 3
     $bodyW = $Width - 6
     $bodyH = $Height - 6
-    $capW = 3
+    $capW = 2
     $capH = [math]::Max(4, [math]::Floor($bodyH / 2))
     $capY = $bodyY + [math]::Floor(($bodyH - $capH) / 2)
 
@@ -875,23 +994,26 @@ function New-BatteryImage([Nullable[int]]$Percent, [bool]$Running = $true, [int]
       if ($clamped -gt 0 -and $fillW -lt 2) { $fillW = 2 }
       $graphics.FillRectangle($fillBrush, $bodyX + 3, $bodyY + 3, $fillW, $bodyH - 5)
     }
-    $batteryText = if ($null -eq $Percent) { "--" } else { [string][int]$Percent }
-    $textRect = [System.Drawing.RectangleF]::new($bodyX + 2, $bodyY, $bodyW - 3, $bodyH + 1)
-    # A one-pixel dark halo keeps the number legible over the green/orange/red
-    # fill as well as over the dark empty region.
-    foreach ($shift in @(@(-1, 0), @(1, 0), @(0, -1), @(0, 1))) {
-      $haloRect = [System.Drawing.RectangleF]::new($textRect.X + $shift[0], $textRect.Y + $shift[1], $textRect.Width, $textRect.Height)
-      $graphics.DrawString($batteryText, $batteryFont, $textHaloBrush, $haloRect, $centerFormat)
+    if ($DrawText) {
+      $textRect = [System.Drawing.RectangleF]::new($bodyX + 3, $bodyY + 2.5, $bodyW - 6, $bodyH - 4)
+      do {
+        if ($batteryFont) { $batteryFont.Dispose() }
+        $fontFamily = if ($font) { $font.FontFamily.Name } else { "Segoe UI" }
+        $batteryFont = [System.Drawing.Font]::new($fontFamily, $fontSize, [System.Drawing.FontStyle]::Regular)
+        $textSize = $graphics.MeasureString($batteryText, $batteryFont)
+        if ($textSize.Width -le ($textRect.Width + 1) -or $fontSize -le 4.0) { break }
+        $fontSize -= 0.4
+      } while ($true)
+
+      $graphics.DrawString($batteryText, $batteryFont, $textBrush, $textRect, $centerFormat)
     }
-    $graphics.DrawString($batteryText, $batteryFont, $textBrush, $textRect, $centerFormat)
   } finally {
     $outlinePen.Dispose()
     $fillBrush.Dispose()
     $interiorBrush.Dispose()
     $terminalBrush.Dispose()
     $textBrush.Dispose()
-    $textHaloBrush.Dispose()
-    $batteryFont.Dispose()
+    if ($batteryFont) { $batteryFont.Dispose() }
     $centerFormat.Dispose()
     $graphics.Dispose()
   }
@@ -913,7 +1035,7 @@ function New-StatusMenuLabel($Font, [int]$Width, $Align = [System.Drawing.Conten
 
 function New-StatusMenuRow($Font) {
   $panel = New-Object System.Windows.Forms.FlowLayoutPanel
-  $panel.Width = 252
+  $panel.Width = 276
   $panel.Height = 22
   $panel.FlowDirection = [System.Windows.Forms.FlowDirection]::LeftToRight
   $panel.WrapContents = $false
@@ -923,14 +1045,14 @@ function New-StatusMenuRow($Font) {
 
   $name = New-StatusMenuLabel $Font 44
   $icon = New-Object System.Windows.Forms.PictureBox
-  $icon.Width = 36
+  $icon.Width = 40
   $icon.Height = 20
-  $icon.SizeMode = [System.Windows.Forms.PictureBoxSizeMode]::CenterImage
+  $icon.SizeMode = [System.Windows.Forms.PictureBoxSizeMode]::Zoom
   $icon.Margin = [System.Windows.Forms.Padding]::new(0)
   $icon.BackColor = [System.Drawing.SystemColors]::Menu
   $percent = New-StatusMenuLabel $Font 0 ([System.Drawing.ContentAlignment]::MiddleRight)
-  $reset = New-StatusMenuLabel $Font 58
-  $week = New-StatusMenuLabel $Font 50
+  $reset = New-StatusMenuLabel $Font 66
+  $week = New-StatusMenuLabel $Font 56
   $extra = New-StatusMenuLabel $Font 58
 
   foreach ($control in @($name, $icon, $percent, $reset, $week, $extra)) {
@@ -1091,16 +1213,21 @@ if ($Mode -eq "tray") {
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "AI Battery"
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
-$form.Width = $Width
-$form.Height = if ($Mode -eq "floating") { 44 } elseif ($Mode -eq "statusline") { 44 } else { 54 }
+$form.Width = Scale-HudValue $Width
+$form.Height = if ($Mode -eq "floating") { Scale-HudValue 44 } elseif ($Mode -eq "statusline") { Scale-HudValue 44 } else { Scale-HudValue 54 }
 $script:hudTwoRowHeight = $form.Height
-$script:hudOneRowHeight = [math]::Max(20, $form.Height - 18)
+$script:hudOneRowHeight = [math]::Max((Scale-HudValue 20), $form.Height - (Scale-HudValue 18))
 $form.TopMost = $true
 $form.ShowInTaskbar = $false
 $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
-$transparentBackColor = [System.Drawing.Color]::FromArgb(18, 18, 18)
-$form.BackColor = $transparentBackColor
-$form.TransparencyKey = $transparentBackColor
+$script:hudTransparentSurface = Test-HudTransparentSurface
+if ($script:hudTransparentSurface) {
+  $transparentBackColor = [System.Drawing.Color]::FromArgb(18, 18, 18)
+  $form.BackColor = $transparentBackColor
+  $form.TransparencyKey = $transparentBackColor
+} else {
+  $form.BackColor = [System.Drawing.Color]::FromArgb(24, 24, 24)
+}
 $form.Opacity = [math]::Max(0.2, [math]::Min(1.0, $Opacity))
 
 $font = [System.Drawing.Font]::new("Segoe UI", $(if ($Mode -eq "statusline") { 8.5 } else { 9 }), [System.Drawing.FontStyle]::Regular)
@@ -1112,9 +1239,9 @@ $panel.RowCount = 2
 $panel.ColumnCount = 1
 $panel.GrowStyle = [System.Windows.Forms.TableLayoutPanelGrowStyle]::FixedSize
 $panel.Padding = if ($Mode -eq "floating" -or $Mode -eq "statusline") {
-  [System.Windows.Forms.Padding]::new(6, 4, 2, 3)
+  New-HudPadding 6 4 2 3
 } else {
-  [System.Windows.Forms.Padding]::new(10, 7, 10, 6)
+  New-HudPadding 10 7 10 6
 }
 $panel.BackColor = $form.BackColor
 $panel.RowStyles.Add([System.Windows.Forms.RowStyle]::new([System.Windows.Forms.SizeType]::Percent, 50)) | Out-Null
@@ -1136,42 +1263,71 @@ function New-HudLabel([int]$RightMargin = 0) {
   $label = New-Object System.Windows.Forms.Label
   $label.AutoSize = $false
   $label.Width = 0
-  $label.Height = 18
+  $label.Height = Scale-HudValue 18
   $label.Font = $font
   $label.UseCompatibleTextRendering = $false
   $label.BackColor = $form.BackColor
-  $label.Margin = [System.Windows.Forms.Padding]::new(0, 0, $RightMargin, 0)
+  $label.Margin = New-HudPadding 0 0 $RightMargin 0
   $label.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
   return $label
 }
 
 function New-HudIconBox {
   $box = New-Object System.Windows.Forms.PictureBox
-  $box.Width = 36
-  $box.Height = 18
-  $box.SizeMode = [System.Windows.Forms.PictureBoxSizeMode]::CenterImage
+  $box.Width = Scale-HudValue 40
+  $box.Height = Scale-HudValue 18
+  $box.SizeMode = [System.Windows.Forms.PictureBoxSizeMode]::Zoom
   $box.BackColor = $form.BackColor
-  $box.Margin = [System.Windows.Forms.Padding]::new(0, 0, 2, 0)
+  $box.ForeColor = [System.Drawing.Color]::White
+  $box.Margin = New-HudPadding 0 0 2 0
+  $box.add_Paint({
+    param($sender, $event)
+    $text = [string]$sender.AccessibleName
+    if ([string]::IsNullOrWhiteSpace($text)) { return }
+
+    $drawFont = $null
+    $disposeDrawFont = $false
+    try {
+      $drawFont = $font
+      if (-not $drawFont) {
+        $drawFont = [System.Drawing.Font]::new("Segoe UI", 9, [System.Drawing.FontStyle]::Regular)
+        $disposeDrawFont = $true
+      }
+      $rect = [System.Drawing.Rectangle]::new(
+        (Scale-HudValue 2),
+        0,
+        [math]::Max(1, $sender.Width - (Scale-HudValue 4)),
+        $sender.Height
+      )
+      $flags = [System.Windows.Forms.TextFormatFlags]::HorizontalCenter -bor
+        [System.Windows.Forms.TextFormatFlags]::VerticalCenter -bor
+        [System.Windows.Forms.TextFormatFlags]::SingleLine -bor
+        [System.Windows.Forms.TextFormatFlags]::NoPadding
+      [System.Windows.Forms.TextRenderer]::DrawText($event.Graphics, $text, $drawFont, $rect, $sender.ForeColor, $flags)
+    } finally {
+      if ($disposeDrawFont -and $drawFont) { $drawFont.Dispose() }
+    }
+  })
   return $box
 }
 
 function New-HudLineIconBox {
   $box = New-Object System.Windows.Forms.PictureBox
-  $box.Width = 21
-  $box.Height = 18
+  $box.Width = Scale-HudValue 21
+  $box.Height = Scale-HudValue 18
   $box.SizeMode = [System.Windows.Forms.PictureBoxSizeMode]::CenterImage
   $box.BackColor = $form.BackColor
-  $box.Margin = [System.Windows.Forms.Padding]::new(3, 0, 0, 0)
+  $box.Margin = New-HudPadding 3 0 0 0
   return $box
 }
 
 function New-HudDivider {
   $divider = New-Object System.Windows.Forms.Panel
   $divider.AutoSize = $false
-  $divider.Width = 1
-  $divider.Height = 12
+  $divider.Width = Scale-HudValue 1
+  $divider.Height = Scale-HudValue 12
   $divider.BackColor = Get-DividerColor
-  $divider.Margin = [System.Windows.Forms.Padding]::new(4, 3, 4, 3)
+  $divider.Margin = New-HudPadding 4 3 4 3
   return $divider
 }
 
@@ -1194,10 +1350,10 @@ $claudeExtraLabel = New-HudLabel
 
 foreach ($label in @($codexPrefixLabel, $claudePrefixLabel)) {
   $label.AutoSize = $false
-  $label.Width = 48
+  $label.Width = Scale-HudValue 48
 }
 foreach ($label in @($codexIconLabel, $claudeIconLabel)) {
-  $label.Width = 38
+  $label.Width = Scale-HudValue 42
 }
 
 $codexHudControls = @($codexPrefixLabel, $codexIconLabel, $codexDivider1, $codexResetLabel, $codexDivider2, $codexWeekLabel, $codexExtraLabel)
@@ -1224,7 +1380,7 @@ $panel.Controls.Add($claudeRow, 0, 1) | Out-Null
 $form.Controls.Add($panel)
 
 $hitForm = $null
-if (-not $ClickThrough) {
+if ((-not $ClickThrough) -and $script:hudTransparentSurface) {
   $hitForm = New-Object System.Windows.Forms.Form
   $hitForm.Text = "AI Battery hit area"
   $hitForm.Width = $form.Width
@@ -1685,15 +1841,23 @@ function Stop-FullscreenEventHooks {
 
 function Set-HudBatteryImage($Box, [Nullable[int]]$Percent, [bool]$Running) {
   $oldImage = $Box.Image
-  $Box.Image = New-BatteryImage $Percent $Running
+  $Box.Image = New-BatteryImage $Percent $Running 36 16 $false
+  $Box.AccessibleName = if ($null -eq $Percent) { "--" } else { [string][int]$Percent }
+  $Box.ForeColor = if ($Running) {
+    [System.Drawing.Color]::FromArgb(255, 255, 255)
+  } else {
+    [System.Drawing.Color]::FromArgb(235, 235, 235)
+  }
   $Box.Visible = $true
   $Box.Tag = $true
+  $Box.Invalidate()
   if ($oldImage) { $oldImage.Dispose() }
 }
 
 function New-HudGlyphImage([string]$Kind, [System.Drawing.Color]$Color, [int]$Width = 21, [int]$Height = 18) {
-  $bitmap = [System.Drawing.Bitmap]::new($Width, $Height)
-  $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+  $surface = New-HudBitmapSurface $Width $Height
+  $bitmap = $surface.Bitmap
+  $graphics = $surface.Graphics
   $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
   $graphics.TextRenderingHint = [System.Drawing.Text.TextRenderingHint]::AntiAliasGridFit
   $graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
@@ -1831,7 +1995,11 @@ function Set-HudMetricLabel($Label, [string]$Value, [System.Drawing.Color]$Color
     $Label.Visible = $false
     $Label.Tag = $false
   } else {
-    $Label.Width = if ($null -ne $FixedWidth -and $FixedWidth -gt 0) { [int]$FixedWidth } else { (Get-LabelTextWidth $Label) + 1 }
+    $Label.Width = if ($null -ne $FixedWidth -and $FixedWidth -gt 0) {
+      [int]$FixedWidth
+    } else {
+      (Get-LabelTextWidth $Label) + (Scale-HudValue 1)
+    }
     $Label.Visible = $true
     $Label.Tag = $true
   }
@@ -1844,22 +2012,40 @@ function Set-HudDivider($Divider, [string]$Value) {
     $Divider.Tag = $false
   } else {
     $Divider.Visible = $true
-    $Divider.Width = 1
+    $Divider.Width = Scale-HudValue 1
     $Divider.Tag = $true
   }
 }
 
-function Set-HudParts($Parts, $PrefixLabel, $BatteryBox, $Divider1, $ResetLabel, $Divider2, $WeekLabel, $ExtraLabel) {
+function Get-HudTextWidth([string]$Value, $Font = $font) {
+  if ([string]::IsNullOrWhiteSpace($Value)) { return 0 }
+  return [System.Windows.Forms.TextRenderer]::MeasureText(
+    $Value,
+    $Font,
+    [System.Drawing.Size]::new(1000, 1000),
+    [System.Windows.Forms.TextFormatFlags]::NoPadding
+  ).Width
+}
+
+function Get-SharedHudColumnWidth([string[]]$Values, [int]$Minimum = 0) {
+  $width = Scale-HudValue $Minimum
+  foreach ($value in $Values) {
+    $width = [math]::Max($width, (Get-HudTextWidth $value) + (Scale-HudValue 1))
+  }
+  return [int]$width
+}
+
+function Set-HudParts($Parts, $PrefixLabel, $BatteryBox, $Divider1, $ResetLabel, $Divider2, $WeekLabel, $ExtraLabel, [Nullable[int]]$ResetWidth = $null, [Nullable[int]]$WeekWidth = $null) {
   $PrefixLabel.Text = $Parts.Prefix
   $PrefixLabel.ForeColor = $Parts.TextColor
-  $PrefixLabel.Width = 48
+  $PrefixLabel.Width = Scale-HudValue 48
   $PrefixLabel.Visible = $true
   $PrefixLabel.Tag = $true
   Set-HudBatteryImage $BatteryBox $Parts.Percent $Parts.Running
   Set-HudDivider $Divider1 $Parts.ResetValue
-  Set-HudMetricLabel $ResetLabel $Parts.ResetValue $Parts.TextColor 52
+  Set-HudMetricLabel $ResetLabel $Parts.ResetValue $Parts.TextColor $ResetWidth
   Set-HudDivider $Divider2 $Parts.WeekValue
-  Set-HudMetricLabel $WeekLabel $Parts.WeekValue $Parts.TextColor 52
+  Set-HudMetricLabel $WeekLabel $Parts.WeekValue $Parts.TextColor $WeekWidth
   Set-HudMetricLabel $ExtraLabel $Parts.ExtraText $Parts.TextColor
 }
 
@@ -1906,8 +2092,8 @@ function Resize-HudToContent {
   $contentWidth = [math]::Max($codexWidth, $claudeWidth)
   $desiredWidth = $panel.Padding.Left + $panel.Padding.Right +
     $contentWidth +
-    1
-  $desiredWidth = [math]::Max(150, [int][math]::Ceiling($desiredWidth))
+    (Scale-HudValue 1)
+  $desiredWidth = [math]::Max((Scale-HudValue 150), [int][math]::Ceiling($desiredWidth))
 
   $bothRows = $script:codexRowVisible -and $script:claudeRowVisible
   $desiredHeight = [int]$(if ($bothRows) { $script:hudTwoRowHeight } else { $script:hudOneRowHeight })
@@ -1936,7 +2122,7 @@ function Resize-HudToContent {
 function Show-HudMessage([string]$Message) {
   $codexPrefixLabel.Text = $Message
   $codexPrefixLabel.ForeColor = [System.Drawing.Color]::FromArgb(145, 145, 145)
-  $codexPrefixLabel.Width = (Get-LabelTextWidth $codexPrefixLabel) + 1
+  $codexPrefixLabel.Width = (Get-LabelTextWidth $codexPrefixLabel) + (Scale-HudValue 1)
   $codexPrefixLabel.Visible = $true
   $codexPrefixLabel.Tag = $true
   foreach ($label in @($codexResetLabel, $codexWeekLabel, $codexExtraLabel, $claudePrefixLabel, $claudeResetLabel, $claudeWeekLabel, $claudeExtraLabel)) {
@@ -1974,16 +2160,28 @@ function Update-HudFromSnapshot($Snapshot) {
     $texts = ConvertTo-HudTexts $Snapshot
     $script:codexRowVisible = [bool]$texts.CodexVisible
     $script:claudeRowVisible = [bool]$texts.ClaudeVisible
+    $resetValues = @()
+    $weekValues = @()
+    if ($texts.CodexVisible) {
+      if ($texts.Codex.ResetValue) { $resetValues += $texts.Codex.ResetValue }
+      if ($texts.Codex.WeekValue) { $weekValues += $texts.Codex.WeekValue }
+    }
+    if ($texts.ClaudeVisible) {
+      if ($texts.Claude.ResetValue) { $resetValues += $texts.Claude.ResetValue }
+      if ($texts.Claude.WeekValue) { $weekValues += $texts.Claude.WeekValue }
+    }
+    $resetWidth = Get-SharedHudColumnWidth $resetValues
+    $weekWidth = Get-SharedHudColumnWidth $weekValues
     if ($texts.CodexVisible) {
       $codexRow.Visible = $true
-      Set-HudParts $texts.Codex $codexPrefixLabel $codexIconLabel $codexDivider1 $codexResetLabel $codexDivider2 $codexWeekLabel $codexExtraLabel
+      Set-HudParts $texts.Codex $codexPrefixLabel $codexIconLabel $codexDivider1 $codexResetLabel $codexDivider2 $codexWeekLabel $codexExtraLabel $resetWidth $weekWidth
     } else {
       $codexRow.Visible = $false
       Set-HudControlsVisible $codexHudControls $false
     }
     if ($texts.ClaudeVisible) {
       $claudeRow.Visible = $true
-      Set-HudParts $texts.Claude $claudePrefixLabel $claudeIconLabel $claudeDivider1 $claudeResetLabel $claudeDivider2 $claudeWeekLabel $claudeExtraLabel
+      Set-HudParts $texts.Claude $claudePrefixLabel $claudeIconLabel $claudeDivider1 $claudeResetLabel $claudeDivider2 $claudeWeekLabel $claudeExtraLabel $resetWidth $weekWidth
     } else {
       $claudeRow.Visible = $false
       Set-HudControlsVisible $claudeHudControls $false
