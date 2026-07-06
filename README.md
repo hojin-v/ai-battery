@@ -1,5 +1,7 @@
 # AI Battery
 
+[한국어](README.md) · [English](README.en.md) · [日本語](README.ja.md) · [中文](README.zh.md) · [Español](README.es.md)
+
 Codex and Claude Usage Battery Meter
 
 Codex와 Claude Code의 남은 사용량을 배터리처럼 확인하는 터미널 상태 표시 도구입니다.
