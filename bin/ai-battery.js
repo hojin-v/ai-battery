@@ -1605,7 +1605,7 @@ function diagnoseCodex() {
     notes.push("rowpty.exe not found, so the Codex bottom row uses the overlay fallback. Run: ai-battery setup codex (compiles it locally with the in-box csc.exe).");
   }
   if (rowpty && rowptyInfo?.bundledConptyRequested && !rowptyInfo.bundledConpty) {
-    notes.push("Bundled ConPTY was requested, but conpty.dll is not next to rowpty.exe. Run: ai-battery setup codex with the node-pty package installed, or unset AI_BATTERY_ROWPTY_CONPTY to use the faster OS ConPTY default.");
+    notes.push("Bundled ConPTY was requested, but conpty.dll is not next to rowpty.exe. Run: ai-battery setup codex with the node-pty package installed, or unset AI_BATTERY_ROWPTY_CONPTY to use the faster OS ConPTY provider.");
   }
   if (wrapperInstalled && process.platform !== "win32" && !python3) {
     notes.push("Codex wrapper needs python3 for the POSIX PTY row. Install Python 3, then run plain \"codex\" again.");
@@ -2415,10 +2415,33 @@ function listWindowsProcessCommands() {
       .split(/\r?\n/)
       .map((line) => line.trim())
       .filter(Boolean)
-      .map((cmdline) => ({ cmdline, hasTty: true }));
+      .map((cmdline) => ({ cmdline, hasTty: true, source: "windows" }));
   } catch {
     return null;
   }
+}
+
+function decodeCommandOutput(buffer) {
+  return Buffer.from(buffer || "")
+    .toString("utf8")
+    .replace(/\0/g, "");
+}
+
+function parseTtyProcessListOutput(output, source = null) {
+  return String(output || "")
+    .split(/\r?\n/)
+    .map((line) => {
+      const trimmed = line.trim();
+      const space = trimmed.indexOf(" ");
+      if (space < 0) return null;
+      const tty = trimmed.slice(0, space);
+      const cmdline = trimmed.slice(space + 1).trim();
+      if (!cmdline) return null;
+      const proc = { cmdline, hasTty: tty !== "??" && tty !== "-" };
+      if (source) proc.source = source;
+      return proc;
+    })
+    .filter(Boolean);
 }
 
 function listDarwinProcessCommands() {
@@ -2429,21 +2452,59 @@ function listDarwinProcessCommands() {
       timeout: 1500,
       maxBuffer: 4 * 1024 * 1024
     });
+    return parseTtyProcessListOutput(output);
+  } catch {
+    return [];
+  }
+}
+
+function runningWslDistros() {
+  if (process.platform !== "win32") return [];
+  try {
+    const output = decodeCommandOutput(execFileSync("wsl.exe", [
+      "--list",
+      "--running",
+      "--quiet"
+    ], {
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 1000,
+      maxBuffer: 256 * 1024,
+      windowsHide: true
+    }));
     return output
-      .split("\n")
-      .map((line) => {
-        const trimmed = line.trim();
-        const space = trimmed.indexOf(" ");
-        if (space < 0) return null;
-        const tty = trimmed.slice(0, space);
-        const cmdline = trimmed.slice(space + 1).trim();
-        if (!cmdline) return null;
-        return { cmdline, hasTty: tty !== "??" && tty !== "-" };
-      })
+      .split(/\r?\n/)
+      .map((line) => line.trim())
       .filter(Boolean);
   } catch {
     return [];
   }
+}
+
+function listWslProcessCommands() {
+  const distros = runningWslDistros();
+  if (!distros.length) return [];
+
+  const commands = [];
+  for (const distro of distros) {
+    try {
+      const output = decodeCommandOutput(execFileSync("wsl.exe", [
+        "--distribution",
+        distro,
+        "bash",
+        "-lc",
+        "ps -axo tty=,args="
+      ], {
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: 1500,
+        maxBuffer: 4 * 1024 * 1024,
+        windowsHide: true
+      }));
+      commands.push(...parseTtyProcessListOutput(output, "wsl"));
+    } catch {
+      // A distro can exit between --list --running and the process query.
+    }
+  }
+  return commands;
 }
 
 function listProcProcessCommands() {
@@ -2486,14 +2547,21 @@ function scanProcessCommands() {
   if (process.platform === "win32") {
     // Spawning PowerShell for the process list is the slow part on Windows, so
     // share one recent scan between the HUD, statusline, and watch invocations.
+    // Windows and WSL draw on the same desktop, so include running WSL distros
+    // when they are already up; --list --running avoids starting WSL just to
+    // satisfy a HUD refresh.
     const cached = readScanCache("windows-processes", scanCacheSeconds(3));
     if (cached) {
       commands = Array.isArray(cached.value) ? cached.value : [];
     } else {
-      commands = listWindowsProcessCommands();
-      if (commands === null) {
+      const windowsCommands = listWindowsProcessCommands();
+      if (windowsCommands === null) {
         commands = readJson(scanCachePath("windows-processes"))?.value ?? [];
       } else {
+        commands = [
+          ...windowsCommands,
+          ...listWslProcessCommands()
+        ];
         writeScanCache("windows-processes", commands);
       }
     }
@@ -2501,6 +2569,15 @@ function scanProcessCommands() {
     commands = listDarwinProcessCommands();
   } else {
     commands = listProcProcessCommands();
+    if (isWsl()) {
+      // WSL shares a visible desktop with native Windows apps. Pull in the
+      // Windows process list too, while keeping the Linux /proc scan as the
+      // source for WSL TTY ownership.
+      commands = [
+        ...commands,
+        ...(listWindowsProcessCommands() || [])
+      ];
+    }
   }
 
   processScanMemo = { at: Date.now(), commands };
@@ -2511,6 +2588,7 @@ function providerRunningInProcesses(provider, processes, platform = process.plat
   const needsTty = platform !== "win32";
   return processes.some((proc) => {
     if (!commandMatchesProvider(proc.cmdline, provider)) return false;
+    if (proc.source === "wsl" && proc.hasTty === false) return false;
     if (!needsTty) return true;
     if (proc.hasTty === undefined) proc.hasTty = processHasControllingTty(proc.pid);
     return proc.hasTty;
@@ -4588,6 +4666,7 @@ export {
   extractExistingStatusRight,
   installTmuxStatus,
   normalizeLimit,
+  parseTtyProcessListOutput,
   removeAiBatteryTmuxBlock,
   runningOverrideForProvider,
   tmuxStatusBarActive,

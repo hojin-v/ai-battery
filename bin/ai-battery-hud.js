@@ -687,12 +687,31 @@ function hudProcessStatus() {
 }
 
 function autostartStatus() {
-  const result = runPowerShell(
-    `$v = (Get-ItemProperty -Path '${AUTOSTART_REG_PATH}' -Name '${AUTOSTART_REG_NAME}' -ErrorAction SilentlyContinue).${AUTOSTART_REG_NAME}; `
-    + "if ($v) { 'on'; $v } else { 'off' }"
-  );
+  const result = runPowerShell([
+    `$v = (Get-ItemProperty -Path '${AUTOSTART_REG_PATH}' -Name '${AUTOSTART_REG_NAME}' -ErrorAction SilentlyContinue).${AUTOSTART_REG_NAME}`,
+    "$source = ''",
+    "$auto = Join-Path $env:LOCALAPPDATA 'ai-battery\\autostart.ps1'",
+    "if (Test-Path $auto) { "
+      + "$text = Get-Content -Raw -Path $auto; "
+      + "if ($text -like '*-UseWsl*' -or $text -like '*wsl.exe*') { $source = 'WSL' } "
+      + "elseif ($text -like '*ai-battery-hud.ps1*') { $source = 'Windows' } "
+      + "}",
+    "if (-not $source -and $v -like '*-UseWsl*') { $source = 'WSL' }",
+    "if (-not $source -and $v) { $source = 'Windows' }",
+    "if ($v) { 'on'; $source; $v } else { 'off' }"
+  ].join("; "));
   const lines = (result.stdout || "").trim().split(/\r?\n/);
-  return { enabled: lines[0] === "on", command: lines.slice(1).join("\n") || null };
+  const enabled = lines[0] === "on";
+  return {
+    enabled,
+    source: enabled ? (lines[1] || null) : null,
+    command: enabled ? (lines.slice(2).join("\n") || null) : null
+  };
+}
+
+function autostartStatusLabel(auto) {
+  if (!auto.enabled) return "off";
+  return `on${auto.source ? ` (${auto.source})` : ""}`;
 }
 
 function autostartEnable() {
@@ -742,7 +761,7 @@ function autostartDisable() {
 if (subcommand === "status") {
   const auto = autostartStatus();
   console.log(`HUD: ${hudProcessStatus()}`);
-  console.log(`Autostart: ${auto.enabled ? "on" : "off"}`);
+  console.log(`Autostart: ${autostartStatusLabel(auto)}`);
   if (auto.command) console.log(`  ${auto.command}`);
   process.exit(0);
 }
@@ -756,15 +775,16 @@ if (subcommand === "autostart") {
       if ((result.stderr || "").trim()) console.error((result.stderr || "").trim());
       process.exit(1);
     }
-    console.log("HUD autostart enabled: launches at Windows sign-in.");
+    console.log(`HUD autostart enabled: launches at Windows sign-in (${useWsl ? "WSL" : "Windows"}).`);
     console.log(`Launcher: ${output}`);
+    console.log("Windows and WSL use the same Run entry; enabling from the other side replaces this launcher.");
     console.log("After updating ai-battery, run \"ai-battery hud autostart on\" again to refresh it.");
   } else if (autostartAction === "off") {
     autostartDisable();
     console.log("HUD autostart disabled.");
   } else {
     const auto = autostartStatus();
-    console.log(`Autostart: ${auto.enabled ? "on" : "off"}`);
+    console.log(`Autostart: ${autostartStatusLabel(auto)}`);
     if (auto.command) console.log(`  ${auto.command}`);
   }
   process.exit(0);

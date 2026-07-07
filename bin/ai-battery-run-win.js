@@ -226,6 +226,8 @@ function rowptySpawnEnv() {
   const mode = rowptyConptyMode();
   if (mode === "bundled") {
     delete env.ROWPTY_NO_CONPTY_DLL;
+  } else if (mode === "auto") {
+    delete env.ROWPTY_NO_CONPTY_DLL;
   } else if (mode === "os" && (explicitMode || (!env.ROWPTY_NO_CONPTY_DLL && !env.ROWPTY_CONPTY_DLL))) {
     env.ROWPTY_NO_CONPTY_DLL = "1";
   }

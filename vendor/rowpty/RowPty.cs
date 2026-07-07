@@ -101,6 +101,7 @@ internal sealed class RowPty
 
     private int currentCols = 80;
     private int currentRows = 24;
+    private int hostScrollBottom = -1;
     private int paintedStatusVersion = -1;
     private string lastPaintedLine = null;
     private int lastPaintedRow = -1;
@@ -149,6 +150,7 @@ internal sealed class RowPty
         {
             throw new Win32Exception(Marshal.GetLastWin32Error(), "GetConsoleScreenBufferInfo failed");
         }
+        ApplyHostScrollRegion();
         ResolveConptyProvider();
         CreatePseudoConsoleAndChild();
         StartThreads();
@@ -561,6 +563,7 @@ internal sealed class RowPty
                         this.currentCols = cols;
                         this.currentRows = rows;
                         this.resizePseudoConsoleProvider(this.hPseudoConsole, MakeSize(cols, ChildRows(rows)));
+                        ApplyHostScrollRegion();
                         if (childOutputSeenNow)
                         {
                             RequestStatusFetch(MaxStatusWidth(cols));
@@ -1254,6 +1257,47 @@ internal sealed class RowPty
         return coord;
     }
 
+    private void ApplyHostScrollRegion()
+    {
+        if (!this.outputConfigured || this.hStdOut == IntPtr.Zero)
+        {
+            return;
+        }
+
+        int bottom = ChildRows(this.currentRows);
+        if (bottom < 1)
+        {
+            bottom = 1;
+        }
+        if (bottom == this.hostScrollBottom)
+        {
+            return;
+        }
+
+        string sequence = "\u001b7\u001b[1;" + bottom.ToString(CultureInfo.InvariantCulture) + "r\u001b8";
+        byte[] bytes = Encoding.UTF8.GetBytes(sequence);
+        lock (this.consoleLock)
+        {
+            WriteAll(this.hStdOut, bytes, bytes.Length);
+        }
+        this.hostScrollBottom = bottom;
+    }
+
+    private void ResetHostScrollRegion()
+    {
+        if (!this.outputConfigured || this.hStdOut == IntPtr.Zero)
+        {
+            return;
+        }
+
+        byte[] bytes = Encoding.UTF8.GetBytes("\u001b7\u001b[r\u001b8");
+        lock (this.consoleLock)
+        {
+            WriteAll(this.hStdOut, bytes, bytes.Length);
+        }
+        this.hostScrollBottom = -1;
+    }
+
     private static string BuildCommandLine(string[] args)
     {
         StringBuilder builder = new StringBuilder();
@@ -1721,6 +1765,7 @@ internal sealed class RowPty
         JoinThread(this.outputThread, 500);
         JoinThread(this.statusThread, 2000);
 
+        ResetHostScrollRegion();
         ClearStatusRow();
 
         if (this.consoleStateSaved)

@@ -20,6 +20,7 @@ import {
   installRowPtyHost,
   installTmuxStatus,
   normalizeLimit,
+  parseTtyProcessListOutput,
   removeAiBatteryTmuxBlock,
   runningOverrideForProvider,
   tmuxStatusBarActive,
@@ -708,6 +709,23 @@ test("provider running state requires a foreground TTY off Windows", () => {
   assert.equal(providerRunningInProcesses("codex", [commands[0]], "win32"), true);
 });
 
+test("provider running state accepts Windows and WSL process rows", () => {
+  const wslRows = parseTtyProcessListOutput([
+    "pts/1 node /usr/local/lib/node_modules/@openai/codex/bin/codex.js",
+    "?? node /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js"
+  ].join("\n"), "wsl");
+
+  assert.deepEqual(wslRows, [
+    { cmdline: "node /usr/local/lib/node_modules/@openai/codex/bin/codex.js", hasTty: true, source: "wsl" },
+    { cmdline: "node /usr/local/lib/node_modules/@anthropic-ai/claude-code/cli.js", hasTty: false, source: "wsl" }
+  ]);
+  assert.equal(providerRunningInProcesses("codex", wslRows, "win32"), true);
+  assert.equal(providerRunningInProcesses("claude", wslRows, "win32"), false);
+  assert.equal(providerRunningInProcesses("claude", [
+    { cmdline: "C:\\Users\\me\\AppData\\Roaming\\npm\\claude.cmd", hasTty: true, source: "windows" }
+  ], "linux"), true);
+});
+
 test("tmux status block installs, updates in place, and uninstalls cleanly", { skip: process.platform === "win32" ? "POSIX-only" : false }, (t) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
   t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
@@ -886,7 +904,8 @@ test("rowpty spawn defaults to the OS ConPTY provider for faster startup", () =>
 
   const auto = withEnv({
     ...clean,
-    AI_BATTERY_ROWPTY_CONPTY: "auto"
+    AI_BATTERY_ROWPTY_CONPTY: "auto",
+    ROWPTY_NO_CONPTY_DLL: "1"
   }, () => ({ mode: rowptyConptyMode(), env: rowptySpawnEnv() }));
   assert.equal(auto.mode, "auto");
   assert.equal(auto.env.ROWPTY_NO_CONPTY_DLL, undefined);
