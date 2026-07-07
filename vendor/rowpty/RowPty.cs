@@ -1,4 +1,4 @@
-// Vendored from the rowpty project (commit 9a55775). Do not edit here -
+// Vendored from the rowpty project (commit 1c2605c). Do not edit here -
 // change it upstream in Projects/rowpty and run: node scripts/sync-rowpty.mjs
 // "ai-battery setup" compiles this file on the user machine with the in-box
 // .NET Framework csc.exe so no unsigned binary ships in the npm package.
