@@ -50,6 +50,7 @@ import {
   quoteWindowsCommandLineArg,
   rowptyConptyMode,
   rowptyExePath,
+  rowptyPreserveScrollback,
   rowptySpawnEnv,
   rowptyStatusCommand,
   statusOutputText,
@@ -88,6 +89,42 @@ function withEnv(values, callback) {
         process.env[key] = value;
       }
     }
+  }
+}
+
+function spawnNode(args, options = {}) {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-node-"));
+  const stdinPath = path.join(tmpDir, "stdin");
+  const stdoutPath = path.join(tmpDir, "stdout");
+  const stderrPath = path.join(tmpDir, "stderr");
+  let stdinWriteFd = null;
+  let stdinReadFd = null;
+  const stdoutFd = fs.openSync(stdoutPath, "w");
+  const stderrFd = fs.openSync(stderrPath, "w");
+  try {
+    const { input, stdio, ...spawnOptions } = options;
+    if (input !== undefined) {
+      stdinWriteFd = fs.openSync(stdinPath, "w");
+      fs.writeFileSync(stdinWriteFd, input);
+      fs.closeSync(stdinWriteFd);
+      stdinWriteFd = null;
+      stdinReadFd = fs.openSync(stdinPath, "r");
+    }
+    const result = spawnSync(process.execPath, args, {
+      ...spawnOptions,
+      stdio: [stdinReadFd ?? "ignore", stdoutFd, stderrFd]
+    });
+    return {
+      ...result,
+      stdout: fs.readFileSync(stdoutPath, "utf8"),
+      stderr: fs.readFileSync(stderrPath, "utf8")
+    };
+  } finally {
+    if (stdinReadFd !== null) fs.closeSync(stdinReadFd);
+    if (stdinWriteFd !== null) fs.closeSync(stdinWriteFd);
+    fs.closeSync(stdoutFd);
+    fs.closeSync(stderrFd);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 }
 
@@ -233,7 +270,7 @@ test("menu bar image renderer writes an SVG with provider icons", (t) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
   t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
-  const result = spawnSync(process.execPath, [CLI_PATH, "--active-provider", "codex", "--menu-bar-image"], {
+  const result = spawnNode([CLI_PATH, "--active-provider", "codex", "--menu-bar-image"], {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -289,7 +326,7 @@ test("menu detail image renderer writes connected color bars", (t) => {
     }
   })}\n`);
 
-  const result = spawnSync(process.execPath, [CLI_PATH, "--provider", "claude", "--active-provider", "claude", "--menu-detail-image"], {
+  const result = spawnNode([CLI_PATH, "--provider", "claude", "--active-provider", "claude", "--menu-detail-image"], {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -312,6 +349,136 @@ test("menu detail image renderer writes connected color bars", (t) => {
   assert.doesNotMatch(svg, /[█░▰▱]/);
   assert.match(svg, /#FF9F0A/);
   assert.match(svg, /5h [0-9:-]+ · 7d 63%/);
+});
+
+test("Claude capture keeps pane rate limits on the canonical account snapshot", (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const stateDir = path.join(tmpDir, "state");
+  fs.mkdirSync(stateDir, { recursive: true });
+  const resetAt = Math.floor((Date.now() + (90 * 60 * 1000)) / 1000);
+  fs.writeFileSync(path.join(stateDir, "claude-statusline.json"), `${JSON.stringify({
+    version: 1,
+    provider: "claude",
+    sourceType: "statusline",
+    capturedAt: new Date(Date.now() - 1000).toISOString(),
+    sessionId: "pane-a",
+    rateLimits: {
+      fiveHour: {
+        used_percentage: 70,
+        resets_at: resetAt,
+        window_minutes: 300
+      },
+      sevenDay: {
+        used_percentage: 42,
+        resets_at: resetAt,
+        window_minutes: 10080
+      }
+    }
+  })}\n`);
+
+  const input = {
+    session_id: "pane-b",
+    model: { display_name: "Sonnet" },
+    terminal: { columns: 100 },
+    context_window: { remaining_percentage: 83 },
+    rate_limits: {
+      five_hour: {
+        used_percentage: 20,
+        resets_at: resetAt,
+        window_minutes: 300
+      },
+      seven_day: {
+        used_percentage: 10,
+        resets_at: resetAt,
+        window_minutes: 10080
+      }
+    }
+  };
+  const result = spawnNode([
+    CLI_PATH,
+    "capture-claude",
+    "--provider", "claude",
+    "--no-header",
+    "--muted"
+  ], {
+    input: `${JSON.stringify(input)}\n`,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: tmpDir,
+      AI_BATTERY_STATE_DIR: stateDir
+    },
+    timeout: 5000
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const plain = result.stdout.replace(/\x1b\[[0-9;]*m/g, "");
+  assert.match(plain, /Claude\b.*30%/);
+  assert.doesNotMatch(plain, /Claude\b.*80%/);
+
+  const sessionCache = JSON.parse(fs.readFileSync(path.join(stateDir, "claude-statusline-sessions", "pane-b.json"), "utf8"));
+  assert.equal(sessionCache.rateLimits.fiveHour.used_percentage, 70);
+  assert.equal(sessionCache.rateLimits.sevenDay.used_percentage, 42);
+});
+
+test("Claude status cache reads the canonical global snapshot before newer pane caches", (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const stateDir = path.join(tmpDir, "state");
+  const sessionsDir = path.join(stateDir, "claude-statusline-sessions");
+  fs.mkdirSync(sessionsDir, { recursive: true });
+  const resetAt = Math.floor((Date.now() + (90 * 60 * 1000)) / 1000);
+  const baseSnapshot = {
+    version: 1,
+    provider: "claude",
+    sourceType: "statusline",
+    rateLimits: {
+      fiveHour: {
+        resets_at: resetAt,
+        window_minutes: 300
+      },
+      sevenDay: {
+        resets_at: resetAt,
+        window_minutes: 10080
+      }
+    }
+  };
+  fs.writeFileSync(path.join(stateDir, "claude-statusline.json"), `${JSON.stringify({
+    ...baseSnapshot,
+    capturedAt: new Date(Date.now() - 5000).toISOString(),
+    sessionId: "global",
+    rateLimits: {
+      fiveHour: { ...baseSnapshot.rateLimits.fiveHour, used_percentage: 70 },
+      sevenDay: { ...baseSnapshot.rateLimits.sevenDay, used_percentage: 42 }
+    }
+  })}\n`);
+  fs.writeFileSync(path.join(sessionsDir, "newer-pane.json"), `${JSON.stringify({
+    ...baseSnapshot,
+    capturedAt: new Date().toISOString(),
+    sessionId: "newer-pane",
+    rateLimits: {
+      fiveHour: { ...baseSnapshot.rateLimits.fiveHour, used_percentage: 20 },
+      sevenDay: { ...baseSnapshot.rateLimits.sevenDay, used_percentage: 10 }
+    }
+  })}\n`);
+
+  const result = spawnNode([CLI_PATH, "--provider", "claude", "--json"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: tmpDir,
+      AI_BATTERY_STATE_DIR: stateDir
+    },
+    timeout: 5000
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const snapshot = JSON.parse(result.stdout);
+  const claude = snapshot.results.find((entry) => entry.provider === "claude");
+  assert.equal(claude.percentRemaining, 30);
+  assert.equal(claude.primary.usedPercent, 70);
+  assert.equal(path.basename(claude.source), "claude-statusline.json");
 });
 
 test("macOS menu images dim inactive providers without activity badges", (t) => {
@@ -402,7 +569,7 @@ test("Codex App session metadata marks usage updates as background", (t) => {
     ""
   ].join("\n"));
 
-  const result = spawnSync(process.execPath, [CLI_PATH, "--provider", "codex", "--json"], {
+  const result = spawnNode([CLI_PATH, "--provider", "codex", "--json"], {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -883,11 +1050,16 @@ test("rowpty spawn defaults to the OS ConPTY provider for faster startup", () =>
   const clean = {
     AI_BATTERY_ROWPTY_CONPTY: undefined,
     CLAUDEX_BATTERY_ROWPTY_CONPTY: undefined,
+    AI_BATTERY_ROWPTY_PRESERVE_SCROLLBACK: undefined,
+    CLAUDEX_BATTERY_ROWPTY_PRESERVE_SCROLLBACK: undefined,
+    ROWPTY_PRESERVE_SCROLLBACK: undefined,
     ROWPTY_NO_CONPTY_DLL: undefined,
     ROWPTY_CONPTY_DLL: undefined
   };
   assert.equal(withEnv(clean, () => rowptyConptyMode()), "os");
   assert.equal(withEnv(clean, () => rowptySpawnEnv().ROWPTY_NO_CONPTY_DLL), "1");
+  assert.equal(withEnv(clean, () => rowptyPreserveScrollback()), true);
+  assert.equal(withEnv(clean, () => rowptySpawnEnv().ROWPTY_PRESERVE_SCROLLBACK), "1");
 
   assert.equal(withEnv({
     ...clean,
@@ -909,6 +1081,15 @@ test("rowpty spawn defaults to the OS ConPTY provider for faster startup", () =>
   }, () => ({ mode: rowptyConptyMode(), env: rowptySpawnEnv() }));
   assert.equal(auto.mode, "auto");
   assert.equal(auto.env.ROWPTY_NO_CONPTY_DLL, undefined);
+
+  assert.equal(withEnv({
+    ...clean,
+    AI_BATTERY_ROWPTY_PRESERVE_SCROLLBACK: "off"
+  }, () => rowptyPreserveScrollback()), false);
+  assert.equal(withEnv({
+    ...clean,
+    AI_BATTERY_ROWPTY_PRESERVE_SCROLLBACK: "off"
+  }, () => rowptySpawnEnv().ROWPTY_PRESERVE_SCROLLBACK), "0");
 });
 
 test("Windows ConPTY repaint interval and clear-screen detection are bounded", () => {
@@ -1313,7 +1494,7 @@ test("setup codex configures Codex built-in status_line and uninstall restores i
     PATH: `${originalDir}${path.delimiter}${process.env.PATH || ""}`
   };
 
-  const setup = spawnSync(process.execPath, [CLI_PATH, "setup", "codex", "--json"], {
+  const setup = spawnNode([CLI_PATH, "setup", "codex", "--json"], {
     encoding: "utf8",
     env,
     timeout: 5000
@@ -1326,7 +1507,7 @@ test("setup codex configures Codex built-in status_line and uninstall restores i
   assert.equal(codexStatusLineMatches(configuredToml), true);
   assert.doesNotMatch(configuredToml, /context-remaining/);
 
-  const uninstall = spawnSync(process.execPath, [CLI_PATH, "uninstall", "codex", "--json"], {
+  const uninstall = spawnNode([CLI_PATH, "uninstall", "codex", "--json"], {
     encoding: "utf8",
     env,
     timeout: 5000
@@ -1423,7 +1604,7 @@ test("Claude capture output aligns the first and second line starts", (t) => {
     terminal: { columns: 100 },
     transcript_path: ""
   };
-  const result = spawnSync(process.execPath, [
+  const result = spawnNode([
     CLI_PATH,
     "capture-claude",
     "--muted",
@@ -1452,6 +1633,56 @@ test("Claude capture output aligns the first and second line starts", (t) => {
   assert.deepEqual(plainLines.map((line) => line.match(/^ */)[0].length), [3, 3]);
   assert.match(plainLines[0].slice(3), /^Opus\b/);
   assert.match(plainLines[1].slice(3), /^Claude\b/);
+});
+
+test("Claude capture can hide the duplicated per-pane usage row", (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const input = {
+    session_id: "header-only-test",
+    model: { display_name: "Opus" },
+    workspace: { project_dir: tmpDir },
+    context_window: { remaining_percentage: 83 },
+    terminal: { columns: 100 },
+    transcript_path: "",
+    rate_limits: {
+      five_hour: {
+        used_percentage: 25,
+        resets_at: Math.floor((Date.now() + (90 * 60 * 1000)) / 1000),
+        window_minutes: 300
+      }
+    }
+  };
+  const result = spawnNode([
+    CLI_PATH,
+    "capture-claude",
+    "--muted",
+    "--provider",
+    "claude",
+    "--left-padding",
+    "3",
+    "--no-usage-row"
+  ], {
+    input: `${JSON.stringify(input)}\n`,
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: path.join(tmpDir, "home"),
+      CODEX_HOME: path.join(tmpDir, ".codex"),
+      AI_BATTERY_STATE_DIR: path.join(tmpDir, "state")
+    },
+    timeout: 5000
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const plainLines = result.stdout
+    .trimEnd()
+    .split(/\r?\n/)
+    .map((line) => line.replace(/\x1b\[[0-9;]*m/g, ""));
+  assert.equal(plainLines.length, 1);
+  assert.match(plainLines[0].slice(3), /^Opus\b/);
+  assert.doesNotMatch(plainLines[0], /Claude\b.*75%/);
 });
 
 test("Claude capture reflects running Codex on Windows", { skip: process.platform !== "win32" }, (t) => {
@@ -1508,7 +1739,7 @@ test("Claude capture reflects running Codex on Windows", { skip: process.platfor
     terminal: { columns: 100 },
     transcript_path: ""
   };
-  const result = spawnSync(process.execPath, [
+  const result = spawnNode([
     CLI_PATH,
     "capture-claude",
     "--muted",
@@ -1578,7 +1809,7 @@ test("Claude capture falls back to Codex logs when Windows Codex cache is stale"
     terminal: { columns: 100 },
     transcript_path: ""
   };
-  const result = spawnSync(process.execPath, [
+  const result = spawnNode([
     CLI_PATH,
     "capture-claude",
     "--muted",
@@ -1634,6 +1865,27 @@ test("Claude statusLine from another tool is skipped by default and restored aft
   });
 });
 
+test("Claude setup can persist a header-only pane statusLine", (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const homeDir = path.join(tmpDir, "home");
+  const stateDir = path.join(tmpDir, "state");
+  fs.mkdirSync(path.join(homeDir, ".claude"), { recursive: true });
+  const settingsPath = path.join(homeDir, ".claude", "settings.json");
+
+  withEnv({
+    HOME: homeDir,
+    XDG_STATE_HOME: stateDir
+  }, () => {
+    const installed = installClaudeStatusline({ force: false, usageRow: false });
+    assert.match(installed.command, /--no-usage-row/);
+    const command = JSON.parse(fs.readFileSync(settingsPath, "utf8")).statusLine.command;
+    assert.match(command, /capture-claude/);
+    assert.match(command, /--no-usage-row/);
+  });
+});
+
 test("colored battery bar uses one tall glyph for fill and track so heights match on macOS", () => {
   // Regression: pairing the fill glyph with the light-shade glyph rendered the
   // two halves at different heights under macOS terminal fonts. Both halves
@@ -1669,7 +1921,7 @@ test("plain battery bar keeps distinct glyphs when there is no color", () => {
 });
 
 test("narrow statusline keeps every provider instead of truncating the tail", () => {
-  const snapshot = JSON.parse(spawnSync(process.execPath, [CLI_PATH, "--json"], {
+  const snapshot = JSON.parse(spawnNode([CLI_PATH, "--json"], {
     encoding: "utf8",
     timeout: 5000
   }).stdout);
@@ -1677,7 +1929,7 @@ test("narrow statusline keeps every provider instead of truncating the tail", ()
   // Only meaningful when both providers report on this machine.
   if (!(providers.includes("codex") && providers.includes("claude"))) return;
 
-  const narrow = spawnSync(process.execPath, [
+  const narrow = spawnNode([
     CLI_PATH,
     "--ansi",
     "--bar-width", "10",

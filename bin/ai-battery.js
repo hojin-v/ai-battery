@@ -72,6 +72,7 @@ function parseArgs(argv) {
     silent: false,
     force: false,
     header: true,
+    usageRow: "auto",
     help: false,
     version: false,
     targets: [],
@@ -103,6 +104,10 @@ function parseArgs(argv) {
       args.silent = true;
     } else if (arg === "--no-header") {
       args.header = false;
+    } else if (arg === "--usage-row") {
+      args.usageRow = true;
+    } else if (arg === "--no-usage-row") {
+      args.usageRow = false;
     } else if (arg === "--force") {
       args.force = true;
     } else if (arg === "--watch" || arg === "-w") {
@@ -177,6 +182,7 @@ Options:
       --ansi                       Force ANSI color output
       --muted                      Use Codex-style muted status-line colors
       --no-header                  Hide Claude's extra statusLine header
+      --no-usage-row               Hide Claude's duplicated per-pane usage row
   -w, --watch [seconds]            Refresh in place (default: 10 seconds)
       --bar-width N                Battery bar width (default: 10)
       --max-width N                Fit text output within N terminal columns
@@ -746,6 +752,21 @@ function tmuxStatusBarActive() {
   // Trust it even when TMUX socket path isn't propagated to Claude Code's statusline subprocess.
   if ((process.env.AI_BATTERY_TMUX_STATUS || process.env.CLAUDEX_BATTERY_TMUX_STATUS) === "1") return true;
   return false;
+}
+
+function booleanEnvValue(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const normalized = String(value).trim().toLowerCase();
+  if (["1", "true", "yes", "on", "show", "row"].includes(normalized)) return true;
+  if (["0", "false", "no", "off", "hide", "none"].includes(normalized)) return false;
+  return null;
+}
+
+function claudeUsageRowVisible(args) {
+  if (args.usageRow === true || args.usageRow === false) return args.usageRow;
+  const envValue = booleanEnvValue(process.env.AI_BATTERY_CLAUDE_USAGE_ROW ?? process.env.CLAUDEX_BATTERY_CLAUDE_USAGE_ROW);
+  if (envValue !== null) return envValue;
+  return !tmuxStatusBarActive();
 }
 
 function tmuxConfPath() {
@@ -2192,16 +2213,34 @@ function cacheAgeSeconds(timestamp) {
 
 function writeJsonAtomic(filePath, data) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  const tempPath = `${filePath}.${process.pid}.tmp`;
-  fs.writeFileSync(tempPath, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
-  fs.renameSync(tempPath, filePath);
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  try {
+    fs.writeFileSync(tempPath, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
+    fs.renameSync(tempPath, filePath);
+  } catch (error) {
+    try {
+      fs.rmSync(tempPath, { force: true });
+    } catch {
+      // Best-effort cleanup only.
+    }
+    throw error;
+  }
 }
 
 function writeTextAtomic(filePath, text, mode = 0o600) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  const tempPath = `${filePath}.${process.pid}.tmp`;
-  fs.writeFileSync(tempPath, text, { mode });
-  fs.renameSync(tempPath, filePath);
+  const tempPath = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`;
+  try {
+    fs.writeFileSync(tempPath, text, { mode });
+    fs.renameSync(tempPath, filePath);
+  } catch (error) {
+    try {
+      fs.rmSync(tempPath, { force: true });
+    } catch {
+      // Best-effort cleanup only.
+    }
+    throw error;
+  }
 }
 
 function readJson(filePath) {
@@ -2655,6 +2694,43 @@ function normalizeClaudeCachedLimit(limit, options = {}) {
   });
 }
 
+function claudeCanonicalLimit(candidate, previous) {
+  if (!candidate) return previous ?? null;
+  if (!previous) return candidate;
+
+  const candidateNorm = normalizeClaudeCachedLimit(candidate);
+  const previousNorm = normalizeClaudeCachedLimit(previous);
+  if (!candidateNorm) return previous;
+  if (!previousNorm) return candidate;
+
+  const candidateReset = resetEpochSeconds(candidate.resets_at ?? candidate.resetsAt ?? candidate.reset_at ?? candidate.resetAt);
+  const previousReset = resetEpochSeconds(previous.resets_at ?? previous.resetsAt ?? previous.reset_at ?? previous.resetAt);
+  if (Number.isFinite(candidateReset) && Number.isFinite(previousReset) && Math.abs(candidateReset - previousReset) > 60) {
+    return candidateReset > previousReset ? candidate : previous;
+  }
+
+  if (Number.isFinite(candidateNorm.usedPercent) && Number.isFinite(previousNorm.usedPercent)) {
+    return candidateNorm.usedPercent >= previousNorm.usedPercent ? candidate : previous;
+  }
+
+  if (Number.isFinite(candidateNorm.remainingPercent) && Number.isFinite(previousNorm.remainingPercent)) {
+    return candidateNorm.remainingPercent <= previousNorm.remainingPercent ? candidate : previous;
+  }
+
+  return candidate;
+}
+
+function claudeCanonicalStatuslineSnapshot(snapshot, previous) {
+  if (!previous || previous.provider !== "claude" || previous.sourceType !== "statusline") return snapshot;
+  return {
+    ...snapshot,
+    rateLimits: {
+      fiveHour: claudeCanonicalLimit(snapshot.rateLimits?.fiveHour, previous.rateLimits?.fiveHour),
+      sevenDay: claudeCanonicalLimit(snapshot.rateLimits?.sevenDay, previous.rateLimits?.sevenDay)
+    }
+  };
+}
+
 function claudeRateLimitsFromStatusline(input) {
   const rateLimits = input.rate_limits ?? input.rateLimits ?? input.limits ?? {};
   const fiveHour = rateLimits.five_hour
@@ -2879,10 +2955,11 @@ function applyClaudeRateLimitHit(limit, hit, window) {
 function captureClaudeStatusline(input) {
   const rateLimits = claudeRateLimitsFromStatusline(input);
   const sessionId = input.session_id ?? input.sessionId ?? null;
-  const previous = (sessionId ? readJson(claudeSessionCachePath(sessionId)) : null) ?? readJson(claudeCachePath());
+  const previousGlobal = readJson(claudeCachePath());
+  const previous = (sessionId ? readJson(claudeSessionCachePath(sessionId)) : null) ?? previousGlobal;
   const sessionKind = claudeStatuslineSessionKind(input);
   const contextWindow = claudeContextWindowFromStatusline(input);
-  const snapshot = {
+  let snapshot = {
     version: 1,
     provider: "claude",
     sourceType: "statusline",
@@ -2916,6 +2993,8 @@ function captureClaudeStatusline(input) {
       snapshot.contextWindow = previous.contextWindow ?? null;
     }
   }
+
+  snapshot = claudeCanonicalStatuslineSnapshot(snapshot, previousGlobal);
 
   if (snapshot.sessionId) {
     writeJsonAtomic(claudeSessionCachePath(snapshot.sessionId), snapshot);
@@ -2981,22 +3060,23 @@ function listClaudeSessionCacheFiles(root = stateDir()) {
 }
 
 function readClaudeStatuslineCacheFrom(root) {
-  const cachePaths = [
-    path.join(root, "claude-statusline.json"),
-    ...listClaudeSessionCacheFiles(root)
-  ];
-  const entries = cachePaths
+  const globalCachePath = path.join(root, "claude-statusline.json");
+  const globalResult = claudeStatuslineResultFromCache(readJson(globalCachePath), globalCachePath);
+  if (globalResult) return globalResult;
+
+  const sessionCachePaths = listClaudeSessionCacheFiles(root);
+  const entries = sessionCachePaths
     .map((cachePath) => ({ cachePath, cache: readJson(cachePath) }))
     .filter((entry) => entry.cache)
     .sort((a, b) => (Date.parse(b.cache.capturedAt ?? "") || 0) - (Date.parse(a.cache.capturedAt ?? "") || 0));
 
-  // Evaluate newest-first and stop at the first usable snapshot so stale or
-  // background-session caches do not cost extra transcript reads.
+  // Session caches are a fallback only. The account-level rate-limit display
+  // should not jump between panes just because another Claude session refreshed.
   for (const entry of entries) {
     const result = claudeStatuslineResultFromCache(entry.cache, entry.cachePath);
     if (result) return result;
   }
-  return cachePaths.some((cachePath) => fs.existsSync(cachePath)) ? null : undefined;
+  return [globalCachePath, ...sessionCachePaths].some((cachePath) => fs.existsSync(cachePath)) ? null : undefined;
 }
 
 function readClaudeStatuslineCache() {
@@ -3016,7 +3096,17 @@ function claudeStatuslineRefreshInterval() {
 function installClaudeStatusline(args) {
   const settingsPath = homePath(".claude", "settings.json");
   const existing = readJson(settingsPath) ?? {};
-  const command = `${shellArg(process.execPath)} ${shellArg(fileURLToPath(import.meta.url))} capture-claude --muted --left-padding 1`;
+  const commandParts = [
+    shellArg(process.execPath),
+    shellArg(fileURLToPath(import.meta.url)),
+    "capture-claude",
+    "--muted",
+    "--left-padding",
+    "1"
+  ];
+  if (args.usageRow === false) commandParts.push("--no-usage-row");
+  if (args.usageRow === true) commandParts.push("--usage-row");
+  const command = commandParts.join(" ");
   const currentCommand = existing.statusLine?.command ?? "";
   const installedByAiBattery = currentCommand.includes("ai-battery.js") && currentCommand.includes("capture-claude");
   const config = readConfig();
@@ -4609,7 +4699,7 @@ async function main() {
       }, { ...args, activeProvider: "claude", leftPadding: 0, maxWidth: contentWidth });
       // Inside tmux with the status-bar integration, the battery already shows
       // in tmux's own bar; keep the statusline to the one line tmux can't show.
-      const text = tmuxStatusBarActive()
+      const text = !claudeUsageRowVisible(args)
         ? (header || usage)
         : (header && usage ? `${header}\n${usage}` : (usage || header));
       console.log(applyLeftPadding(text, args));

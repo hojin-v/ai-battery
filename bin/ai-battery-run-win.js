@@ -219,6 +219,15 @@ function rowptyConptyMode() {
   return "os";
 }
 
+function rowptyPreserveScrollback() {
+  const raw = process.env.AI_BATTERY_ROWPTY_PRESERVE_SCROLLBACK
+    ?? process.env.CLAUDEX_BATTERY_ROWPTY_PRESERVE_SCROLLBACK
+    ?? process.env.ROWPTY_PRESERVE_SCROLLBACK
+    ?? "1";
+  const value = String(raw).trim().toLowerCase();
+  return !["0", "false", "no", "off"].includes(value);
+}
+
 function rowptySpawnEnv() {
   const env = { ...process.env };
   const explicitMode = process.env.AI_BATTERY_ROWPTY_CONPTY !== undefined ||
@@ -231,6 +240,7 @@ function rowptySpawnEnv() {
   } else if (mode === "os" && (explicitMode || (!env.ROWPTY_NO_CONPTY_DLL && !env.ROWPTY_CONPTY_DLL))) {
     env.ROWPTY_NO_CONPTY_DLL = "1";
   }
+  env.ROWPTY_PRESERVE_SCROLLBACK = rowptyPreserveScrollback() ? "1" : "0";
   return env;
 }
 
@@ -723,6 +733,7 @@ export {
   resolveWindowsCommandFile,
   rowptyConptyMode,
   rowptyExePath,
+  rowptyPreserveScrollback,
   rowptySpawnEnv,
   rowptyStatusCommand,
   statusRow,

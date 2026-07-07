@@ -89,6 +89,8 @@ internal sealed class RowPty
     private int fetchMaxWidth;
 
     private Stopwatch clock;
+    private bool preserveScrollback = true;
+    private byte[] pendingHostOutput = new byte[0];
     private bool childOutputSeen;
     private bool screenDirty;
     private long lastOutputMs;
@@ -101,7 +103,6 @@ internal sealed class RowPty
 
     private int currentCols = 80;
     private int currentRows = 24;
-    private int hostScrollBottom = -1;
     private int paintedStatusVersion = -1;
     private string lastPaintedLine = null;
     private int lastPaintedRow = -1;
@@ -143,6 +144,7 @@ internal sealed class RowPty
             return immediateExitCode;
         }
 
+        this.preserveScrollback = PreserveScrollbackEnabled();
         this.clock = Stopwatch.StartNew();
         this.outputVtStateChangedMs = this.clock.ElapsedMilliseconds;
         SetupConsole();
@@ -150,7 +152,6 @@ internal sealed class RowPty
         {
             throw new Win32Exception(Marshal.GetLastWin32Error(), "GetConsoleScreenBufferInfo failed");
         }
-        ApplyHostScrollRegion();
         ResolveConptyProvider();
         CreatePseudoConsoleAndChild();
         StartThreads();
@@ -563,7 +564,6 @@ internal sealed class RowPty
                         this.currentCols = cols;
                         this.currentRows = rows;
                         this.resizePseudoConsoleProvider(this.hPseudoConsole, MakeSize(cols, ChildRows(rows)));
-                        ApplyHostScrollRegion();
                         if (childOutputSeenNow)
                         {
                             RequestStatusFetch(MaxStatusWidth(cols));
@@ -851,9 +851,21 @@ internal sealed class RowPty
                 this.win32InputModeEnabled = false;
             }
 
+            byte[] hostOutput = null;
+            int hostOutputCount = read;
+            if (this.preserveScrollback)
+            {
+                hostOutput = FilterHostOutput(buffer, read);
+                hostOutputCount = hostOutput.Length;
+            }
+            else
+            {
+                hostOutput = buffer;
+            }
+
             lock (this.consoleLock)
             {
-                if (!WriteAll(this.hStdOut, buffer, read))
+                if (hostOutputCount > 0 && !WriteAll(this.hStdOut, hostOutput, hostOutputCount))
                 {
                     break;
                 }
@@ -1046,14 +1058,7 @@ internal sealed class RowPty
         }
 
         string line = FitStatusLine(text, width);
-        string sequence = null;
-        byte[] bytes = null;
         bool needsWrite = forced || this.lastPaintedLine == null || this.lastPaintedRow != row || this.lastPaintedLine != line;
-        if (needsWrite)
-        {
-            sequence = "\u001b7\u001b[0m\u001b[" + row.ToString(CultureInfo.InvariantCulture) + ";1H\u001b[1G" + line + "\u001b[K\u001b[0m\u001b8";
-            bytes = Encoding.UTF8.GetBytes(sequence);
-        }
 
         lock (this.consoleLock)
         {
@@ -1076,7 +1081,7 @@ internal sealed class RowPty
 
             if (needsWrite)
             {
-                WriteAll(this.hStdOut, bytes, bytes.Length);
+                WriteStatusRowPayload("\u001b[0m\r\u001b[1G" + line + "\u001b[K\u001b[0m");
             }
         }
 
@@ -1085,6 +1090,30 @@ internal sealed class RowPty
         this.paintedStatusVersion = version;
         this.lastPaintMs = this.clock.ElapsedMilliseconds;
         return true;
+    }
+
+    private bool WriteStatusRowPayload(string payload)
+    {
+        byte[] bytes = Encoding.UTF8.GetBytes(payload);
+
+        CONSOLE_SCREEN_BUFFER_INFO info;
+        if (GetConsoleScreenBufferInfo(this.hStdOut, out info))
+        {
+            COORD saved = info.dwCursorPosition;
+            COORD target = new COORD();
+            target.X = info.srWindow.Left;
+            target.Y = info.srWindow.Bottom;
+            if (SetConsoleCursorPosition(this.hStdOut, target))
+            {
+                bool ok = WriteAll(this.hStdOut, bytes, bytes.Length);
+                SetConsoleCursorPosition(this.hStdOut, saved);
+                return ok;
+            }
+        }
+
+        string fallback = "\u001b[s\u001b[0m\u001b[" + this.currentRows.ToString(CultureInfo.InvariantCulture) + ";1H" + payload + "\u001b[u";
+        byte[] fallbackBytes = Encoding.UTF8.GetBytes(fallback);
+        return WriteAll(this.hStdOut, fallbackBytes, fallbackBytes.Length);
     }
 
     private static string FitStatusLine(string text, int width)
@@ -1257,47 +1286,6 @@ internal sealed class RowPty
         return coord;
     }
 
-    private void ApplyHostScrollRegion()
-    {
-        if (!this.outputConfigured || this.hStdOut == IntPtr.Zero)
-        {
-            return;
-        }
-
-        int bottom = ChildRows(this.currentRows);
-        if (bottom < 1)
-        {
-            bottom = 1;
-        }
-        if (bottom == this.hostScrollBottom)
-        {
-            return;
-        }
-
-        string sequence = "\u001b7\u001b[1;" + bottom.ToString(CultureInfo.InvariantCulture) + "r\u001b8";
-        byte[] bytes = Encoding.UTF8.GetBytes(sequence);
-        lock (this.consoleLock)
-        {
-            WriteAll(this.hStdOut, bytes, bytes.Length);
-        }
-        this.hostScrollBottom = bottom;
-    }
-
-    private void ResetHostScrollRegion()
-    {
-        if (!this.outputConfigured || this.hStdOut == IntPtr.Zero)
-        {
-            return;
-        }
-
-        byte[] bytes = Encoding.UTF8.GetBytes("\u001b7\u001b[r\u001b8");
-        lock (this.consoleLock)
-        {
-            WriteAll(this.hStdOut, bytes, bytes.Length);
-        }
-        this.hostScrollBottom = -1;
-    }
-
     private static string BuildCommandLine(string[] args)
     {
         StringBuilder builder = new StringBuilder();
@@ -1432,6 +1420,210 @@ internal sealed class RowPty
             return text;
         }
         return text.Substring(0, end);
+    }
+
+    private static bool PreserveScrollbackEnabled()
+    {
+        string value = Environment.GetEnvironmentVariable("ROWPTY_PRESERVE_SCROLLBACK");
+        if (value == null || value.Length == 0)
+        {
+            return true;
+        }
+
+        value = value.Trim().ToLowerInvariant();
+        return !(value == "0" || value == "false" || value == "no" || value == "off");
+    }
+
+    private byte[] FilterHostOutput(byte[] buffer, int count)
+    {
+        byte[] input;
+        int offset = 0;
+        if (this.pendingHostOutput.Length > 0)
+        {
+            input = new byte[this.pendingHostOutput.Length + count];
+            Buffer.BlockCopy(this.pendingHostOutput, 0, input, 0, this.pendingHostOutput.Length);
+            Buffer.BlockCopy(buffer, 0, input, this.pendingHostOutput.Length, count);
+            this.pendingHostOutput = new byte[0];
+        }
+        else
+        {
+            input = new byte[count];
+            Buffer.BlockCopy(buffer, 0, input, 0, count);
+        }
+
+        System.Collections.Generic.List<byte> output = new System.Collections.Generic.List<byte>(count);
+        while (offset < input.Length)
+        {
+            if (input[offset] != 27)
+            {
+                output.Add(input[offset]);
+                offset++;
+                continue;
+            }
+
+            if (offset + 1 >= input.Length)
+            {
+                break;
+            }
+
+            if (input[offset + 1] != (byte)'[')
+            {
+                output.Add(input[offset]);
+                offset++;
+                continue;
+            }
+
+            int parameterStart = offset + 2;
+            int cursor = parameterStart;
+            while (cursor < input.Length && input[cursor] >= 0x30 && input[cursor] <= 0x3f)
+            {
+                cursor++;
+            }
+            int parameterEnd = cursor;
+            while (cursor < input.Length && input[cursor] >= 0x20 && input[cursor] <= 0x2f)
+            {
+                cursor++;
+            }
+            if (cursor >= input.Length)
+            {
+                break;
+            }
+
+            byte final = input[cursor];
+            int sequenceEnd = cursor + 1;
+            byte[] replacement = RewriteHostCsi(input, parameterStart, parameterEnd, cursor, final);
+            if (replacement == null)
+            {
+                AppendBytes(output, input, offset, sequenceEnd - offset);
+            }
+            else if (replacement.Length > 0)
+            {
+                output.AddRange(replacement);
+            }
+            offset = sequenceEnd;
+        }
+
+        if (offset < input.Length)
+        {
+            int pending = input.Length - offset;
+            this.pendingHostOutput = new byte[pending];
+            Buffer.BlockCopy(input, offset, this.pendingHostOutput, 0, pending);
+        }
+        else
+        {
+            this.pendingHostOutput = new byte[0];
+        }
+
+        return output.ToArray();
+    }
+
+    private static byte[] RewriteHostCsi(byte[] buffer, int parameterStart, int parameterEnd, int finalIndex, byte final)
+    {
+        if (final == (byte)'J' && CsiParamsContain(buffer, parameterStart, parameterEnd, 3))
+        {
+            return new byte[0];
+        }
+
+        if ((final == (byte)'h' || final == (byte)'l') &&
+            parameterStart < parameterEnd &&
+            buffer[parameterStart] == (byte)'?')
+        {
+            return RewritePrivateModeCsi(buffer, parameterStart, parameterEnd, finalIndex, final);
+        }
+
+        return null;
+    }
+
+    private static byte[] RewritePrivateModeCsi(byte[] buffer, int parameterStart, int parameterEnd, int finalIndex, byte final)
+    {
+        string parameters = Encoding.ASCII.GetString(buffer, parameterStart + 1, parameterEnd - parameterStart - 1);
+        string[] parts = parameters.Split(';');
+        System.Collections.Generic.List<string> kept = new System.Collections.Generic.List<string>(parts.Length);
+        bool removed = false;
+        int i;
+        for (i = 0; i < parts.Length; i++)
+        {
+            string part = parts[i];
+            if (IsAlternateScreenMode(part))
+            {
+                removed = true;
+            }
+            else if (part.Length > 0)
+            {
+                kept.Add(part);
+            }
+        }
+
+        if (!removed)
+        {
+            return null;
+        }
+        if (kept.Count == 0)
+        {
+            return new byte[0];
+        }
+
+        StringBuilder builder = new StringBuilder();
+        builder.Append("\u001b[?");
+        for (i = 0; i < kept.Count; i++)
+        {
+            if (i > 0)
+            {
+                builder.Append(';');
+            }
+            builder.Append(kept[i]);
+        }
+        if (parameterEnd < finalIndex)
+        {
+            builder.Append(Encoding.ASCII.GetString(buffer, parameterEnd, finalIndex - parameterEnd));
+        }
+        builder.Append((char)final);
+        return Encoding.ASCII.GetBytes(builder.ToString());
+    }
+
+    private static bool IsAlternateScreenMode(string part)
+    {
+        int colon = part.IndexOf(':');
+        if (colon >= 0)
+        {
+            part = part.Substring(0, colon);
+        }
+        return part == "47" || part == "1047" || part == "1048" || part == "1049";
+    }
+
+    private static bool CsiParamsContain(byte[] buffer, int start, int end, int target)
+    {
+        int value = 0;
+        bool haveValue = false;
+        int i;
+        for (i = start; i <= end; i++)
+        {
+            byte b = i < end ? buffer[i] : (byte)';';
+            if (b >= (byte)'0' && b <= (byte)'9')
+            {
+                haveValue = true;
+                value = (value * 10) + (b - (byte)'0');
+            }
+            else
+            {
+                if (haveValue && value == target)
+                {
+                    return true;
+                }
+                value = 0;
+                haveValue = false;
+            }
+        }
+        return false;
+    }
+
+    private static void AppendBytes(System.Collections.Generic.List<byte> output, byte[] input, int offset, int count)
+    {
+        int i;
+        for (i = 0; i < count; i++)
+        {
+            output.Add(input[offset + i]);
+        }
     }
 
     private static bool ScanForClear(byte[] buffer, int count)
@@ -1716,16 +1908,9 @@ internal sealed class RowPty
             return;
         }
 
-        int row = this.currentRows;
-        if (row < 1)
-        {
-            row = 1;
-        }
-        string sequence = "\u001b7\u001b[0m\u001b[" + row.ToString(CultureInfo.InvariantCulture) + ";1H\u001b[2K\u001b8";
-        byte[] bytes = Encoding.UTF8.GetBytes(sequence);
         lock (this.consoleLock)
         {
-            WriteAll(this.hStdOut, bytes, bytes.Length);
+            WriteStatusRowPayload("\u001b[0m\r\u001b[1G\u001b[2K\u001b[0m");
         }
     }
 
@@ -1765,7 +1950,6 @@ internal sealed class RowPty
         JoinThread(this.outputThread, 500);
         JoinThread(this.statusThread, 2000);
 
-        ResetHostScrollRegion();
         ClearStatusRow();
 
         if (this.consoleStateSaved)
@@ -1995,6 +2179,9 @@ internal sealed class RowPty
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GetConsoleScreenBufferInfo(IntPtr hConsoleOutput, out CONSOLE_SCREEN_BUFFER_INFO lpConsoleScreenBufferInfo);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool SetConsoleCursorPosition(IntPtr hConsoleOutput, COORD dwCursorPosition);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CreatePipe(out IntPtr hReadPipe, out IntPtr hWritePipe, IntPtr lpPipeAttributes, int nSize);

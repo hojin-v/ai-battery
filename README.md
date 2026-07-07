@@ -171,7 +171,9 @@ ai-battery setup codex
 
 Codex setup은 `~/.codex/config.toml`의 `[tui]`에 `model-with-reasoning`, `current-dir`, `git-branch` status line을 설정합니다. 기존 값이 있으면 uninstall 복구용으로 백업합니다. Codex wrapper는 기존 `codex` 명령을 직접 덮어쓰지 않습니다. `~/.local/bin`이 이미 PATH에서 원본 `codex`보다 앞에 있고 `~/.local/bin/codex`가 비어 있거나 AI Battery 관리 파일이면 그 위치에 wrapper를 둬서 바로 잡히게 합니다. 그렇지 않으면 `~/.local/share/ai-battery/bin/codex`에 관리형 wrapper를 만들고, 필요한 경우 셸 설정에 이 디렉터리를 PATH 앞쪽으로 추가합니다. `~/.local/bin/codex` 같은 공용 위치에 이미 다른 파일이 있으면 덮어쓰지 않습니다. 새 터미널부터 `codex`가 자동으로 AI Battery 하단 행과 함께 실행됩니다. 같은 터미널에서 이미 `codex`를 실행한 적이 있으면 셸 캐시 때문에 `hash -r`이 한 번 필요할 수 있고, PATH 추가가 필요한 경우에는 `setup` 출력에 표시되는 `source ...` 명령을 실행하세요.
 
-Windows native `cmd`/PowerShell에서는 `codex.cmd` wrapper가 Windows runner를 실행합니다. runner는 `rowpty.exe`(별도 rowpty 프로젝트의 전용 ConPTY host)가 있으면 WSL과 같은 방식으로 하단 row를 예약합니다: 자식 프로그램은 한 줄 짧은 화면을 쓰고, 실제 콘솔의 scroll region도 자식 영역(`rows - reserve`)으로 제한해 하단 상태줄 행을 host 스크롤 모델 밖에 둡니다. 상태줄은 출력이 잠잠해진 시점에만 그려져 깜빡임 없이 하단에 고정됩니다. `rowpty.exe`는 바이너리로 배포되지 않습니다 — `ai-battery setup`이 패키지에 동봉된 소스(`vendor/rowpty/RowPty.cs`)를 Windows 내장 .NET Framework `csc.exe`로 사용자 머신에서 직접 컴파일해 `%LOCALAPPDATA%\ai-battery\bin`에 설치하고, 그 옆에 Microsoft 서명된 ConPTY(`conpty.dll`/`OpenConsole.exe`, node-pty 패키지에서 복사)를 배치합니다. Codex 시작 지연을 피하기 위해 실행 기본값은 Windows 내장 OS ConPTY이며, 번들 provider가 필요하면 `AI_BATTERY_ROWPTY_CONPTY=bundled`로 되돌릴 수 있습니다. 서명 없는 다운로드 바이너리가 없으므로 SmartScreen/Defender류 평판 경고를 원천적으로 피하고, 소스가 텍스트로 열려 있어 감사할 수 있습니다. 직접 빌드한 exe를 쓰려면 `AI_BATTERY_ROWPTY` 환경변수로 지정합니다. rowpty가 없으면 같은 콘솔에 덧그리는 overlay layout으로 동작하며(`AI_BATTERY_WIN_LAYOUT=overlay`로 강제 가능), legacy `node-pty` reserve는 `AI_BATTERY_WIN_LAYOUT=reserve`이면서 rowpty가 없을 때만 사용됩니다. Claude statusLine은 일반 `cmd`/PowerShell 프롬프트가 아니라 Claude Code 안에서만 표시됩니다.
+Windows native `cmd`/PowerShell에서는 `codex.cmd` wrapper가 Windows runner를 실행합니다. runner는 `rowpty.exe`(별도 rowpty 프로젝트의 전용 ConPTY host)가 있으면 WSL과 같은 방식으로 하단 row를 예약합니다: 자식 프로그램은 한 줄 짧은 화면을 쓰고, 상태줄은 출력이 잠잠해진 시점에만 그려져 깜빡임 없이 하단에 고정됩니다. `rowpty.exe`는 바이너리로 배포되지 않습니다 — `ai-battery setup`이 패키지에 동봉된 소스(`vendor/rowpty/RowPty.cs`)를 Windows 내장 .NET Framework `csc.exe`로 사용자 머신에서 직접 컴파일해 `%LOCALAPPDATA%\ai-battery\bin`에 설치하고, 그 옆에 Microsoft 서명된 ConPTY(`conpty.dll`/`OpenConsole.exe`, node-pty 패키지에서 복사)를 배치합니다. Codex 시작 지연을 피하기 위해 실행 기본값은 Windows 내장 OS ConPTY이며, 번들 provider가 필요하면 `AI_BATTERY_ROWPTY_CONPTY=bundled`로 되돌릴 수 있습니다. rowpty는 Windows Terminal scrollback을 보존하기 위해 alternate-screen 전환과 scrollback clear 시퀀스를 기본적으로 막으며, 필요하면 `AI_BATTERY_ROWPTY_PRESERVE_SCROLLBACK=0`으로 끌 수 있습니다. 서명 없는 다운로드 바이너리가 없으므로 SmartScreen/Defender류 평판 경고를 원천적으로 피하고, 소스가 텍스트로 열려 있어 감사할 수 있습니다. 직접 빌드한 exe를 쓰려면 `AI_BATTERY_ROWPTY` 환경변수로 지정합니다. rowpty가 없으면 같은 콘솔에 덧그리는 overlay layout으로 동작하며(`AI_BATTERY_WIN_LAYOUT=overlay`로 강제 가능), legacy `node-pty` reserve는 `AI_BATTERY_WIN_LAYOUT=reserve`이면서 rowpty가 없을 때만 사용됩니다. Claude statusLine은 일반 `cmd`/PowerShell 프롬프트가 아니라 Claude Code 안에서만 표시됩니다.
+
+Windows rowpty 문제를 재현할 때는 말로 설명하지 말고 smoke report를 남기는 쪽이 가장 빠릅니다. WSL에서는 `npm run smoke:wsl-win`을 실행하면 새 Windows PowerShell 콘솔을 열어 실제 Windows 콘솔 핸들에서 테스트하고, `rowpty-smoke-report.json`을 repo 루트에 저장합니다. Windows native 터미널에서는 `npm run smoke:win`을 바로 실행하면 됩니다. smoke test는 `cmd.exe` child와 `powershell.exe` child를 모두 rowpty 안에서 실행합니다. report에는 rowpty 사용 여부, overlay/node-pty fallback 여부, 키 입력 없이 delayed output이 화면 버퍼에 나타났는지, status row가 보였는지, `CSI 3J` 이후 scrollback sentinel이 남았는지가 case별로 기록됩니다.
 
 tmux에서는 pane마다 하단 행을 예약하면 같은 전역 배터리가 pane 수만큼 중복 표시됩니다. 대신 tmux의 status bar에 세션당 한 번만 표시할 수 있습니다.
 
@@ -179,7 +181,7 @@ tmux에서는 pane마다 하단 행을 예약하면 같은 전역 배터리가 p
 ai-battery setup tmux
 ```
 
-`~/.tmux.conf`에 관리 블록을 추가해 status-right에 배터리를 표시하고(10초 간격 갱신), 이 tmux 안에서 실행되는 `codex`는 pane별 배터리 행을 생략하고 pane 전체를 사용합니다. Claude statusLine도 같은 환경에서는 배터리 행을 접고 header(모델·디렉터리·브랜치) 1행만 표시합니다 — 배터리는 tmux bar에 이미 있기 때문입니다. 적용하려면 `tmux source-file ~/.tmux.conf` 후 새 pane을 여세요. 이 블록은 기존 `status-right` 설정을 덮어쓰므로 `setup all`에 포함되지 않는 opt-in입니다. 해제는 `ai-battery uninstall tmux`, tmux 안에서도 pane별 행을 유지하려면 `AI_BATTERY_TMUX=row`를 설정합니다. Claude statusLine은 Claude Code 내부 UI라 tmux 여부와 무관하게 그대로 표시됩니다.
+`~/.tmux.conf`에 관리 블록을 추가해 status-right에 배터리를 표시하고(10초 간격 갱신), 이 tmux 안에서 실행되는 `codex`는 pane별 배터리 행을 생략하고 pane 전체를 사용합니다. Claude statusLine도 같은 환경에서는 배터리 행을 접고 header(모델·디렉터리·브랜치) 1행만 표시합니다 — 배터리는 tmux bar에 이미 있기 때문입니다. 적용하려면 `tmux source-file ~/.tmux.conf` 후 새 pane을 여세요. 이 블록은 기존 `status-right` 설정을 덮어쓰므로 `setup all`에 포함되지 않는 opt-in입니다. 해제는 `ai-battery uninstall tmux`, tmux 안에서도 pane별 행을 유지하려면 `AI_BATTERY_TMUX=row`를 설정합니다.
 
 Codex 하단 행이 보이지 않으면 진단을 실행합니다.
 
@@ -237,6 +239,18 @@ Codex 71% │ 5h 00:47 │ 7d 90%  Claude 76% │ 5h 00:47 │ 7d 59%
 
 ```bash
 ai-battery setup claude
+```
+
+분할창에서 pane마다 같은 사용량 줄이 반복되는 게 싫다면 Claude statusLine을 header 전용으로 설치할 수 있습니다. 1행의 모델·workspace·context는 각 pane 안에 남고, 공통 사용량은 tmux status bar나 Windows HUD에 한 번만 표시하는 방식입니다.
+
+```bash
+ai-battery setup claude --no-usage-row
+```
+
+tmux에서는 `ai-battery setup tmux`가 통합 하단 줄 역할을 합니다. Windows Terminal native split pane은 각 pane이 별도 ConPTY라 하나의 터미널 행을 여러 pane에 걸쳐 그릴 수 없습니다. 이 경우에는 Claude 2행을 접고 Windows HUD를 하나 띄우는 방식을 사용하세요.
+
+```bash
+ai-battery hud -Mode statusline -Position bottomcenter
 ```
 
 제거:
