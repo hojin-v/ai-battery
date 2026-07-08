@@ -66,8 +66,13 @@ import {
 } from "../bin/ai-battery-hud.js";
 
 const CLI_PATH = fileURLToPath(new URL("../bin/ai-battery.js", import.meta.url));
+const RUNNER_PATH = fileURLToPath(new URL("../bin/ai-battery-run", import.meta.url));
 const HUD_SH_PATH = fileURLToPath(new URL("../bin/ai-battery-hud", import.meta.url));
 const CODEX_BIN_NAME = process.platform === "win32" ? "codex.cmd" : "codex";
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
 
 function withEnv(values, callback) {
   const previous = new Map();
@@ -187,6 +192,42 @@ test("CLI entrypoint treats npm bin symlinks as direct execution", (t) => {
   }
 
   assert.equal(sameFilePath(CLI_PATH, linkPath), true);
+});
+
+test("POSIX runner flushes quick child output before exit", { skip: process.platform !== "linux" }, (t) => {
+  const probe = spawnSync("script", ["--version"], { encoding: "utf8" });
+  if (probe.error?.code === "ENOENT") {
+    t.skip("script(1) is unavailable");
+    return;
+  }
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+
+  const childPath = path.join(tmpDir, "quick-child.js");
+  fs.writeFileSync(childPath, "process.stdout.write('pty-ok\\n');\n");
+
+  const command = [
+    shellQuote(RUNNER_PATH),
+    "--provider", "all",
+    "--layout", "reserve",
+    "--",
+    shellQuote(process.execPath),
+    shellQuote(childPath)
+  ].join(" ");
+  const result = spawnSync("script", ["-q", "-e", "-c", command, "/dev/null"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: path.join(tmpDir, "home"),
+      CODEX_HOME: path.join(tmpDir, "home", ".codex"),
+      AI_BATTERY_STATE_DIR: path.join(tmpDir, "state")
+    },
+    timeout: 5000
+  });
+
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, ""), /pty-ok/);
 });
 
 test("legacy HUD launcher delegates to the macOS-capable JS entrypoint", { skip: process.platform !== "darwin" }, (t) => {

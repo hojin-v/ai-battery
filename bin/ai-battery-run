@@ -340,6 +340,19 @@ def main():
                     child_exit = os.WEXITSTATUS(wait_status)
                 elif os.WIFSIGNALED(wait_status):
                     child_exit = 128 + os.WTERMSIG(wait_status)
+                while True:
+                    readable, _, _ = select.select([master_fd], [], [], 0)
+                    if master_fd not in readable:
+                        break
+                    try:
+                        data = os.read(master_fd, 8192)
+                    except OSError as exc:
+                        if exc.errno == errno.EIO:
+                            break
+                        raise
+                    if not data:
+                        break
+                    os.write(sys.stdout.fileno(), data)
                 break
 
             timeout = 0.05 if screen_dirty else min(0.1, max(0.01, status.seconds_until_refresh()))
