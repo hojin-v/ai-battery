@@ -40,9 +40,9 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | Shared usage display | Shows Codex and Claude Code usage in the same format. |
 | Reset time display | Shows `5h` and `7d` window labels and values. |
 | Color thresholds | Highlights only the battery: green above 40%, orange from 21-40%, and red at 20% or below. |
-| Codex terminal row | Provides a PTY wrapper that pins a dedicated usage row under Codex. |
+| Codex terminal row | Keeps Codex direct on Windows and docks an external row; WSL/Linux/macOS use a PTY wrapper. |
 | Claude statusLine | Reads Claude rate-limit state from Claude Code's built-in statusLine hook and actual 429 hit logs. |
-| HUD / menu bar | Provides a floating HUD on Windows native/WSL and a menu bar status item on macOS. |
+| HUD / menu bar | Provides terminal-docked/floating HUDs on Windows, a floating HUD on WSL, and a menu bar status item on macOS. |
 | npm execution | Can be run with `npm install -g` or `npx`. |
 
 ## Platform Support
@@ -52,7 +52,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | `ai-battery` | Supported | Supported | Supported | Supported | Requires Node.js 18 or newer. |
 | `ai-battery --watch` | Supported | Supported | Supported | Supported | Refreshes periodically inside the terminal. |
 | Claude statusLine | Supported | Supported | Supported | Supported | Saves a `node <script>` command to Claude Code `statusLine`. |
-| Codex terminal row | Supported | Supported | Supported | Supported | On Windows, reserves a bottom row when `rowpty.exe` (the dedicated ConPTY host) is available; otherwise it uses an overlay row drawn in the same console. WSL/Linux/macOS use POSIX PTY and `python3`. |
+| Codex fullscreen | Supported | Supported | Supported | Supported | Windows runs Codex directly and docks the usage HUD by default. WSL/Linux/macOS use POSIX PTY and `python3`. |
 | `ai-battery setup codex` | Supported | Supported | Supported | Supported | Configures Codex `[tui].status_line` and installs a `codex.cmd` wrapper on Windows or a POSIX shell wrapper on WSL/Linux/macOS. |
 | `ai-battery hud` | Supported | Supported | Unsupported | Supported | Windows/WSL use a PowerShell/WinForms HUD; macOS uses a menu bar status item. |
 
@@ -143,7 +143,9 @@ ai-battery uninstall claude
 ai-battery uninstall hud
 ```
 
-This command cleans up the Codex wrapper managed by AI Battery, Codex `[tui].status_line`, Claude `statusLine`, HUD/menu bar autostart, and any running HUD. It does not touch a `codex` file created by another tool or a Claude `statusLine` created elsewhere. If the Codex config was edited by the user after setup, it is left intact. If older versions or `--force` created backups, the command restores the original file or symlink when possible. The terminal row in a Codex session that is already running inside the AI Battery wrapper disappears only after that session exits.
+This command cleans up the Codex wrapper managed by AI Battery, Codex `[tui].status_line`, Claude `statusLine`, HUD/menu bar autostart, and any running HUD. It does not touch a `codex` file created by another tool or a Claude `statusLine` created elsewhere. Recovery metadata is persisted before setup changes a user file. Unrelated Codex or Claude settings added afterward are preserved while only AI Battery's values are restored. If the managed status line itself or the wrapper file changed after setup, uninstall leaves it and its PATH/recovery metadata untouched and exits with status 1. A backed-up Codex command replaces the wrapper transactionally: the wrapper is parked until restoring the original succeeds. A terminal row in a Codex session already running inside the AI Battery wrapper disappears only after that session exits.
+
+Recovery metadata is cleared only after the corresponding item was restored or safely removed. For Claude, AI Battery stores only the previous `statusLine`, file-existence state, and file mode; it does not duplicate the complete `settings.json` or secrets it may contain. Automation should treat only an uninstall exit status of 0 as complete cleanup.
 
 Modern npm does not run the package uninstall lifecycle, so `npm uninstall ai-battery` or `npm uninstall -g ai-battery` alone cannot automatically clean up external integration points. To remove everything, run this before deleting the npm package.
 
@@ -171,7 +173,9 @@ ai-battery setup codex
 
 Codex setup configures `model-with-reasoning`, `current-dir`, and `git-branch` status line entries under `[tui]` in `~/.codex/config.toml`. Existing values are backed up for uninstall recovery. The Codex wrapper does not directly overwrite the existing `codex` command. If `~/.local/bin` already appears before the original `codex` on PATH and `~/.local/bin/codex` is empty or managed by AI Battery, the wrapper is placed there so it is picked up immediately. Otherwise, a managed wrapper is created at `~/.local/share/ai-battery/bin/codex`, and this directory is prepended to PATH in shell configuration when needed. If a shared location such as `~/.local/bin/codex` already contains another file, it is not overwritten. New terminals will automatically run `codex` with the AI Battery bottom row. If you already ran `codex` in the same terminal, the shell command cache may require one `hash -r`; if PATH needs to be updated, run the `source ...` command printed by `setup`.
 
-On Windows native `cmd`/PowerShell, the `codex.cmd` wrapper runs the Windows runner. When `rowpty.exe` (the dedicated ConPTY host from the separate rowpty project) is available, the runner reserves a bottom row just like WSL: the child program uses a screen that is one line shorter, and the status line is drawn only when output is quiet, so it stays pinned at the bottom without flicker. `rowpty.exe` is not distributed as a binary. `ai-battery setup` compiles the bundled source (`vendor/rowpty/RowPty.cs`) on the user's machine with the Windows built-in .NET Framework `csc.exe`, installs it into `%LOCALAPPDATA%\ai-battery\bin`, and places Microsoft-signed ConPTY components (`conpty.dll`/`OpenConsole.exe`, copied from the node-pty package) next to it. To avoid delaying Codex startup, the default runtime uses the Windows built-in OS ConPTY; set `AI_BATTERY_ROWPTY_CONPTY=bundled` to return to the bundled provider. rowpty preserves Windows Terminal scrollback by blocking alternate-screen switches and scrollback-clear sequences by default; set `AI_BATTERY_ROWPTY_PRESERVE_SCROLLBACK=0` to disable that behavior. Because there is no unsigned downloaded binary, SmartScreen/Defender reputation warnings are avoided at the source, and the text source can be inspected. To use your own built exe, point `AI_BATTERY_ROWPTY` at it. Without rowpty, the runner falls back to an overlay layout drawn in the same console (`AI_BATTERY_WIN_LAYOUT=overlay` can force it); the legacy `node-pty` reserve mode is used only when `AI_BATTERY_WIN_LAYOUT=reserve` is set and rowpty is unavailable. Claude statusLine appears only inside Claude Code, not in a regular `cmd`/PowerShell prompt.
+On Windows native `cmd`/PowerShell, the `codex.cmd` wrapper runs Codex directly with no PTY layer in the middle, while the usage HUD docks to the terminal window. `fullscreen` is the default and `auto` is a compatibility alias for the same path. The batch launcher stays ASCII-only; a UTF-8 Node bridge stores absolute paths and preserves arguments, so global installs and Codex shims under spaces or non-ASCII user paths do not corrupt the command. The Windows Claude statusLine is header-only by default and attaches the same docked usage HUD when its first payload arrives.
+
+The rowpty-based terminal row remains available with `AI_BATTERY_WIN_LAYOUT=tui`; `reserve`, `overlay`, and `inline` are compatibility modes. The default docked HUD does not require rowpty, so normal `setup` no longer compiles it. Set `AI_BATTERY_WIN_LAYOUT=tui` or `AI_BATTERY_INSTALL_ROWPTY=1` before running `ai-battery setup codex` to build `vendor/rowpty/RowPty.cs` locally. `plain` runs Codex without a HUD.
 
 In tmux, reserving a bottom row in every pane would duplicate the same global battery as many times as there are panes. Instead, you can show it once per session in the tmux status bar.
 
@@ -320,13 +324,15 @@ Codex looks for `rate_limits` events in recent session logs. Claude Code provide
 
 ## Source Environment
 
-The default CLI runs on Windows native, WSL, Linux, and macOS when Node.js 18 or newer is available. On Windows native, the Codex terminal row uses a reserved row when `rowpty.exe` is available (a dedicated ConPTY host built with the .NET Framework 4.8 built-in csc.exe), otherwise it falls back to the Node runner's same-console overlay row. On WSL/Linux/macOS, `ai-battery-run` uses Python 3 and POSIX PTY. The HUD uses PowerShell/WinForms on Windows/WSL and built-in `osascript` with AppleScriptObjC on macOS.
+The default CLI runs on Windows native, WSL, Linux, and macOS when Node.js 18 or newer is available. Windows runs Codex directly and uses a PowerShell/WinForms docked HUD by default; rowpty and same-console overlays are used only by explicitly selected compatibility layouts. On WSL/Linux/macOS, `ai-battery-run` uses Python 3 and POSIX PTY. macOS uses built-in `osascript` with AppleScriptObjC for its menu bar HUD.
 
-Codex data is read from `~/.codex/sessions` by default. Set `CODEX_HOME` if you use a different location.
+Codex data is read from the `sessions` directory in the `CODEX_HOME` actually used by Codex (default: `~/.codex`). AI Battery never sets or changes `HOME`, `USERPROFILE`, or `CODEX_HOME`. Changing `CODEX_HOME` also changes Codex's own `/resume` store, so do not use it to combine Windows and WSL paths. Comma-separated homes are not supported.
 
 ```bash
 CODEX_HOME=/path/to/codex-home ai-battery --provider codex
 ```
+
+When native Windows and WSL are used together, each environment keeps its own sessions and `/resume` history. Only the account-wide Codex 5h/7d usage is shared through AI Battery's `codex-account-usage.json`; session paths, workspaces, and approval/sandbox modes are never shared. Set `AI_BATTERY_SHARED_USAGE_STATE_DIR` only when the shared usage state itself needs an explicit location.
 
 Claude usage display becomes available after installing the Claude Code statusLine hook.
 

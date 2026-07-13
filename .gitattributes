@@ -1,0 +1,11 @@
+* text=auto
+.gitattributes text eol=lf
+
+# Keep shebang-based entrypoints executable after Windows checkout/package.
+*.js text eol=lf
+*.mjs text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
+*.applescript text eol=lf
+bin/ai-battery-run text eol=lf
+bin/ai-battery-hud text eol=lf

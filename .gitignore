@@ -17,6 +17,7 @@ rowpty-smoke-report.json
 coverage/
 .nyc_output/
 .cache/
+.npm-cache/
 __pycache__/
 *.py[cod]
 

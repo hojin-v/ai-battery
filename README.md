@@ -40,9 +40,9 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | 공통 사용량 표시 | Codex와 Claude Code 사용량을 같은 형식으로 표시합니다. |
 | 리셋 시각 표시 | `5h`, `7d` 창 라벨과 값을 표시합니다. |
 | 색상 기준 | 40% 초과 초록, 21-40% 주황, 20% 이하 빨강으로 배터리만 강조합니다. |
-| Codex terminal row | Codex 아래에 별도 사용량 행을 고정하는 PTY wrapper를 제공합니다. |
+| Codex terminal row | Windows에서는 Codex를 직접 실행한 채 외부 docked 행을 붙이고, WSL/Linux/macOS에서는 PTY wrapper로 별도 사용량 행을 고정합니다. |
 | Claude statusLine | Claude Code 내장 statusLine hook과 실제 429 hit 로그로 Claude rate limit 상태를 읽습니다. |
-| HUD / menu bar | Windows native/WSL에서는 floating HUD, macOS에서는 menu bar status item을 제공합니다. |
+| HUD / menu bar | Windows native에서는 terminal-docked/floating HUD, WSL에서는 floating HUD, macOS에서는 menu bar status item을 제공합니다. |
 | npm 실행 | `npm install -g` 또는 `npx`로 실행할 수 있습니다. |
 
 ## Platform Support
@@ -52,7 +52,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | `ai-battery` | 지원 | 지원 | 지원 | 지원 | Node.js 18 이상이 필요합니다. |
 | `ai-battery --watch` | 지원 | 지원 | 지원 | 지원 | 터미널 안에서 주기적으로 갱신합니다. |
 | Claude statusLine | 지원 | 지원 | 지원 | 지원 | Claude Code `statusLine`에 `node <script>` 명령을 저장합니다. |
-| Codex terminal row | 지원 | 지원 | 지원 | 지원 | Windows는 `rowpty.exe`(전용 ConPTY host)가 있으면 하단 row를 예약하고, 없으면 같은 콘솔에 덧그리는 overlay row로 동작합니다. WSL/Linux/macOS는 POSIX PTY와 `python3`를 사용합니다. |
+| Codex fullscreen | 지원 | 지원 | 지원 | 지원 | Windows 기본값은 Codex가 native alternate screen 전체를 직접 소유하고 AI Battery는 docked HUD에 표시됩니다. WSL/Linux/macOS는 POSIX PTY와 `python3`를 사용합니다. |
 | `ai-battery setup codex` | 지원 | 지원 | 지원 | 지원 | Codex `[tui].status_line`을 맞추고, Windows는 `codex.cmd` wrapper, WSL/Linux/macOS는 POSIX shell wrapper를 설치합니다. |
 | `ai-battery hud` | 지원 | 지원 | 미지원 | 지원 | Windows/WSL은 PowerShell/WinForms HUD, macOS는 menu bar status item입니다. |
 
@@ -143,7 +143,9 @@ ai-battery uninstall claude
 ai-battery uninstall hud
 ```
 
-이 명령은 AI Battery가 관리 마커를 넣은 Codex wrapper, Codex `[tui].status_line`, Claude `statusLine`, HUD/menu bar autostart와 실행 중인 HUD를 정리합니다. 다른 도구가 만든 `codex` 파일이나 Claude `statusLine`은 건드리지 않습니다. Codex config가 setup 이후 사용자가 수정한 상태라면 안전하게 그대로 둡니다. 이전 버전이나 `--force`로 기존 파일을 백업한 경우에는 가능한 한 원래 파일/symlink를 복원합니다. 현재 이미 AI Battery wrapper 안에서 실행 중인 Codex 세션의 terminal row는 그 세션을 종료해야 사라집니다.
+이 명령은 AI Battery가 관리 마커를 넣은 Codex wrapper, Codex `[tui].status_line`, Claude `statusLine`, HUD/menu bar autostart와 실행 중인 HUD를 정리합니다. 다른 도구가 만든 `codex` 파일이나 Claude `statusLine`은 건드리지 않습니다. setup 전에 복구 기록을 먼저 저장하며, 이후 사용자가 추가한 관련 없는 Codex/Claude 설정은 보존하고 AI Battery가 관리한 값만 원래 값으로 되돌립니다. 관리 중인 status line 자체나 wrapper 파일이 setup 이후 다른 값으로 바뀌었다면 덮어쓰거나 삭제하지 않고 복구 기록과 PATH를 유지한 채 종료 코드 1로 알립니다. 원본 command backup이 있는 wrapper는 현재 wrapper를 임시 보존한 뒤 원본 교체가 성공한 경우에만 삭제합니다. 현재 이미 AI Battery wrapper 안에서 실행 중인 Codex 세션의 terminal row는 그 세션을 종료해야 사라집니다.
+
+복구 기록은 `ai-battery uninstall`이 해당 항목을 성공적으로 복원하거나 안전하게 제거한 뒤에만 지워집니다. Claude는 기존 `statusLine`과 파일 존재 여부·권한만 저장하며 `settings.json` 전체를 복제하지 않으므로 다른 설정이나 비밀값을 백업 파일에 중복 보관하지 않습니다. JSON 결과나 종료 코드를 확인하는 자동화에서는 0일 때만 완전한 정리로 간주하세요.
 
 최신 npm은 패키지의 uninstall lifecycle을 실행하지 않기 때문에 `npm uninstall ai-battery` 또는 `npm uninstall -g ai-battery`만으로는 외부 통합 지점을 자동 정리할 수 없습니다. 완전히 제거하려면 npm 패키지를 지우기 전에 먼저 실행하세요.
 
@@ -171,7 +173,13 @@ ai-battery setup codex
 
 Codex setup은 `~/.codex/config.toml`의 `[tui]`에 `model-with-reasoning`, `current-dir`, `git-branch` status line을 설정합니다. 기존 값이 있으면 uninstall 복구용으로 백업합니다. Codex wrapper는 기존 `codex` 명령을 직접 덮어쓰지 않습니다. `~/.local/bin`이 이미 PATH에서 원본 `codex`보다 앞에 있고 `~/.local/bin/codex`가 비어 있거나 AI Battery 관리 파일이면 그 위치에 wrapper를 둬서 바로 잡히게 합니다. 그렇지 않으면 `~/.local/share/ai-battery/bin/codex`에 관리형 wrapper를 만들고, 필요한 경우 셸 설정에 이 디렉터리를 PATH 앞쪽으로 추가합니다. `~/.local/bin/codex` 같은 공용 위치에 이미 다른 파일이 있으면 덮어쓰지 않습니다. 새 터미널부터 `codex`가 자동으로 AI Battery 하단 행과 함께 실행됩니다. 같은 터미널에서 이미 `codex`를 실행한 적이 있으면 셸 캐시 때문에 `hash -r`이 한 번 필요할 수 있고, PATH 추가가 필요한 경우에는 `setup` 출력에 표시되는 `source ...` 명령을 실행하세요.
 
-Windows native `cmd`/PowerShell에서는 `codex.cmd` wrapper가 Windows runner를 실행합니다. runner는 `rowpty.exe`(별도 rowpty 프로젝트의 전용 ConPTY host)가 있으면 WSL과 같은 방식으로 하단 row를 예약합니다: 자식 프로그램은 한 줄 짧은 화면을 쓰고, 상태줄은 출력이 잠잠해진 시점에만 그려져 깜빡임 없이 하단에 고정됩니다. `rowpty.exe`는 바이너리로 배포되지 않습니다 — `ai-battery setup`이 패키지에 동봉된 소스(`vendor/rowpty/RowPty.cs`)를 Windows 내장 .NET Framework `csc.exe`로 사용자 머신에서 직접 컴파일해 `%LOCALAPPDATA%\ai-battery\bin`에 설치하고, 그 옆에 Microsoft 서명된 ConPTY(`conpty.dll`/`OpenConsole.exe`, node-pty 패키지에서 복사)를 배치합니다. Codex 시작 지연을 피하기 위해 실행 기본값은 Windows 내장 OS ConPTY이며, 번들 provider가 필요하면 `AI_BATTERY_ROWPTY_CONPTY=bundled`로 되돌릴 수 있습니다. rowpty는 Windows Terminal scrollback을 보존하기 위해 alternate-screen 전환과 scrollback clear 시퀀스를 기본적으로 막으며, 필요하면 `AI_BATTERY_ROWPTY_PRESERVE_SCROLLBACK=0`으로 끌 수 있습니다. 서명 없는 다운로드 바이너리가 없으므로 SmartScreen/Defender류 평판 경고를 원천적으로 피하고, 소스가 텍스트로 열려 있어 감사할 수 있습니다. 직접 빌드한 exe를 쓰려면 `AI_BATTERY_ROWPTY` 환경변수로 지정합니다. rowpty가 없으면 같은 콘솔에 덧그리는 overlay layout으로 동작하며(`AI_BATTERY_WIN_LAYOUT=overlay`로 강제 가능), legacy `node-pty` reserve는 `AI_BATTERY_WIN_LAYOUT=reserve`이면서 rowpty가 없을 때만 사용됩니다. Claude statusLine은 일반 `cmd`/PowerShell 프롬프트가 아니라 Claude Code 안에서만 표시됩니다.
+Windows native `cmd`/PowerShell에서는 `codex.cmd` wrapper가 기본 `fullscreen` runner를 실행합니다. 이 경로에는 중간 ConPTY나 headless terminal이 없습니다. Codex가 실제 콘솔에 직접 연결되어 native alternate screen, 스크롤, 입력과 `[tui].status_line`을 그대로 소유합니다. AI Battery는 터미널 바로 아래에 Codex와 Claude 사용량을 Linux/macOS와 같은 텍스트 TUI 상태행으로 표시합니다. 최대화, 전체화면, Windows 스냅이 터미널 높이를 다시 채우면 상태행 공간을 자동으로 재확보합니다. dock 중에는 터미널 하단 코너를 직각으로 바꾸고 상태행을 경계에 겹쳐 붙인 뒤 상태행의 하단 코너만 둥글게 처리하므로 하나의 창처럼 이어집니다. 이 docked TUI와 작업표시줄 HUD는 별도 프로세스와 singleton을 사용하므로 동시에 실행할 수 있습니다. `AI_BATTERY_WIN_LAYOUT=fullscreen`이 명시 이름이고 `auto`는 같은 경로의 호환 alias입니다.
+
+Windows dock 위치는 `AI_BATTERY_WIN_DOCK_POSITION`으로 선택합니다. 기본값 `bottom`은 터미널 하단에 결합하고, `tabs`는 같은 compact 사용량 행을 상단 탭 바 오른쪽에 고정합니다. PowerShell에서는 `$env:AI_BATTERY_WIN_DOCK_POSITION="tabs"`, cmd에서는 `set AI_BATTERY_WIN_DOCK_POSITION=tabs`를 설정한 뒤 `codex`를 실행합니다. launcher를 직접 확인하려면 `ai-battery hud --dock-console --dock-position tabs`를 사용합니다.
+
+`composite`는 `@xterm/headless`로 화면을 재해석하는 실험 모드입니다. `tui`, `reserve`, `overlay`, `inline`도 이전 구현을 확인하기 위한 호환 모드이며, `tui`에서만 로컬 빌드된 `rowpty.exe`와 bundled ConPTY를 사용합니다. 기본 docked HUD에는 rowpty가 필요하지 않으므로 일반 `setup`에서는 컴파일하지 않습니다. 레거시 경로가 필요하면 `AI_BATTERY_WIN_LAYOUT=tui` 또는 `AI_BATTERY_INSTALL_ROWPTY=1`을 설정한 뒤 `ai-battery setup codex`를 다시 실행하세요. `plain`은 HUD 없이 Codex를 직접 실행합니다. Windows의 Claude statusLine은 Claude Code 내부 header만 표시하고, 첫 statusLine payload에서 같은 terminal-docked 사용량 HUD를 연결합니다.
+
+Native fullscreen의 자동 smoke는 `npm run smoke:fullscreen`, 실험 compositor smoke는 `npm run smoke:composite`로 실행합니다. 두 테스트 모두 `cmd`와 PowerShell 자식을 각각 검증합니다.
 
 Windows rowpty 문제를 재현할 때는 말로 설명하지 말고 smoke report를 남기는 쪽이 가장 빠릅니다. WSL에서는 `npm run smoke:wsl-win`을 실행하면 새 Windows PowerShell 콘솔을 열어 실제 Windows 콘솔 핸들에서 테스트하고, `rowpty-smoke-report.json`을 repo 루트에 저장합니다. Windows native 터미널에서는 `npm run smoke:win`을 바로 실행하면 됩니다. smoke test는 `cmd.exe` child와 `powershell.exe` child를 모두 rowpty 안에서 실행합니다. report에는 rowpty 사용 여부, overlay/node-pty fallback 여부, 키 입력 없이 delayed output이 화면 버퍼에 나타났는지, status row가 보였는지, `CSI 3J` 이후 scrollback sentinel이 남았는지가 case별로 기록됩니다.
 
@@ -334,13 +342,15 @@ Codex는 최근 세션 로그에서 `rate_limits` 이벤트를 찾습니다. Cla
 
 ## Source Environment
 
-기본 CLI는 Node.js 18 이상이 있으면 Windows native, WSL, Linux, macOS에서 실행됩니다. Windows native의 Codex terminal row는 `rowpty.exe`(전용 ConPTY host, .NET Framework 4.8 내장 csc.exe로 빌드)가 있으면 reserved row를 사용하고, 없으면 Node runner의 same-console overlay row로 동작합니다. WSL/Linux/macOS의 `ai-battery-run`은 Python 3와 POSIX PTY를 사용합니다. HUD는 Windows/WSL에서는 PowerShell/WinForms, macOS에서는 내장 `osascript`와 AppleScriptObjC를 사용합니다.
+기본 CLI는 Node.js 18 이상이 있으면 Windows native, WSL, Linux, macOS에서 실행됩니다. Windows native의 기본 Codex 경로는 중간 PTY 없이 Codex를 직접 실행하고 PowerShell/WinForms docked HUD를 붙입니다. `rowpty.exe`와 same-console overlay는 명시적으로 선택한 레거시 `tui`/`reserve`/`overlay` 모드에서만 사용합니다. WSL/Linux/macOS의 `ai-battery-run`은 Python 3와 POSIX PTY를 사용하고, macOS HUD는 내장 `osascript`와 AppleScriptObjC를 사용합니다.
 
-Codex 데이터는 기본적으로 `~/.codex/sessions`를 읽습니다. 다른 위치를 쓰고 있다면 `CODEX_HOME`을 설정하세요.
+Codex 데이터는 Codex가 실제로 사용하는 `CODEX_HOME`(기본값 `~/.codex`)의 `sessions`를 읽습니다. AI Battery는 `HOME`, `USERPROFILE`, `CODEX_HOME`을 설정하거나 변경하지 않습니다. `CODEX_HOME`을 바꾸면 Codex 자체의 `/resume` 저장소도 바뀌므로 Windows와 WSL의 경로를 합치는 용도로 사용하지 마세요. 쉼표로 여러 경로를 지정하는 방식도 지원하지 않습니다.
 
 ```bash
 CODEX_HOME=/path/to/codex-home ai-battery --provider codex
 ```
+
+Windows native와 WSL을 함께 쓰면 두 환경의 세션 저장소는 각각 유지되고 `/resume`도 서로 독립적으로 동작합니다. 계정 공통 값인 Codex 5h/7d 사용량만 AI Battery 전용 `codex-account-usage.json`으로 공유하며, 세션 파일 경로, workspace, 승인/샌드박스 모드는 공유하지 않습니다. 공유 상태 위치를 직접 격리해야 할 때만 `AI_BATTERY_SHARED_USAGE_STATE_DIR`을 설정할 수 있습니다.
 
 Claude의 사용량 표시는 Claude Code statusLine hook을 설치한 뒤부터 사용할 수 있습니다.
 
