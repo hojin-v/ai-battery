@@ -401,6 +401,7 @@ $topMostTimer.Interval = $script:dockIdleTrackingInterval
 $topMostTimer.add_Tick({
   Update-HudVisibilityForFullscreen
   Update-HudDockRequest
+  Update-DockSessionLifetime
   Update-HudDockPlacement
 })
 $menuAutoHideTimer = New-Object System.Windows.Forms.Timer

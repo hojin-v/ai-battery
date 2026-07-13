@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import {
   bar,
   claudeHeader,
+  claudeNativeSessionOwnerPid,
   commandMatchesProvider,
   codexBackgroundReadyInProcesses,
   codexAccountUsageSnapshot,
@@ -42,6 +43,7 @@ import {
   uninstallCodexWrapper,
   uninstallTmuxStatus,
   windowsOwnedShimDirsForUninstall,
+  windowsProviderOwnerPidFromAncestors,
   windowsSetupNeedsRowPty,
   windowsUserPathWithShim
 } from "../bin/ai-battery.js";
@@ -1289,9 +1291,59 @@ test("setup compiles rowpty locally from the vendored source", { skip: process.p
   assert.equal(fs.existsSync(path.join(tmpDir, "bin", "conpty.dll")), true);
   assert.equal(fs.existsSync(path.join(tmpDir, "bin", "OpenConsole.exe")), true);
 
+  const detachedMarker = path.join(tmpDir, "detached-launch.txt");
+  const detachedScript = `setTimeout(() => require("node:fs").writeFileSync(${JSON.stringify(detachedMarker)}, "ok"), 150)`;
+  const detachedCommand = [process.execPath, "-e", detachedScript]
+    .map(quoteWindowsCommandLineArg)
+    .join(" ");
+  const detached = spawnSync(first.exePath, [
+    "--launch-detached",
+    Buffer.from(detachedCommand, "utf8").toString("base64"),
+    Buffer.from(tmpDir, "utf8").toString("base64")
+  ], { encoding: "utf8", timeout: 5000, windowsHide: true });
+  assert.equal(detached.status, 0, detached.stderr);
+  const sleeper = new Int32Array(new SharedArrayBuffer(4));
+  for (let attempt = 0; attempt < 40 && !fs.existsSync(detachedMarker); attempt += 1) {
+    Atomics.wait(sleeper, 0, 0, 50);
+  }
+  assert.equal(fs.readFileSync(detachedMarker, "utf8"), "ok");
+
+  const foreground = spawnSync(first.exePath, ["--foreground-terminal"], {
+    encoding: "utf8",
+    timeout: 5000,
+    windowsHide: true
+  });
+  assert.equal(foreground.status, 0, foreground.stderr);
+  assert.match(foreground.stdout, /^\d+\t[A-Za-z0-9+/=]*\r?\n$/);
+
   const second = withEnv({ AI_BATTERY_DATA_DIR: tmpDir }, () => installRowPtyHost());
   assert.equal(second.ok, true);
   assert.equal(second.compiled, false);
+});
+
+test("Windows Claude setup installs the native HUD launcher", { skip: process.platform !== "win32" }, (t) => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-claude-launcher-"));
+  t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
+  const homeDir = path.join(tmpDir, "home");
+  const dataDir = path.join(tmpDir, "data");
+  fs.mkdirSync(homeDir, { recursive: true });
+
+  const setup = spawnNode([CLI_PATH, "setup", "claude", "--json"], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      HOME: homeDir,
+      XDG_STATE_HOME: path.join(tmpDir, "state"),
+      AI_BATTERY_DATA_DIR: dataDir
+    },
+    timeout: 120000
+  });
+
+  assert.equal(setup.status, 0, setup.stderr);
+  const result = JSON.parse(setup.stdout);
+  assert.equal(result.claude.launcher.ok, true);
+  assert.equal(fs.existsSync(path.join(dataDir, "bin", "rowpty.exe")), true);
+  assert.match(result.claude.command, /--attach-hud/);
 });
 
 test("rowpty executable resolution honors the explicit env override", (t) => {
@@ -1491,6 +1543,25 @@ test("HUD launcher parses dock options", () => {
   assert.equal(plain.dockConsole, false);
   assert.equal(plain.dockWindow, 0);
   assert.equal(parseWindowsHudArgs(["--dock-session", "4321"]).dockSession, 4321);
+  const detached = parseWindowsHudArgs([
+    "--dock-detach",
+    "--dock-session",
+    "4321",
+    "--dock-owner-pid",
+    "9876",
+    "--dock-provider",
+    "claude",
+    "--dock-marker",
+    "C:\\temp\\claude-session.json",
+    "--dock-title-hint",
+    "C:\\work\\pr-review"
+  ]);
+  assert.equal(detached.dockDetach, true);
+  assert.equal(detached.dockSession, 4321);
+  assert.equal(detached.dockOwnerPid, 9876);
+  assert.equal(detached.dockProvider, "claude");
+  assert.equal(detached.dockMarkerPath, "C:\\temp\\claude-session.json");
+  assert.equal(detached.dockTitleHint, "C:\\work\\pr-review");
   assert.equal(plain.dockPosition, "bottom");
   assert.equal(parseWindowsHudArgs(["--dock-position", "tabs"]).dockPosition, "tabs");
   assert.equal(parseWindowsHudArgs(["--dock-position=top"]).dockPosition, "tabs");
@@ -1508,10 +1579,21 @@ test("Windows dock reserves space only on its terminal window", () => {
     "utf8"
   );
   assert.match(dockSource, /Reserve-DockTargetSpace/);
-  assert.match(dockSource, /dock target .* is gone; waiting detached/);
+  assert.match(dockSource, /Remove-DockSessionsForTarget/);
   assert.match(dockSource, /if \(\$request\.detach\)/);
-  assert.match(dockSource, /dock session released; retaining terminal target/);
-  assert.doesNotMatch(dockSource, /dock detached session=/);
+  assert.match(dockSource, /Add-DockSession/);
+  assert.match(dockSource, /Write-DockSessionMarker/);
+  assert.match(dockSource, /CreateDirectory\(\$markerDirectory\)/);
+  assert.match(dockSource, /Remove-DockSession/);
+  assert.match(dockSource, /Select-DockTargetFromActiveSessions/);
+  assert.match(dockSource, /Update-DockSessionLifetime/);
+  assert.match(dockSource, /Test-DockProviderActiveForTarget/);
+  assert.match(dockSource, /Request-PreviousDockSessionDetach/);
+  assert.match(dockSource, /tui-dock-request-\$previousHwnd\.json/);
+  assert.match(dockSource, /Notify-DockSessionStateChanged/);
+  assert.match(dockSource, /last terminal session detached/);
+  assert.match(dockSource, /dockSessions\.Count -eq 0/);
+  assert.doesNotMatch(dockSource, /retaining terminal target/);
   assert.match(dockSource, /frame\.Left \+ \$horizontalInset \+ \$leftOpticalInset/);
   assert.match(dockSource, /frame\.Right - \$frame\.Left\) - \(\$horizontalInset \* 2\) - \$leftOpticalInset/);
   assert.match(dockSource, /\$bottomDelta = \$desiredFrameBottom - \[int\]\$frame\.Bottom/);
@@ -1532,8 +1614,77 @@ test("Windows HUD captures the launching terminal before process discovery", () 
   assert.ok(fastExitAt > captureAt && fastExitAt < processScanAt);
   assert.match(launcherSource, /buildStartProcessCommand\("powershell\.exe", psArgs\)/);
   assert.match(launcherSource, /function tryAdoptRunningDockHost/);
-  assert.match(launcherSource, /running dock host adopted/);
+  assert.match(launcherSource, /running dock host request consumed/);
+  assert.match(launcherSource, /tui-dock-host-\$\{windowId\}\.json/);
+  assert.match(launcherSource, /function activeDockHostPaths/);
+  assert.match(launcherSource, /function retireLegacyDockHost/);
+  assert.match(launcherSource, /if \(stop\) \{\s*trySendRunningDockHostRequest\(\{ stop: true \}\)/);
+  assert.match(launcherSource, /normalizedDockTitleHint/);
+  assert.match(launcherSource, /\$launchIdentityMatches/);
+  assert.match(launcherSource, /GetParentProcessId/);
+  assert.match(launcherSource, /CreateToolhelp32Snapshot/);
+  assert.match(launcherSource, /ai-battery-dock-resolve-/);
+  assert.match(launcherSource, /Complete-DockResolution/);
+  assert.match(launcherSource, /fs\.readFileSync\(resolveResultPath, "utf8"\)/);
+  assert.doesNotMatch(
+    launcherSource.slice(captureAt, launcherSource.indexOf("function refreshWslHudScriptCopy")),
+    /Get-CimInstance Win32_Process/
+  );
+  assert.ok(
+    launcherSource.indexOf("$consoleTitleMatches.Count -eq 1")
+      < launcherSource.indexOf("$dockTitleMatches.Count -eq 1")
+  );
+  assert.match(launcherSource, /\$dockTitleMatches\.Count -eq 1/);
+  assert.match(launcherSource, /\$candidateWindows\.Count -gt 1/);
+  assert.match(launcherSource, /waiting for a later provider attachment attempt/);
   assert.match(launcherSource, /\$ancestorPids\.ContainsKey\(\$fgPid\) -or \(\$parentChainUnavailable -and \$terminals -contains \$fgName\)/);
+});
+
+test("Windows Claude statusline queues HUD attachment without blocking its header", () => {
+  const cliSource = fs.readFileSync(
+    fileURLToPath(new URL("../lib/cli.js", import.meta.url)),
+    "utf8"
+  );
+  const launchStart = cliSource.indexOf("function launchWindowsProviderDetached");
+  const attachStart = cliSource.indexOf("function attachWindowsClaudeHud", launchStart);
+  const launchSource = cliSource.slice(launchStart, attachStart);
+  const foregroundAt = launchSource.indexOf("GetForegroundWindow()");
+  const processScanAt = launchSource.indexOf("Get-CimInstance Win32_Process");
+  assert.ok(foregroundAt >= 0 && foregroundAt < processScanAt);
+  assert.match(launchSource, /__AI_BATTERY_DOCK_WINDOW__/);
+  assert.match(launchSource, /const nativeLauncher = rowptyExePath\(\)/);
+  assert.match(launchSource, /"--launch-detached"/);
+  assert.match(launchSource, /spawnSync\(nativeLauncher/);
+  assert.match(launchSource, /timeout: 1500/);
+  assert.match(cliSource, /function windowsForegroundTerminalInfo/);
+  assert.match(cliSource, /"--foreground-terminal"/);
+  assert.match(cliSource, /windowsTerminalTitleMatchesProvider/);
+  assert.match(cliSource, /Date\.now\(\) - checkedAt >= 5000/);
+  assert.match(cliSource, /previousHwnd/);
+  assert.match(cliSource, /currentAttachmentAlive && \(/);
+  assert.match(cliSource, /Number\(currentMarker\.hwnd\) === migrationTargetHwnd/);
+
+  const captureStart = cliSource.indexOf('if (args.command === "capture-claude")');
+  const captureEnd = cliSource.indexOf("const watchTty", captureStart);
+  const captureSource = cliSource.slice(captureStart, captureEnd);
+  assert.ok(
+    captureSource.indexOf("if (!usageRowVisible && header)")
+      < captureSource.indexOf("const results = []")
+  );
+  assert.match(cliSource, /\["launching-hud", "resolving-window", "launching-host"\]/);
+  assert.match(cliSource, /launcherPending \? 10 \* 1000 : 1000/);
+  assert.doesNotMatch(cliSource, /Date\.now\(\) - attachedAt < 5 \* 60 \* 1000/);
+
+  const launcherSource = fs.readFileSync(
+    fileURLToPath(new URL("../lib/platforms/windows/hud-launcher.js", import.meta.url)),
+    "utf8"
+  );
+  assert.match(launcherSource, /function writeDockLauncherMarker/);
+  assert.match(launcherSource, /if \(\(dockConsole \|\| dockWindow\) && !dockDetach\)/);
+  assert.match(launcherSource, /writeDockLauncherMarker\(dockWindow \? "launching-host" : "resolving-window"\)/);
+  assert.match(launcherSource, /previous\?\.previousHwnd \|\| previous\?\.hwnd/);
+  assert.match(launcherSource, /previousHostAlive && previous\?\.attachedAt && !targetChanged/);
+  assert.match(launcherSource, /preserving attached marker/);
 });
 
 test("Windows dock debounces shell transitions and repaints only changed status", () => {
@@ -1549,9 +1700,24 @@ test("Windows dock debounces shell transitions and repaints only changed status"
     fileURLToPath(new URL("../lib/platforms/windows/hud/windowing.ps1", import.meta.url)),
     "utf8"
   );
+  const renderingSource = fs.readFileSync(
+    fileURLToPath(new URL("../lib/platforms/windows/hud/rendering.ps1", import.meta.url)),
+    "utf8"
+  );
+  const nativeSource = fs.readFileSync(
+    fileURLToPath(new URL("../lib/platforms/windows/hud/native.ps1", import.meta.url)),
+    "utf8"
+  );
   assert.match(mainSource, /EVENT_SYSTEM_MOVESIZESTART/);
   assert.match(dockSource, /TotalMilliseconds -ge 500/);
   assert.match(dockSource, /function Test-DockSnapPreviewActive/);
+  assert.match(dockSource, /function Test-DockShellSnapFlyoutActive/);
+  assert.match(dockSource, /XamlExplorerHostIslandWindow/);
+  assert.match(
+    dockSource,
+    /Test-DockLeftButtonDown[\s\S]*\$now -lt \$script:dockFastTrackingUntilUtc[\s\S]*HasVisibleTopLevelWindowClass\("XamlExplorerHostIslandWindow"\)/
+  );
+  assert.match(nativeSource, /HasVisibleTopLevelWindowClass/);
   assert.match(dockSource, /if \(Update-DockSnapPreviewVisibility\) \{ return \}/);
   assert.doesNotMatch(dockSource, /Control\]::MouseButtons/);
   assert.match(dockSource, /Scale-HudValue 20/);
@@ -1559,6 +1725,10 @@ test("Windows dock debounces shell transitions and repaints only changed status"
   assert.match(dockSource, /TotalMilliseconds -le 350/);
   assert.match(dockSource, /function Update-DockGlobalDragState/);
   assert.match(dockSource, /function Update-DockObservedFrameDragState/);
+  assert.equal(
+    (dockSource.match(/if \(\$active\) \{[\s\S]{0,300}?\$script:dockLastPlacement = \$null/g) || []).length,
+    2
+  );
   assert.match(dockSource, /\$script:dockObservedRawRectKey -ne \$key/);
   assert.match(dockSource, /\$script:dockObservedFrameDragActive -or/);
   assert.match(dockSource, /GetForegroundWindow\(\) -eq \$script:dockTargetHandle/);
@@ -1568,8 +1738,26 @@ test("Windows dock debounces shell transitions and repaints only changed status"
   assert.match(dockSource, /dockActiveTrackingInterval = 16/);
   assert.match(dockSource, /dockFastTrackingUntilUtc = \[datetime\]::UtcNow\.AddMilliseconds\(350\)/);
   assert.match(dockSource, /\$live\.Right = \[int\]\$raw\.Right - \$script:dockFrameInsetRight/);
+  const zOrderSource = dockSource.slice(
+    dockSource.indexOf("function Sync-HudDockZOrder"),
+    dockSource.indexOf("$script:dockResizeDragActive")
+  );
+  assert.match(dockSource, /function Get-DockNearestVisibleWindowAbove/);
+  assert.match(zOrderSource, /Get-DockNearestVisibleWindowAbove \$Target/);
+  assert.doesNotMatch(zOrderSource, /\[AiBatteryNative\]::SWP_SHOWWINDOW/);
   assert.match(mainSource, /Invalidate-DockedTuiIfChanged/);
+  assert.match(mainSource, /Get-DockedTuiProviderRunning/);
+  assert.match(mainSource, /Test-DockProviderActiveForTarget/);
   assert.match(mainSource, /DoubleBuffered/);
+  assert.match(mainSource, /GraphicsUnit\]::Pixel/);
+  assert.match(dockSource, /function Update-HudDockDpi/);
+  assert.match(dockSource, /Update-HudDockDpi \| Out-Null/);
+  assert.match(renderingSource, /GetDpiForWindow\(\[IntPtr\]::new\(\[Int64\]\$DockWindowHandle\)\)/);
+  assert.match(nativeSource, /SetThreadDpiAwarenessContext/);
+  assert.match(mainSource, /AutoScaleMode\]::None/);
+  assert.match(mainSource, /tui-dock-request-\$DockWindowHandle\.json/);
+  assert.match(mainSource, /tui-dock-host-\$DockWindowHandle\.json/);
+  assert.match(mainSource, /AiBatteryTuiStatusline_\$DockWindowHandle/);
   assert.match(mainSource, /function Get-DockedTuiResponsiveLayout/);
   assert.match(mainSource, /Name = "full"; BarWidth = 10; ShowWindows = \$true/);
   assert.match(mainSource, /Name = "metrics-half"; BarWidth = 5; ShowWindows = \$true/);
@@ -1585,7 +1773,80 @@ test("Windows dock debounces shell transitions and repaints only changed status"
     fileURLToPath(new URL("../lib/platforms/windows/codex-runner.js", import.meta.url)),
     "utf8"
   );
-  assert.doesNotMatch(runnerSource, /stopDockedHud/);
+  assert.match(runnerSource, /function detachDockedHud/);
+  assert.match(runnerSource, /function foregroundTerminalWindow/);
+  assert.match(runnerSource, /function launchDockedHudAttachment/);
+  assert.match(runnerSource, /process\.stdout\.on\("resize", refreshHudTarget\)/);
+  assert.match(runnerSource, /--dock-marker/);
+  assert.match(runnerSource, /--dock-owner-pid/);
+  assert.match(runnerSource, /--dock-provider/);
+});
+
+test("Windows Claude HUD ownership selects the actual provider ancestor", () => {
+  const ancestors = [
+    { processId: 100, name: "cmd.exe", commandLine: "cmd /d /s /c node ai-battery.js capture-claude" },
+    { processId: 200, name: "node.exe", commandLine: "node C:\\tools\\@anthropic-ai\\claude-code\\cli.js" },
+    { processId: 300, name: "WindowsTerminal.exe", commandLine: "WindowsTerminal.exe" }
+  ];
+  assert.equal(windowsProviderOwnerPidFromAncestors("claude", ancestors), 200);
+  assert.equal(windowsProviderOwnerPidFromAncestors("claude", [
+    { processId: 400, name: "claude.exe", commandLine: "claude" }
+  ]), 400);
+  assert.equal(windowsProviderOwnerPidFromAncestors("claude", ancestors.slice(0, 1)), 0);
+});
+
+test("Windows Claude HUD prefers the native interactive session PID", (t) => {
+  const sessionsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-claude-owner-"));
+  t.after(() => fs.rmSync(sessionsRoot, { recursive: true, force: true }));
+  const now = Date.now();
+  fs.writeFileSync(path.join(sessionsRoot, "410.json"), JSON.stringify({
+    pid: 410,
+    sessionId: "other-session",
+    cwd: "C:\\work\\project",
+    kind: "interactive"
+  }));
+  fs.writeFileSync(path.join(sessionsRoot, "420.json"), JSON.stringify({
+    pid: 420,
+    sessionId: "target-session",
+    cwd: "C:\\work\\project",
+    kind: "interactive"
+  }));
+  fs.writeFileSync(path.join(sessionsRoot, "430.json"), JSON.stringify({
+    pid: 430,
+    sessionId: "background-session",
+    cwd: "C:\\work\\project",
+    kind: "background"
+  }));
+
+  assert.equal(claudeNativeSessionOwnerPid("target-session", "C:\\work\\project", {
+    sessionsRoot,
+    processAlive: (pid) => pid !== 410,
+    now
+  }), 420);
+  assert.equal(claudeNativeSessionOwnerPid("target-session", "C:\\work\\other", {
+    sessionsRoot,
+    processAlive: () => true,
+    now
+  }), 0);
+
+  const staleExactPath = path.join(sessionsRoot, "440.json");
+  fs.writeFileSync(staleExactPath, JSON.stringify({
+    pid: 440,
+    sessionId: "stale-exact-session",
+    cwd: "C:\\work\\project",
+    kind: "interactive"
+  }));
+  fs.utimesSync(staleExactPath, new Date(now - 20 * 60 * 1000), new Date(now - 20 * 60 * 1000));
+  assert.equal(claudeNativeSessionOwnerPid("stale-exact-session", "C:\\work\\project", {
+    sessionsRoot,
+    processAlive: () => true,
+    now
+  }), 440);
+  assert.equal(claudeNativeSessionOwnerPid("missing-session", "C:\\work\\project", {
+    sessionsRoot,
+    processAlive: () => true,
+    now
+  }), 0);
 });
 
 test("Windows Codex runner normalizes the dock position option", () => {
@@ -1917,6 +2178,7 @@ test("uninstall retains Codex recovery metadata when the configured wrapper was 
   const result = withEnv({
     HOME: path.join(tmpDir, "home"),
     AI_BATTERY_STATE_DIR: stateDir,
+    AI_BATTERY_DATA_DIR: path.join(tmpDir, "data"),
     AI_BATTERY_SKIP_WINDOWS_PATH_WRITE: "1",
     PATH: ""
   }, uninstallCodexWrapper);
@@ -1977,6 +2239,7 @@ test("Windows setup keeps literal percent and Unicode paths out of the batch wra
   const result = withEnv({
     HOME: homeDir,
     XDG_STATE_HOME: stateDir,
+    XDG_DATA_HOME: path.join(tmpDir, "data"),
     AI_BATTERY_SHIM_DIR: shimDir,
     AI_BATTERY_SKIP_WINDOWS_PATH_WRITE: "1",
     PATH: `${originalDir}${path.delimiter}${process.env.PATH || ""}`
@@ -1995,8 +2258,10 @@ test("Windows setup keeps literal percent and Unicode paths out of the batch wra
   const removed = withEnv({
     HOME: homeDir,
     XDG_STATE_HOME: stateDir,
+    XDG_DATA_HOME: path.join(tmpDir, "data"),
     AI_BATTERY_SHIM_DIR: shimDir,
-    AI_BATTERY_SKIP_WINDOWS_PATH_WRITE: "1"
+    AI_BATTERY_SKIP_WINDOWS_PATH_WRITE: "1",
+    PATH: `${shimDir}${path.delimiter}${originalDir}`
   }, uninstallCodexWrapper);
   assert.equal(removed.changed, true);
   assert.equal(fs.existsSync(result.wrapperPath), false);
@@ -2226,7 +2491,9 @@ test("setup replaces a multiline Codex status_line without leaving invalid TOML 
   withEnv({
     HOME: homeDir,
     CODEX_HOME: codexHome,
-    XDG_STATE_HOME: stateDir
+    XDG_STATE_HOME: stateDir,
+    XDG_DATA_HOME: path.join(tmpDir, "data"),
+    PATH: ""
   }, () => {
     const installed = installCodexStatusLine();
     assert.equal(installed.ok, true);
@@ -2905,7 +3172,7 @@ test("Claude setup can persist a header-only pane statusLine", (t) => {
   });
 });
 
-test("Windows setup builds rowpty only for an explicitly requested legacy TUI layout", () => {
+test("Windows Codex-only setup requests rowpty only for a legacy TUI layout", () => {
   assert.equal(withEnv({
     AI_BATTERY_INSTALL_ROWPTY: undefined,
     AI_BATTERY_WIN_LAYOUT: undefined,

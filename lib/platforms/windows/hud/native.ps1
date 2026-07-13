@@ -22,6 +22,7 @@ public struct AiBatteryPowerThrottlingState {
   public uint StateMask;
 }
 public delegate void AiBatteryWinEventDelegate(IntPtr hWinEventHook, uint eventType, IntPtr hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime);
+public delegate bool AiBatteryEnumWindowsDelegate(IntPtr hwnd, IntPtr lParam);
 public static class AiBatteryNative {
   public const int ProcessPowerThrottling = 4;
   public const uint PROCESS_POWER_THROTTLING_CURRENT_VERSION = 1;
@@ -77,6 +78,8 @@ public static class AiBatteryNative {
   public static extern int SetProcessDpiAwareness(int value);
   [DllImport("user32.dll", SetLastError=true)]
   public static extern bool SetProcessDpiAwarenessContext(IntPtr dpiContext);
+  [DllImport("user32.dll", SetLastError=true)]
+  public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr dpiContext);
   [DllImport("user32.dll")]
   public static extern uint GetDpiForWindow(IntPtr hWnd);
   [DllImport("user32.dll")]
@@ -99,6 +102,8 @@ public static class AiBatteryNative {
   public static extern bool IsWindowVisible(IntPtr hWnd);
   [DllImport("user32.dll", CharSet=CharSet.Auto)]
   public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder lpClassName, int nMaxCount);
+  [DllImport("user32.dll")]
+  private static extern bool EnumWindows(AiBatteryEnumWindowsDelegate callback, IntPtr lParam);
   [DllImport("dwmapi.dll")]
   public static extern int DwmGetWindowAttribute(IntPtr hWnd, int dwAttribute, out int pvAttribute, int cbAttribute);
   [DllImport("dwmapi.dll")]
@@ -127,6 +132,22 @@ public static class AiBatteryNative {
   public static extern IntPtr FindWindowEx(IntPtr hwndParent, IntPtr hwndChildAfter, string lpszClass, string lpszWindow);
   [DllImport("user32.dll")]
   public static extern bool GetWindowRect(IntPtr hWnd, out AiBatteryRect rect);
+  public static bool HasVisibleTopLevelWindowClass(string className) {
+    bool found = false;
+    AiBatteryEnumWindowsDelegate callback = delegate(IntPtr hwnd, IntPtr lParam) {
+      if (!IsWindowVisible(hwnd)) return true;
+      var value = new System.Text.StringBuilder(256);
+      GetClassName(hwnd, value, value.Capacity);
+      if (String.Equals(value.ToString(), className, StringComparison.Ordinal)) {
+        found = true;
+        return false;
+      }
+      return true;
+    };
+    EnumWindows(callback, IntPtr.Zero);
+    GC.KeepAlive(callback);
+    return found;
+  }
   [DllImport("user32.dll")]
   public static extern IntPtr MonitorFromWindow(IntPtr hWnd, UInt32 dwFlags);
   [DllImport("user32.dll")]
@@ -138,11 +159,19 @@ public static class AiBatteryNative {
 Add-Type -TypeDefinition $nativeCode
 
 function Enable-HudDpiAwareness {
+  $context = [IntPtr]::new([AiBatteryNative]::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
   try {
-    $context = [IntPtr]::new([AiBatteryNative]::DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
     if ([AiBatteryNative]::SetProcessDpiAwarenessContext($context)) { return "per-monitor-v2" }
   } catch {
-    # Fall through to older Windows APIs.
+    # PowerShell may already own a hidden console HWND, which locks process DPI.
+  }
+
+  try {
+    if ([AiBatteryNative]::SetThreadDpiAwarenessContext($context) -ne [IntPtr]::Zero) {
+      return "thread-per-monitor-v2"
+    }
+  } catch {
+    # Fall through to older process-level APIs.
   }
 
   try {

@@ -1,5 +1,14 @@
 function Get-HudDpi {
   try {
+    if ($DockWindowHandle -ne 0) {
+      $targetDpi = [AiBatteryNative]::GetDpiForWindow([IntPtr]::new([Int64]$DockWindowHandle))
+      if ($targetDpi -gt 0) { return [int]$targetDpi }
+    }
+  } catch {
+    # Continue with the HUD window or desktop DPI below.
+  }
+
+  try {
     if ($form -and -not $form.IsDisposed -and $form.Handle -ne [IntPtr]::Zero) {
       $windowDpi = [AiBatteryNative]::GetDpiForWindow($form.Handle)
       if ($windowDpi -gt 0) { return [int]$windowDpi }

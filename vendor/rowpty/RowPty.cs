@@ -28,6 +28,11 @@ internal sealed class RowPty
     private const uint SHIFT_PRESSED = 0x0010;
 
     private const uint EXTENDED_STARTUPINFO_PRESENT = 0x00080000;
+    private const uint CREATE_NEW_PROCESS_GROUP = 0x00000200;
+    private const uint CREATE_BREAKAWAY_FROM_JOB = 0x01000000;
+    private const uint CREATE_NO_WINDOW = 0x08000000;
+    private const int STARTF_USESHOWWINDOW = 0x00000001;
+    private const short SW_HIDE = 0;
     private static readonly IntPtr PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE = new IntPtr(0x00020016);
 
     private const uint WAIT_OBJECT_0 = 0x00000000;
@@ -151,6 +156,19 @@ internal sealed class RowPty
 
     private int Execute(string[] args)
     {
+        if (args.Length > 0 && args[0] == "--foreground-terminal")
+        {
+            long window = ForegroundTerminalWindow();
+            string title = TerminalWindowTitle(new IntPtr(window));
+            Console.WriteLine(window.ToString(CultureInfo.InvariantCulture) + "\t" + Convert.ToBase64String(Encoding.UTF8.GetBytes(title)));
+            return 0;
+        }
+
+        if (args.Length > 0 && args[0] == "--launch-detached")
+        {
+            return LaunchDetached(args);
+        }
+
         bool handled;
         int immediateExitCode;
         this.options = ParseOptions(args, out handled, out immediateExitCode);
@@ -175,6 +193,101 @@ internal sealed class RowPty
 
         int exitCode = RunMainLoop();
         return exitCode;
+    }
+
+    private static int LaunchDetached(string[] args)
+    {
+        if (args.Length < 3 || args.Length > 4)
+        {
+            throw new UsageException("--launch-detached requires COMMAND_BASE64 CWD_BASE64 [WINDOW_PLACEHOLDER]");
+        }
+
+        string commandLineText;
+        string workingDirectory;
+        try
+        {
+            commandLineText = Encoding.UTF8.GetString(Convert.FromBase64String(args[1]));
+            workingDirectory = Encoding.UTF8.GetString(Convert.FromBase64String(args[2]));
+        }
+        catch (FormatException)
+        {
+            throw new UsageException("--launch-detached arguments must be base64-encoded UTF-8");
+        }
+
+        if (args.Length == 4 && args[3].Length > 0)
+        {
+            commandLineText = commandLineText.Replace(args[3], ForegroundTerminalWindow().ToString(CultureInfo.InvariantCulture));
+        }
+
+        STARTUPINFOEX startupInfo = new STARTUPINFOEX();
+        startupInfo.StartupInfo.cb = Marshal.SizeOf(typeof(STARTUPINFO));
+        startupInfo.StartupInfo.dwFlags = STARTF_USESHOWWINDOW;
+        startupInfo.StartupInfo.wShowWindow = SW_HIDE;
+        StringBuilder commandLine = new StringBuilder(commandLineText, commandLineText.Length + 1);
+        PROCESS_INFORMATION processInfo;
+        bool ok = CreateProcessW(
+            null,
+            commandLine,
+            IntPtr.Zero,
+            IntPtr.Zero,
+            false,
+            CREATE_BREAKAWAY_FROM_JOB | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW,
+            IntPtr.Zero,
+            workingDirectory,
+            ref startupInfo,
+            out processInfo);
+        if (!ok)
+        {
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "detached CreateProcess failed");
+        }
+
+        CloseHandle(processInfo.hThread);
+        CloseHandle(processInfo.hProcess);
+        return 0;
+    }
+
+    private static long ForegroundTerminalWindow()
+    {
+        IntPtr window = GetForegroundWindow();
+        if (window == IntPtr.Zero)
+        {
+            return 0;
+        }
+
+        uint processId;
+        GetWindowThreadProcessId(window, out processId);
+        try
+        {
+            string name = Process.GetProcessById((int)processId).ProcessName.ToLowerInvariant();
+            string[] terminals = { "windowsterminal", "conhost", "wezterm-gui", "alacritty", "code", "hyper", "tabby", "conemu64", "conemu" };
+            for (int i = 0; i < terminals.Length; i++)
+            {
+                if (name == terminals[i])
+                {
+                    return window.ToInt64();
+                }
+            }
+        }
+        catch
+        {
+            return 0;
+        }
+        return 0;
+    }
+
+    private static string TerminalWindowTitle(IntPtr window)
+    {
+        if (window == IntPtr.Zero)
+        {
+            return "";
+        }
+        int length = GetWindowTextLengthW(window);
+        if (length <= 0)
+        {
+            return "";
+        }
+        StringBuilder title = new StringBuilder(length + 1);
+        return GetWindowTextW(window, title, title.Capacity) > 0 ? title.ToString() : "";
     }
 
     private static Options ParseOptions(string[] args, out bool handled, out int immediateExitCode)
@@ -310,6 +423,8 @@ internal sealed class RowPty
         Console.WriteLine("--reserve N          rows reserved at the bottom (default 1, clamp 1..5)");
         Console.WriteLine("--status-cmd CMD     command line used to fetch status text");
         Console.WriteLine("--settle-ms N        quiet time after child output before painting (default 50)");
+        Console.WriteLine("--foreground-terminal print the active terminal window handle and exit");
+        Console.WriteLine("--launch-detached COMMAND_BASE64 CWD_BASE64 [WINDOW_PLACEHOLDER]");
         Console.WriteLine("--version / --help");
     }
 
@@ -2617,6 +2732,18 @@ internal sealed class RowPty
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
     private static extern short VkKeyScanW(char ch);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint lpdwProcessId);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern int GetWindowTextLengthW(IntPtr hWnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern int GetWindowTextW(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr hObject);

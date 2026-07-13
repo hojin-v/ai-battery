@@ -1,5 +1,8 @@
 $script:dockTargetHandle = if ($DockWindowHandle -ne 0) { [IntPtr]::new($DockWindowHandle) } else { [IntPtr]::Zero }
 $script:dockSession = [Int64]$DockSession
+$script:dockSessions = @{}
+$script:dockSessionTrackingEnabled = $false
+$script:dockLastSessionSweepUtc = [datetime]::MinValue
 $script:dockRequestLastWriteUtc = [datetime]::MinValue
 $script:dockLastPlacement = $null
 $script:dockSpaceReserved = $false
@@ -11,6 +14,8 @@ $script:dockGlobalDragActive = $false
 $script:dockObservedFrameDragActive = $false
 $script:dockObservedRawRectKey = ""
 $script:dockSnapPreviewActive = $false
+$script:dockShellSnapFlyoutActive = $false
+$script:dockTargetForegroundAtUtc = [datetime]::MinValue
 $script:dockPendingMoveSizeState = $null
 $script:dockShowAfterMoveSizeUtc = [datetime]::MinValue
 $script:dockFastTrackingUntilUtc = [datetime]::MinValue
@@ -23,6 +28,138 @@ $script:dockFrameInsetTop = 0
 $script:dockFrameInsetRight = 0
 $script:dockFrameInsetBottom = 0
 $script:dockTargetFrameChangedAtUtc = [datetime]::MinValue
+
+function Get-DockSessionKey([Int64]$Session, [string]$Provider) {
+  $normalizedProvider = if ($Provider) { $Provider.Trim().ToLowerInvariant() } else { "unknown" }
+  return "${normalizedProvider}:$Session"
+}
+
+function Write-DockSessionMarker([string]$MarkerPath, [Int64]$Hwnd, [Int64]$Session, [int]$OwnerPid, [string]$Provider) {
+  if (-not $MarkerPath) { return }
+  try {
+    $markerDirectory = [System.IO.Path]::GetDirectoryName($MarkerPath)
+    if ($markerDirectory) { [System.IO.Directory]::CreateDirectory($markerDirectory) | Out-Null }
+    $previous = $null
+    if (Test-Path -LiteralPath $MarkerPath) {
+      try { $previous = Get-Content -LiteralPath $MarkerPath -Raw | ConvertFrom-Json } catch { }
+    }
+    $markerData = @{
+      hwnd = $Hwnd
+      session = $Session
+      ownerPid = $OwnerPid
+      provider = $Provider
+      hostPid = $PID
+      attachedAt = [datetime]::UtcNow.ToString("o")
+      stage = "attached"
+    }
+    foreach ($name in @("columns", "windowCheckedAt")) {
+      if ($previous -and $previous.PSObject.Properties.Name -contains $name) {
+        $markerData[$name] = $previous.$name
+      }
+    }
+    $marker = $markerData | ConvertTo-Json -Compress
+    [System.IO.File]::WriteAllText($MarkerPath, $marker, [System.Text.UTF8Encoding]::new($false))
+  } catch {
+    Write-HudDockDebug "dock session marker failed path=$MarkerPath session=$Session"
+  }
+}
+
+function Request-PreviousDockSessionDetach([string]$MarkerPath, [Int64]$Hwnd, [Int64]$Session, [string]$Provider) {
+  if (-not $MarkerPath -or $Hwnd -eq 0 -or $Session -eq 0) { return }
+  try {
+    if (-not (Test-Path -LiteralPath $MarkerPath)) { return }
+    $previous = Get-Content -LiteralPath $MarkerPath -Raw | ConvertFrom-Json
+    $previousHwnd = if ($null -ne $previous.previousHwnd) {
+      [Int64]$previous.previousHwnd
+    } elseif ($null -ne $previous.hwnd) {
+      [Int64]$previous.hwnd
+    } else { 0 }
+    if ($previousHwnd -eq 0 -or $previousHwnd -eq $Hwnd) { return }
+    $ipcRoot = if ($env:LOCALAPPDATA) {
+      Join-Path $env:LOCALAPPDATA "ai-battery"
+    } else {
+      Join-Path ([System.IO.Path]::GetTempPath()) "ai-battery"
+    }
+    [System.IO.Directory]::CreateDirectory($ipcRoot) | Out-Null
+    $requestPath = Join-Path $ipcRoot "tui-dock-request-$previousHwnd.json"
+    $request = @{
+      detach = $true
+      hwnd = $previousHwnd
+      session = $Session
+      provider = $Provider
+      migratedTo = $Hwnd
+      at = [datetime]::UtcNow.ToString("o")
+    } | ConvertTo-Json -Compress
+    [System.IO.File]::WriteAllText($requestPath, $request, [System.Text.UTF8Encoding]::new($false))
+    Write-HudDockDebug "dock session migration requested session=$Session provider=$Provider oldHwnd=$previousHwnd newHwnd=$Hwnd"
+  } catch {
+    Write-HudDockDebug "dock session migration request failed path=$MarkerPath session=$Session"
+  }
+}
+
+function Notify-DockSessionStateChanged {
+  $script:dockTuiRenderKey = $null
+  if ($script:dockTuiPaintPanel -and -not $script:dockTuiPaintPanel.IsDisposed) {
+    $script:dockTuiPaintPanel.Invalidate()
+  }
+}
+
+function Add-DockSession([Int64]$Hwnd, [Int64]$Session, [int]$OwnerPid, [string]$Provider, [string]$MarkerPath) {
+  if ($Hwnd -eq 0 -or $Session -eq 0) { return }
+  Request-PreviousDockSessionDetach $MarkerPath $Hwnd $Session $Provider
+  $script:dockSessionTrackingEnabled = $true
+  $script:dockSessions[(Get-DockSessionKey $Session $Provider)] = [PSCustomObject]@{
+    Hwnd = $Hwnd
+    Session = $Session
+    OwnerPid = $OwnerPid
+    Provider = $Provider
+    AttachedAt = [datetime]::UtcNow
+  }
+  Write-DockSessionMarker $MarkerPath $Hwnd $Session $OwnerPid $Provider
+  Notify-DockSessionStateChanged
+  Write-HudDockDebug "dock session attached session=$Session owner=$OwnerPid provider=$Provider hwnd=$Hwnd"
+}
+
+function Remove-DockSession([Int64]$Session, [string]$Provider) {
+  if ($Session -eq 0) { return }
+  if ($Provider) {
+    if ($script:dockSessions.Remove((Get-DockSessionKey $Session $Provider))) {
+      Notify-DockSessionStateChanged
+    }
+    return
+  }
+  $changed = $false
+  foreach ($key in @($script:dockSessions.Keys)) {
+    if ([Int64]$script:dockSessions[$key].Session -eq $Session) {
+      $changed = $script:dockSessions.Remove($key) -or $changed
+    }
+  }
+  if ($changed) { Notify-DockSessionStateChanged }
+}
+
+function Remove-DockSessionsForTarget([Int64]$Hwnd) {
+  $changed = $false
+  foreach ($key in @($script:dockSessions.Keys)) {
+    if ([Int64]$script:dockSessions[$key].Hwnd -eq $Hwnd) {
+      $changed = $script:dockSessions.Remove($key) -or $changed
+    }
+  }
+  if ($changed) { Notify-DockSessionStateChanged }
+}
+
+function Get-DockSessionsForTarget([Int64]$Hwnd) {
+  return @($script:dockSessions.Values | Where-Object { [Int64]$_.Hwnd -eq $Hwnd })
+}
+
+function Test-DockProviderActiveForTarget([string]$Provider, [Int64]$Hwnd) {
+  if ($Hwnd -eq 0) { return $false }
+  $normalized = if ($Provider) { $Provider.Trim().ToLowerInvariant() } else { "" }
+  return @($script:dockSessions.Values | Where-Object {
+    [Int64]$_.Hwnd -eq $Hwnd -and
+    [string]$_.Provider -eq $normalized -and
+    (Test-DockSessionOwnerAlive $_)
+  }).Count -gt 0
+}
 
 function Test-DockBottomPlacement {
   return $script:dockTuiStatusline -and $script:dockPlacementMode -eq "bottom"
@@ -173,6 +310,89 @@ function Restore-DockTargetSpace {
   $script:dockTargetWasZoomed = $false
 }
 
+function Test-DockSessionOwnerAlive($SessionInfo) {
+  $ownerPid = [int]$SessionInfo.OwnerPid
+  if ($ownerPid -le 0) { return $true }
+  try {
+    $owner = [System.Diagnostics.Process]::GetProcessById($ownerPid)
+    $alive = -not $owner.HasExited
+    $owner.Dispose()
+    return $alive
+  } catch {
+    return $false
+  }
+}
+
+function Deactivate-DockTarget([string]$Reason) {
+  $releasedTarget = [Int64]$script:dockTargetHandle
+  Restore-DockTargetSpace
+  $script:dockTargetHandle = [IntPtr]::Zero
+  $script:dockSession = 0
+  $script:dockLastPlacement = $null
+  $script:dockObservedFrameDragActive = $false
+  $script:dockObservedRawRectKey = ""
+  Set-HudHiddenForDock $true
+  Write-HudDockDebug "dock target released hwnd=$releasedTarget reason=$Reason"
+  if ($script:dockSessionTrackingEnabled -and $script:dockSessions.Count -eq 0 -and $DockWindowHandle -ne 0) {
+    $form.BeginInvoke([System.Action]{ $form.Close() }) | Out-Null
+  }
+}
+
+function Select-DockTargetFromActiveSessions([string]$Reason) {
+  $next = @($script:dockSessions.Values |
+    Where-Object {
+      [AiBatteryNative]::IsWindow([IntPtr]::new([Int64]$_.Hwnd)) -and
+      (Test-DockSessionOwnerAlive $_)
+    } |
+    Sort-Object AttachedAt -Descending |
+    Select-Object -First 1)
+  if ($next.Count -eq 0) {
+    Deactivate-DockTarget $Reason
+    return
+  }
+
+  $nextSession = $next[0]
+  $nextHandle = [IntPtr]::new([Int64]$nextSession.Hwnd)
+  if ($nextHandle -ne $script:dockTargetHandle) {
+    Restore-DockTargetSpace
+    $script:dockTargetHandle = $nextHandle
+    $script:dockLastPlacement = $null
+    $script:dockObservedFrameDragActive = $false
+    $script:dockObservedRawRectKey = ""
+  }
+  $script:dockSession = [Int64]$nextSession.Session
+  Update-HudDockPlacement
+}
+
+function Update-DockSessionLifetime {
+  if (-not $script:dockSessionTrackingEnabled) { return }
+  $now = [datetime]::UtcNow
+  if (($now - $script:dockLastSessionSweepUtc).TotalMilliseconds -lt 750) { return }
+  $script:dockLastSessionSweepUtc = $now
+
+  $changed = $false
+  foreach ($key in @($script:dockSessions.Keys)) {
+    $sessionInfo = $script:dockSessions[$key]
+    $handle = [IntPtr]::new([Int64]$sessionInfo.Hwnd)
+    if (-not [AiBatteryNative]::IsWindow($handle) -or -not (Test-DockSessionOwnerAlive $sessionInfo)) {
+      Write-HudDockDebug "dock stale session removed session=$($sessionInfo.Session) owner=$($sessionInfo.OwnerPid) hwnd=$($sessionInfo.Hwnd)"
+      $changed = $script:dockSessions.Remove($key) -or $changed
+    }
+  }
+  if ($changed) { Notify-DockSessionStateChanged }
+
+  $currentHandle = [Int64]$script:dockTargetHandle
+  if ($currentHandle -eq 0) {
+    if ($script:dockSessions.Count -gt 0) {
+      Select-DockTargetFromActiveSessions "active session has no terminal target"
+    }
+    return
+  }
+  if ((Get-DockSessionsForTarget $currentHandle).Count -eq 0) {
+    Select-DockTargetFromActiveSessions "no active sessions for terminal"
+  }
+}
+
 function Repair-DockTargetSpaceAfterShellLayout {
   if (-not (Test-DockBottomPlacement) -or -not $script:dockSpaceReserved) { return }
   $target = $script:dockTargetHandle
@@ -302,6 +522,10 @@ function Write-HudDockDebug([string]$Message) {
   } catch { }
 }
 
+if ($DockWindowHandle -ne 0 -and $DockSession -ne 0) {
+  Add-DockSession ([Int64]$DockWindowHandle) ([Int64]$DockSession) ([int]$DockOwnerPid) ([string]$DockProvider) ([string]$DockMarkerPath)
+}
+
 function Set-DockPendingMoveSizeState([bool]$Active) {
   $script:dockPendingMoveSizeState = $Active
 }
@@ -320,8 +544,11 @@ function Update-DockGlobalDragState {
   $active = Test-DockGlobalTargetDragActive
   if ($script:dockGlobalDragActive -eq $active) { return }
   $script:dockGlobalDragActive = $active
-  $script:dockLastPlacement = $null
   if ($active) {
+    # Re-read the frame when tracking starts. On release, retain the last
+    # placement so an unchanged final frame does not reassign WinForms Bounds
+    # and flash a redundant DWM frame.
+    $script:dockLastPlacement = $null
     $script:dockFastTrackingUntilUtc = [datetime]::MaxValue
     Write-HudDockDebug "dock global drag tracking started"
   } else {
@@ -414,15 +641,45 @@ function Test-DockSnapPreviewActive {
     $point.Y -le ($bounds.Top + $edge)
 }
 
+function Test-DockShellSnapFlyoutActive {
+  if ($script:dockTargetHandle -eq [IntPtr]::Zero) { return $false }
+  $foreground = [AiBatteryNative]::GetForegroundWindow()
+  $now = [datetime]::UtcNow
+  if ($foreground -eq $script:dockTargetHandle) {
+    $script:dockTargetForegroundAtUtc = $now
+    # A visible XAML shell host is not specific to the snap flyout and can
+    # remain present while a terminal is being moved. Native drag previews are
+    # already detected from the cursor/monitor edge below, so do not let this
+    # broad shell-window probe hide the HUD during an ordinary title-bar drag.
+    # MOVESIZEEND can leave a XamlExplorerHostIslandWindow visible for a few
+    # compositor frames after the mouse button is released. Edge-based drag
+    # detection already handles real snap previews; suppress this shell probe
+    # through the short post-move fast-tracking window so release never hides
+    # and re-shows an otherwise stable HUD. Stationary Win+Z/hover detection is
+    # unaffected once that window has elapsed.
+    if ((Test-DockLeftButtonDown) -or $now -lt $script:dockFastTrackingUntilUtc) { return $false }
+    return [AiBatteryNative]::HasVisibleTopLevelWindowClass("XamlExplorerHostIslandWindow")
+  }
+  if ($foreground -eq [IntPtr]::Zero) { return $false }
+  $className = [System.Text.StringBuilder]::new(256)
+  [AiBatteryNative]::GetClassName($foreground, $className, $className.Capacity) | Out-Null
+  if ($className.ToString() -ne "XamlExplorerHostIslandWindow") { return $false }
+  return $script:dockShellSnapFlyoutActive -or
+    ($now - $script:dockTargetForegroundAtUtc).TotalMilliseconds -le 2000
+}
+
 function Update-DockSnapPreviewVisibility {
   # Normal movement remains visible. This branch only hides at a snap edge;
   # global drag tracking covers terminals whose MOVESIZE event uses a child
   # HWND and must not itself be treated as a reason to hide.
+  $shellPreview = Test-DockShellSnapFlyoutActive
+  $script:dockShellSnapFlyoutActive = $shellPreview
   if (-not $script:dockMoveSizeActive -and
       -not $script:dockGlobalDragActive -and
       -not $script:dockObservedFrameDragActive -and
-      -not $script:dockSnapPreviewActive) { return $false }
-  $preview = Test-DockSnapPreviewActive
+      -not $script:dockSnapPreviewActive -and
+      -not $shellPreview) { return $false }
+  $preview = $shellPreview -or (Test-DockSnapPreviewActive)
   if ($script:dockSnapPreviewActive -ne $preview) {
     $script:dockSnapPreviewActive = $preview
     if ($preview) {
@@ -449,8 +706,8 @@ function Apply-DockPendingMoveSizeState {
   $script:dockPendingMoveSizeState = $null
   if ($script:dockMoveSizeActive -eq $active) { return }
   $script:dockMoveSizeActive = $active
-  $script:dockLastPlacement = $null
   if ($active) {
+    $script:dockLastPlacement = $null
     $script:dockSnapPreviewActive = $false
     $script:dockShowAfterMoveSizeUtc = [datetime]::MinValue
     $script:dockFastTrackingUntilUtc = [datetime]::MaxValue
@@ -486,9 +743,42 @@ function Clear-DockUnavailableGrace {
   $script:dockUnavailableSinceUtc = [datetime]::MinValue
 }
 
+function Update-HudDockDpi {
+  if (-not $script:dockTuiStatusline -or $script:dockTargetHandle -eq [IntPtr]::Zero) { return $false }
+  $targetDpi = 96
+  try {
+    $value = [AiBatteryNative]::GetDpiForWindow($script:dockTargetHandle)
+    if ($value -gt 0) { $targetDpi = [int]$value }
+  } catch { }
+  if ($targetDpi -eq [int]$script:hudDpi) { return $false }
+
+  # Windows Terminal scales its own reserved geometry while crossing monitors.
+  # Keep the reservation active and update our matching physical height; a
+  # restore/re-reserve cycle here visibly resizes the terminal during a drag.
+  $oldFont = $script:font
+  $oldSymbolFont = $script:symbolFont
+  $script:hudDpi = $targetDpi
+  $script:hudScale = [double]$targetDpi / 96.0
+  $script:font = New-HudMainFont
+  $script:symbolFont = New-HudSymbolFont
+  $script:dockStripHeight = Scale-HudValue 20
+  $script:dockJoinOverlap = if (Test-DockBottomPlacement) { [math]::Max(1, (Scale-HudValue 8)) } else { 0 }
+  $form.Height = $script:dockStripHeight + $script:dockJoinOverlap
+  $script:dockLastPlacement = $null
+  $script:dockTuiRenderKey = $null
+  Set-DockedTuiWindowRegion
+  if ($script:dockTuiPaintPanel) { $script:dockTuiPaintPanel.Invalidate() }
+  Write-HudDockHostMarker
+  if ($oldFont) { $oldFont.Dispose() }
+  if ($oldSymbolFont) { $oldSymbolFont.Dispose() }
+  Write-HudDockDebug "dock DPI -> $targetDpi scale=$($script:hudScale)"
+  return $true
+}
+
 function Update-HudDockPlacement {
   if ($script:dockTargetHandle -eq [IntPtr]::Zero) { return }
   if (-not $form -or $form.IsDisposed) { return }
+  Update-HudDockDpi | Out-Null
   Apply-DockPendingMoveSizeState
   Update-DockObservedFrameDragState
   Update-DockGlobalDragState
@@ -497,15 +787,10 @@ function Update-HudDockPlacement {
   if ([datetime]::UtcNow -lt $script:dockShowAfterMoveSizeUtc) { return }
   $target = $script:dockTargetHandle
   if (-not [AiBatteryNative]::IsWindow($target)) {
-    # Keep the initialized host alive so the next Codex launch only needs to
-    # hand it a new HWND instead of rebuilding the PowerShell/WinForms UI.
-    Write-HudDockDebug "dock target $([Int64]$target) is gone; waiting detached"
-    $script:dockTargetHandle = [IntPtr]::Zero
-    $script:dockSession = 0
-    $script:dockLastPlacement = $null
-    $script:dockObservedFrameDragActive = $false
-    $script:dockObservedRawRectKey = ""
-    Set-HudHiddenForDock $true
+    $closedTarget = [Int64]$target
+    Write-HudDockDebug "dock target $closedTarget is gone; releasing its sessions"
+    Remove-DockSessionsForTarget $closedTarget
+    Select-DockTargetFromActiveSessions "terminal window closed"
     return
   }
 
@@ -639,6 +924,15 @@ function Update-HudDockPlacement {
   Sync-HudDockZOrder $target
 }
 
+function Get-DockNearestVisibleWindowAbove([IntPtr]$Handle) {
+  $candidate = [AiBatteryNative]::GetWindow($Handle, [AiBatteryNative]::GW_HWNDPREV)
+  for ($scanned = 0; $scanned -lt 64 -and $candidate -ne [IntPtr]::Zero; $scanned += 1) {
+    if ([AiBatteryNative]::IsWindowVisible($candidate)) { return $candidate }
+    $candidate = [AiBatteryNative]::GetWindow($candidate, [AiBatteryNative]::GW_HWNDPREV)
+  }
+  return [IntPtr]::Zero
+}
+
 function Sync-HudDockZOrder([IntPtr]$Target) {
   # Keep the dock immediately above its terminal but below every window that
   # already covers the terminal. The bottom layout overlaps the terminal frame
@@ -647,14 +941,27 @@ function Sync-HudDockZOrder([IntPtr]$Target) {
   if ($script:hudHiddenForFullscreen -or $script:hudHiddenForDock) { return }
   $formHandle = $form.Handle
   $hitHandle = if ($hitForm -and -not $hitForm.IsDisposed) { $hitForm.Handle } else { [IntPtr]::Zero }
-  $zFlags = [AiBatteryNative]::SWP_NOMOVE -bor [AiBatteryNative]::SWP_NOSIZE -bor [AiBatteryNative]::SWP_NOACTIVATE -bor [AiBatteryNative]::SWP_SHOWWINDOW
-  $previous = [AiBatteryNative]::GetWindow($Target, [AiBatteryNative]::GW_HWNDPREV)
+  $zFlags = [AiBatteryNative]::SWP_NOMOVE -bor [AiBatteryNative]::SWP_NOSIZE -bor [AiBatteryNative]::SWP_NOACTIVATE
+  # WinForms and PowerShell leave hidden parking/console HWNDs in the Z-order.
+  # Treating one of those as the terminal's visible neighbour made every timer
+  # tick issue SWP_SHOWWINDOW for an already-visible HUD, which flashed when
+  # Windows committed the terminal's final frame on mouse release.
+  $previous = Get-DockNearestVisibleWindowAbove $Target
   $insertAfter = if ($previous -eq [IntPtr]::Zero) { [AiBatteryNative]::HWND_TOP } else { $previous }
-  if ($previous -ne $formHandle -or -not [AiBatteryNative]::IsWindowVisible($formHandle)) {
-    [AiBatteryNative]::SetWindowPos($formHandle, $insertAfter, 0, 0, 0, 0, $zFlags) | Out-Null
+  $formVisible = [AiBatteryNative]::IsWindowVisible($formHandle)
+  if (-not $formVisible) {
+    [AiBatteryNative]::ShowWindow($formHandle, [AiBatteryNative]::SW_SHOWNOACTIVATE) | Out-Null
   }
-  if ($hitHandle -ne [IntPtr]::Zero -and $hitForm.Visible) {
-    [AiBatteryNative]::SetWindowPos($hitHandle, $insertAfter, 0, 0, 0, 0, $zFlags) | Out-Null
+  if ($previous -ne $formHandle -or -not $formVisible) {
+    [AiBatteryNative]::SetWindowPos($formHandle, $insertAfter, 0, 0, 0, 0, $zFlags) | Out-Null
+    Write-HudDockDebug "dock z-order sync target=$([Int64]$Target) previous=$([Int64]$previous)"
+  }
+  if ($hitHandle -ne [IntPtr]::Zero -and [AiBatteryNative]::IsWindowVisible($hitHandle)) {
+    $aboveForm = Get-DockNearestVisibleWindowAbove $formHandle
+    if ($aboveForm -ne $hitHandle) {
+      $hitInsertAfter = if ($aboveForm -eq [IntPtr]::Zero) { [AiBatteryNative]::HWND_TOP } else { $aboveForm }
+      [AiBatteryNative]::SetWindowPos($hitHandle, $hitInsertAfter, 0, 0, 0, 0, $zFlags) | Out-Null
+    }
   }
 }
 
@@ -789,12 +1096,17 @@ function Update-HudDockRequest {
     }
     if ($request.detach) {
       $requestSession = if ($null -ne $request.session) { [Int64]$request.session } else { 0 }
-      if ($requestSession -eq 0 -or $requestSession -eq $script:dockSession) {
-        # The strip belongs to the terminal window, not to the Codex process
-        # that first attached it. Releasing that session must not hide Claude
-        # running in another tab of the same Windows Terminal window.
-        $script:dockSession = 0
-        Write-HudDockDebug "dock session released; retaining terminal target session=$requestSession"
+      $requestProvider = if ($request.provider) { [string]$request.provider } else { "" }
+      Remove-DockSession $requestSession $requestProvider
+      Write-HudDockDebug "dock session detached session=$requestSession provider=$requestProvider"
+      $currentSessions = Get-DockSessionsForTarget ([Int64]$script:dockTargetHandle)
+      if ($currentSessions.Count -eq 0) {
+        Select-DockTargetFromActiveSessions "last terminal session detached"
+      } elseif ($requestSession -eq $script:dockSession) {
+        $replacement = @($currentSessions | Sort-Object AttachedAt -Descending | Select-Object -First 1)
+        if ($replacement.Count -gt 0) {
+          $script:dockSession = [Int64]$replacement[0].Session
+        }
       }
       return
     }
@@ -803,11 +1115,16 @@ function Update-HudDockRequest {
       if ($request.placement) {
         Set-DockPlacementMode ([string]$request.placement)
       }
+      $requestSession = if ($null -ne $request.session) { [Int64]$request.session } else { 0 }
+      $requestOwnerPid = if ($null -ne $request.ownerPid) { [int]$request.ownerPid } else { 0 }
+      $requestProvider = if ($request.provider) { [string]$request.provider } else { "" }
+      $requestMarkerPath = if ($request.markerPath) { [string]$request.markerPath } else { "" }
+      Add-DockSession $hwnd $requestSession $requestOwnerPid $requestProvider $requestMarkerPath
       if ([IntPtr]::new($hwnd) -ne $script:dockTargetHandle) {
         Restore-DockTargetSpace
       }
       $script:dockTargetHandle = [IntPtr]::new($hwnd)
-      $script:dockSession = if ($null -ne $request.session) { [Int64]$request.session } else { 0 }
+      $script:dockSession = $requestSession
       $script:dockLastPlacement = $null
       $script:dockObservedFrameDragActive = $false
       $script:dockObservedRawRectKey = ""

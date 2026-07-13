@@ -20,6 +20,10 @@ param(
   [string]$ReadyPath = "",
   [Int64]$DockWindowHandle = 0,
   [Int64]$DockSession = 0,
+  [int]$DockOwnerPid = 0,
+  [ValidateSet("", "codex", "claude")]
+  [string]$DockProvider = "",
+  [string]$DockMarkerPath = "",
   [ValidateSet("bottom", "tabs")]
   [string]$DockPlacement = $(if ($env:AI_BATTERY_WIN_DOCK_POSITION) { $env:AI_BATTERY_WIN_DOCK_POSITION } elseif ($env:CLAUDEX_BATTERY_WIN_DOCK_POSITION) { $env:CLAUDEX_BATTERY_WIN_DOCK_POSITION } else { "bottom" })
 )
@@ -43,6 +47,11 @@ function Stop-ExistingHudProcesses([bool]$DockedOnly = $false) {
   $script:hudStopScanFailed = $false
   $currentPid = $PID
   $hudProcesses = @()
+  $dockHandlePattern = if ($DockWindowHandle -ne 0) {
+    '-DockWindowHandle\s+[''"]?' + [regex]::Escape([string]$DockWindowHandle) + '(?:[''"]|\s|$)'
+  } else {
+    "-DockWindowHandle"
+  }
   try {
     $hudProcesses = @(Get-CimInstance Win32_Process -ErrorAction Stop |
       Where-Object {
@@ -51,7 +60,7 @@ function Stop-ExistingHudProcesses([bool]$DockedOnly = $false) {
       $_.CommandLine -and
       $_.CommandLine -like "*ai-battery-hud.ps1*" -and
       $_.CommandLine -notlike "*Start-Process*" -and
-      ($(if ($DockedOnly) { $_.CommandLine -like "*-DockWindowHandle*" } else { $_.CommandLine -notlike "*-DockWindowHandle*" }))
+      ($(if ($DockedOnly) { $_.CommandLine -match $dockHandlePattern } else { $_.CommandLine -notlike "*-DockWindowHandle*" }))
     })
   } catch {
     $script:hudStopScanFailed = $true
@@ -78,20 +87,34 @@ function Get-HudDockRequestPath {
     Join-Path $env:TEMP "ai-battery"
   }
   New-Item -ItemType Directory -Force -Path $root | Out-Null
-  $name = if ($DockWindowHandle -ne 0) { "tui-dock-request.json" } else { "hud-dock-request.json" }
+  $name = if ($DockWindowHandle -ne 0) { "tui-dock-request-$DockWindowHandle.json" } else { "hud-dock-request.json" }
   return Join-Path $root $name
 }
 
 function Get-HudDockHostPath {
   $root = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA "ai-battery" } else { Join-Path $env:TEMP "ai-battery" }
   New-Item -ItemType Directory -Force -Path $root | Out-Null
-  return Join-Path $root "tui-dock-host.json"
+  return Join-Path $root "tui-dock-host-$DockWindowHandle.json"
 }
 
 function Write-HudDockHostMarker {
   if ($DockWindowHandle -eq 0) { return }
   try {
-    $marker = @{ pid = $PID; at = [datetime]::UtcNow.ToString("o") } | ConvertTo-Json -Compress
+    $targetDpi = 0
+    $formDpi = 0
+    try { $targetDpi = [int][AiBatteryNative]::GetDpiForWindow([IntPtr]::new([Int64]$DockWindowHandle)) } catch { }
+    try { if ($form -and $form.Handle -ne [IntPtr]::Zero) { $formDpi = [int][AiBatteryNative]::GetDpiForWindow($form.Handle) } } catch { }
+    $marker = @{
+      pid = $PID
+      hwnd = [Int64]$DockWindowHandle
+      at = [datetime]::UtcNow.ToString("o")
+      dpiAwareness = [string]$script:hudDpiAwareness
+      targetDpi = $targetDpi
+      formDpi = $formDpi
+      hudDpi = [int]$script:hudDpi
+      stripHeight = [int]$script:dockStripHeight
+      formHeight = if ($form) { [int]$form.Height } else { 0 }
+    } | ConvertTo-Json -Compress
     [System.IO.File]::WriteAllText((Get-HudDockHostPath), $marker, [System.Text.UTF8Encoding]::new($false))
   } catch { }
 }
@@ -144,7 +167,7 @@ if (-not $Once) {
   $createdNew = $false
   $mutexAttempts = if ($DockWindowHandle -ne 0) { 3 } else { 20 }
   for ($mutexAttempt = 0; $mutexAttempt -lt $mutexAttempts; $mutexAttempt += 1) {
-    $mutexName = if ($DockWindowHandle -ne 0) { "Local\AiBatteryTuiStatusline" } else { "Local\AiBatteryHud" }
+    $mutexName = if ($DockWindowHandle -ne 0) { "Local\AiBatteryTuiStatusline_$DockWindowHandle" } else { "Local\AiBatteryHud" }
     $script:singleInstanceMutex = [System.Threading.Mutex]::new($true, $mutexName, [ref]$createdNew)
     if ($createdNew) { break }
     $script:singleInstanceMutex.Dispose()
@@ -156,7 +179,15 @@ if (-not $Once) {
     $requestPath = Get-HudDockRequestPath
     $requestWritten = $false
     try {
-      $request = @{ hwnd = [Int64]$DockWindowHandle; placement = $DockPlacement; session = [Int64]$DockSession; at = [datetime]::UtcNow.ToString("o") } | ConvertTo-Json -Compress
+      $request = @{
+        hwnd = [Int64]$DockWindowHandle
+        placement = $DockPlacement
+        session = [Int64]$DockSession
+        ownerPid = [int]$DockOwnerPid
+        provider = $DockProvider
+        markerPath = $DockMarkerPath
+        at = [datetime]::UtcNow.ToString("o")
+      } | ConvertTo-Json -Compress
       [System.IO.File]::WriteAllText($requestPath, $request, [System.Text.UTF8Encoding]::new($false))
       $requestWritten = $true
     } catch {
@@ -493,6 +524,7 @@ $script:dockTuiResponsiveThresholds = ""
 $script:dockOuterBorderColor = [System.Drawing.Color]::FromArgb(72, 72, 72)
 $form = New-Object System.Windows.Forms.Form
 $form.Text = "AI Battery"
+$form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::None
 $form.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
 $form.Width = Scale-HudValue $Width
 $form.Height = if ($script:dockTuiStatusline) { $script:dockStripHeight + $script:dockJoinOverlap } elseif ($Mode -eq "floating") { Scale-HudValue 44 } elseif ($Mode -eq "statusline") { Scale-HudValue 44 } else { Scale-HudValue 54 }
@@ -531,8 +563,34 @@ $form.Opacity = if ($script:dockTuiStatusline) {
   [math]::Max(0.2, [math]::Min(1.0, $Opacity))
 }
 
-$font = [System.Drawing.Font]::new($(if ($script:dockTuiStatusline) { "Cascadia Mono" } else { "Segoe UI" }), $(if ($Mode -eq "statusline") { 8.5 } else { 9 }), [System.Drawing.FontStyle]::Regular)
-$symbolFont = [System.Drawing.Font]::new("Cascadia Mono", $(if ($Mode -eq "statusline") { 11.5 } else { 12 }), [System.Drawing.FontStyle]::Regular)
+function New-HudMainFont {
+  if ($script:dockTuiStatusline) {
+    # Use explicit physical pixels for the dock strip. Windows PowerShell's
+    # WinForms host otherwise keeps the 96-DPI font after a monitor move.
+    return [System.Drawing.Font]::new(
+      "Cascadia Mono",
+      [single](Scale-HudValue 12),
+      [System.Drawing.FontStyle]::Regular,
+      [System.Drawing.GraphicsUnit]::Pixel
+    )
+  }
+  return [System.Drawing.Font]::new("Segoe UI", $(if ($Mode -eq "statusline") { 8.5 } else { 9 }), [System.Drawing.FontStyle]::Regular)
+}
+
+function New-HudSymbolFont {
+  if ($script:dockTuiStatusline) {
+    return [System.Drawing.Font]::new(
+      "Cascadia Mono",
+      [single](Scale-HudValue 16),
+      [System.Drawing.FontStyle]::Regular,
+      [System.Drawing.GraphicsUnit]::Pixel
+    )
+  }
+  return [System.Drawing.Font]::new("Cascadia Mono", $(if ($Mode -eq "statusline") { 11.5 } else { 12 }), [System.Drawing.FontStyle]::Regular)
+}
+
+$font = New-HudMainFont
+$symbolFont = New-HudSymbolFont
 
 $panel = New-Object System.Windows.Forms.TableLayoutPanel
 $panel.Dock = [System.Windows.Forms.DockStyle]::Fill
@@ -743,7 +801,7 @@ function Get-DockedTuiResponsiveLayout($Codex, $Claude, $DrawFont, [int]$Availab
 }
 
 function Draw-TuiProvider($Graphics, $Result, [string]$Name, [ref]$X, [int]$Y, $DrawFont, $Layout) {
-  $running = [bool]($Result -and $Result.running)
+  $running = Get-DockedTuiProviderRunning $Result $Name
   $textColor = if ($running) { [System.Drawing.Color]::FromArgb(255, 255, 255) } else { [System.Drawing.Color]::FromArgb(125, 125, 125) }
   $dividerColor = [System.Drawing.Color]::FromArgb(105, 105, 105)
   $percent = if ($Result -and $Result.ok -and $null -ne $Result.percentRemaining) { [int]$Result.percentRemaining } else { $null }
@@ -772,6 +830,13 @@ function Draw-TuiProvider($Graphics, $Result, [string]$Name, [ref]$X, [int]$Y, $
     Draw-TuiSegment $Graphics "  $([char]0x2502)  " $dividerColor $X $Y $DrawFont
     Draw-TuiSegment $Graphics $values.Secondary $textColor $X $Y $DrawFont
   }
+}
+
+function Get-DockedTuiProviderRunning($Result, [string]$Name) {
+  if ($script:dockTuiStatusline -and $script:dockSessionTrackingEnabled) {
+    return Test-DockProviderActiveForTarget $Name ([Int64]$script:dockTargetHandle)
+  }
+  return [bool]($Result -and $Result.running)
 }
 
 function Draw-DockedTuiStatusline($Graphics, [int]$Width, [int]$Height) {
@@ -814,7 +879,8 @@ function Get-DockedTuiRenderKey($Snapshot) {
     $secondary = if ($result.secondary) {
       "$($result.secondary.windowMinutes):$($result.secondary.remainingPercent):$($result.secondary.resetPassed):$(Get-ResetClock $result.secondary)"
     } else { "" }
-    $parts += "$name`:$($result.running):$($result.ok):$($result.percentRemaining):$primary`:$secondary"
+    $running = Get-DockedTuiProviderRunning $result $name
+    $parts += "$name`:$running`:$($result.ok):$($result.percentRemaining):$primary`:$secondary"
   }
   return $parts -join "|"
 }
@@ -965,6 +1031,7 @@ $hitForm = $null
 if ((-not $ClickThrough) -and $script:hudTransparentSurface) {
   $hitForm = New-Object System.Windows.Forms.Form
   $hitForm.Text = "AI Battery hit area"
+  $hitForm.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::None
   $hitForm.Width = $form.Width
   $hitForm.Height = $form.Height
   $hitForm.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
