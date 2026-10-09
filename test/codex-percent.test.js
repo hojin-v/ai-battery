@@ -839,6 +839,11 @@ test("Windows and WSL style Codex homes share usage without sharing resume sessi
 
   const sessionA = writeSession(homeA, "windows", "2026-07-13T02:00:00.000Z", 20, "danger-full-access");
   const sessionB = writeSession(homeB, "wsl", "2026-07-13T01:00:00.000Z", 70, "read-only");
+  fs.appendFileSync(sessionA.sessionPath, [
+    { timestamp: "2026-07-13T03:00:00.000Z", payload: { rate_limits: { limit_id: "codex", primary: null, secondary: null } } },
+    { timestamp: "2026-07-13T04:00:00.000Z", payload: { rate_limits: { limit_id: "premium", primary: { used_percent: 100, window_minutes: 300, resets_at: 2000000000 } } } }
+  ].map(JSON.stringify).join("\n") + "\n");
+  sessionA.text = fs.readFileSync(sessionA.sessionPath, "utf8");
   const run = (codexHome, localState) => spawnNode([CLI_PATH, "--provider", "codex", "--json"], {
     encoding: "utf8",
     env: {
@@ -871,6 +876,7 @@ test("Windows and WSL style Codex homes share usage without sharing resume sessi
 });
 
 test("CODEX_HOME is one literal runtime home, including commas", () => {
+  assert.equal(codexAccountUsageSnapshot({ ok: true, timestamp: "2026-07-13T05:00:00.000Z", primary: null, secondary: null }), null);
   const literalHome = path.join(os.tmpdir(), "codex,personal");
   withEnv({ CODEX_HOME: literalHome }, () => {
     assert.equal(codexRuntimeHome(), literalHome);
@@ -1066,11 +1072,11 @@ test("managed shell PATH block removal preserves surrounding rc content", () => 
   assert.equal(removeAiBatteryShellPathBlock(rc), "export BEFORE=1\nexport AFTER=1\n");
 });
 
-test("Codex wrapper falls back to original codex when AI Battery runner is unavailable", () => {
-  const script = codexWrapperScript("/tmp/original-codex");
+test("Codex wrapper falls back to the PATH-selected codex when its runner is unavailable", () => {
+  const script = codexWrapperScript();
 
   assert.match(script, /\[ -t 0 \] && \[ -t 1 \] && \[ -x /);
-  assert.match(script, /exec '\/tmp\/original-codex' "\$@"/);
+  assert.match(script, /exec "\$ai_battery_codex" "\$@"/);
 });
 
 test("Windows runner launches Node scripts through node instead of spawning them directly", () => {
@@ -1386,7 +1392,7 @@ test("Codex doctor rowpty diagnostic reports bundled ConPTY request without Refe
   });
 });
 
-test("Windows runner defaults to native fullscreen layout", () => {
+test("Windows runner defaults to composite layout", () => {
   const clean = {
     AI_BATTERY_WIN_LAYOUT: undefined,
     CLAUDEX_BATTERY_WIN_LAYOUT: undefined,
@@ -1394,14 +1400,14 @@ test("Windows runner defaults to native fullscreen layout", () => {
     AI_BATTERY_CODEX_NO_ALT_SCREEN: undefined,
     CLAUDEX_BATTERY_CODEX_NO_ALT_SCREEN: undefined
   };
-  assert.equal(withEnv(clean, () => parseWindowsRunnerArgs(["--", "codex"]).layout), "fullscreen");
+  assert.equal(withEnv(clean, () => parseWindowsRunnerArgs(["--", "codex"]).layout), "composite");
   assert.equal(withEnv({ ...clean, AI_BATTERY_WIN_LAYOUT: "fullscreen" }, () => parseWindowsRunnerArgs(["--", "codex"]).layout), "fullscreen");
   assert.equal(withEnv({ ...clean, AI_BATTERY_WIN_LAYOUT: "composite" }, () => parseWindowsRunnerArgs(["--", "codex"]).layout), "composite");
   assert.equal(withEnv({ ...clean, AI_BATTERY_WIN_LAYOUT: "inline" }, () => parseWindowsRunnerArgs(["--", "codex"]).layout), "inline");
   assert.equal(withEnv({ ...clean, AI_BATTERY_WIN_LAYOUT: "tui" }, () => parseWindowsRunnerArgs(["--", "codex"]).layout), "tui");
   assert.equal(withEnv({ ...clean, AI_BATTERY_WIN_LAYOUT: "auto" }, () => parseWindowsRunnerArgs(["--", "codex"]).layout), "auto");
   assert.equal(withEnv({ ...clean, AI_BATTERY_WIN_LAYOUT: "hud" }, () => parseWindowsRunnerArgs(["--", "codex"]).layout), "hud");
-  assert.equal(withEnv({ ...clean, AI_BATTERY_WIN_LAYOUT: "bogus" }, () => parseWindowsRunnerArgs(["--", "codex"]).layout), "fullscreen");
+  assert.equal(withEnv({ ...clean, AI_BATTERY_WIN_LAYOUT: "bogus" }, () => parseWindowsRunnerArgs(["--", "codex"]).layout), "composite");
   assert.equal(withEnv(clean, () => parseWindowsRunnerArgs(["--layout", "fullscreen", "--", "codex"]).layout), "fullscreen");
   assert.equal(withEnv(clean, () => parseWindowsRunnerArgs(["--layout", "inline", "--", "codex"]).layout), "inline");
   assert.equal(withEnv(clean, () => parseWindowsRunnerArgs(["--layout", "tui", "--", "codex"]).layout), "tui");
@@ -2249,10 +2255,10 @@ test("Windows setup keeps literal percent and Unicode paths out of the batch wra
   const wrapperText = fs.readFileSync(result.wrapperPath, "utf8");
   const bridgeText = fs.readFileSync(result.bridgePath, "utf8");
   assert.doesNotMatch(wrapperText, /%literal%|한글/);
-  assert.match(wrapperText, /%~dp0codex\.cmd\.ai-battery\.cjs/);
+  assert.match(wrapperText, /%~f0\.ai-battery\.cjs/);
   assert.match(bridgeText, /AI_BATTERY_MANAGED_CODEX_BRIDGE/);
-  assert.match(bridgeText, /%literal%/);
-  assert.match(bridgeText, /한글/);
+  assert.doesNotMatch(bridgeText, /%literal%/);
+  assert.doesNotMatch(bridgeText, /한글/);
   assert.equal(fs.existsSync(originalCodex), true);
 
   const removed = withEnv({
@@ -2350,7 +2356,7 @@ test("Windows Codex wrapper runs the Windows runner without forcing a layout", {
 
   const wrapperText = fs.readFileSync(result.wrapperPath, "utf8");
   const bridgeText = fs.readFileSync(result.bridgePath, "utf8");
-  assert.match(wrapperText, /%~dp0codex\.cmd\.ai-battery\.cjs/);
+  assert.match(wrapperText, /%~f0\.ai-battery\.cjs/);
   assert.doesNotMatch(wrapperText, new RegExp(originalCodex.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(bridgeText, /AI_BATTERY_DISABLE_WINDOWS_CODEX_RUNNER/);
   assert.doesNotMatch(bridgeText, /AI_BATTERY_WIN_LAYOUT/);
@@ -2370,7 +2376,7 @@ test("Windows Codex wrapper runs the Windows runner without forcing a layout", {
   });
 
   assert.equal(run.status, 0, run.stderr);
-  assert.match(run.stdout, /wrapped:1/);
+  assert.match(run.stdout, /wrapped:\s*(?:\r?\n|$)/);
   assert.match(run.stdout, /args:--version/);
   assert.equal(run.stdout.includes(`home:${homeDir}`), true, run.stdout);
   assert.equal(run.stdout.includes(`userprofile:${userProfile}`), true, run.stdout);
@@ -2447,6 +2453,9 @@ test("setup codex configures Codex built-in status_line and uninstall restores i
   assert.equal(setup.status, 0, setup.stderr);
   const setupJson = JSON.parse(setup.stdout);
   assert.equal(setupJson.codex.statusLine.changed, true);
+  const textSetup = spawnNode([CLI_PATH, "setup", "codex"], { encoding: "utf8", env, timeout: 5000 });
+  assert.equal(textSetup.status, 0, textSetup.stderr);
+  assert.match(textSetup.stdout, /status_line already configured/);
   const configuredToml = fs.readFileSync(configToml, "utf8");
   assert.equal(codexStatusLineMatches(configuredToml), true);
   assert.doesNotMatch(configuredToml, /context-remaining/);

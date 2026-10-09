@@ -1,6 +1,6 @@
 {
   "name": "ai-battery",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "description": "Tiny terminal battery meter for local Codex and Claude Code usage.",
   "type": "module",
   "keywords": [
@@ -23,6 +23,8 @@
   },
   "files": [
     "bin/ai-battery.js",
+    "bin/codex-wrapper.sh",
+    "bin/codex-wrapper-win.cjs",
     "bin/ai-battery-run",
     "bin/ai-battery-run-win.js",
     "bin/terminal-compositor.js",
@@ -34,9 +36,11 @@
     "lib/**/*.ps1",
     "scripts/windows-rowpty-smoke.ps1",
     "scripts/windows-fullscreen-smoke.mjs",
+    "scripts/windows-codex-fullscreen-check.mjs",
     "scripts/wsl-windows-rowpty-smoke.sh",
     "vendor/rowpty/RowPty.cs",
     "docs/*.svg",
+    "docs/RELEASING.md",
     "README.md"
   ],
   "scripts": {
@@ -45,6 +49,7 @@
     "smoke:win": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/windows-rowpty-smoke.ps1",
     "smoke:composite": "node ./scripts/windows-fullscreen-smoke.mjs",
     "smoke:fullscreen": "node ./scripts/windows-fullscreen-smoke.mjs --native",
+    "smoke:codex-fullscreen-win": "node ./scripts/windows-codex-fullscreen-check.mjs",
     "smoke:wsl-win": "bash ./scripts/wsl-windows-rowpty-smoke.sh",
     "check": "node --check ./bin/ai-battery.js && node --check ./bin/ai-battery-hud.js && node --check ./bin/ai-battery-run-win.js && node --check ./lib/hud/launcher.js && node --check ./lib/platforms/windows/codex-runner.js && node --test",
     "test": "node --test"
@@ -56,7 +61,7 @@
     "@xterm/headless": "6.0.0"
   },
   "optionalDependencies": {
-    "node-pty": "^1.0.0"
+    "node-pty": "1.1.0"
   },
   "license": "MIT",
   "repository": {

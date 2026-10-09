@@ -1,5 +1,7 @@
 # AI Battery
 
+0.1.19 update: Codex wrappers follow the current PATH. Windows defaults to PTY composition, using a private verified Node 24.21.0 when VT input support is missing; failure falls back to the native HUD. Update both Windows and WSL installations to share the latest account usage. Terminal padding is a local setting and is not changed by the package.
+
 [한국어](../../../README.md) · [English](../en/) · [日本語](../ja/) · [中文](../zh/) · [Español](../es/)
 
 Codex and Claude Usage Battery Meter
@@ -52,7 +54,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | `ai-battery` | Supported | Supported | Supported | Supported | Requires Node.js 18 or newer. |
 | `ai-battery --watch` | Supported | Supported | Supported | Supported | Refreshes periodically inside the terminal. |
 | Claude statusLine | Supported | Supported | Supported | Supported | Saves a `node <script>` command to Claude Code `statusLine`. |
-| Codex fullscreen | Supported | Supported | Supported | Supported | Windows runs Codex directly and docks the usage HUD by default. WSL/Linux/macOS use POSIX PTY and `python3`. |
+| Codex fullscreen | Supported | Supported | Supported | Supported | Windows: fullscreen PTY composition; WSL/Linux/macOS: POSIX PTY and Python 3. |
 | `ai-battery setup codex` | Supported | Supported | Supported | Supported | Configures Codex `[tui].status_line` and installs a `codex.cmd` wrapper on Windows or a POSIX shell wrapper on WSL/Linux/macOS. |
 | `ai-battery hud` | Supported | Supported | Unsupported | Supported | Windows/WSL use a PowerShell/WinForms HUD; macOS uses a menu bar status item. |
 
@@ -173,9 +175,9 @@ ai-battery setup codex
 
 Codex setup configures `model-with-reasoning`, `current-dir`, and `git-branch` status line entries under `[tui]` in `~/.codex/config.toml`. Existing values are backed up for uninstall recovery. The Codex wrapper does not directly overwrite the existing `codex` command. If `~/.local/bin` already appears before the original `codex` on PATH and `~/.local/bin/codex` is empty or managed by AI Battery, the wrapper is placed there so it is picked up immediately. Otherwise, a managed wrapper is created at `~/.local/share/ai-battery/bin/codex`, and this directory is prepended to PATH in shell configuration when needed. If a shared location such as `~/.local/bin/codex` already contains another file, it is not overwritten. New terminals will automatically run `codex` with the AI Battery bottom row. If you already ran `codex` in the same terminal, the shell command cache may require one `hash -r`; if PATH needs to be updated, run the `source ...` command printed by `setup`.
 
-On Windows native `cmd`/PowerShell, the `codex.cmd` wrapper runs Codex directly with no PTY layer in the middle, while the usage HUD docks to the terminal window. `fullscreen` is the default and `auto` is a compatibility alias for the same path. The batch launcher stays ASCII-only; a UTF-8 Node bridge stores absolute paths and preserves arguments, so global installs and Codex shims under spaces or non-ASCII user paths do not corrupt the command. The Windows Claude statusLine is header-only by default and attaches the same docked usage HUD when its first payload arrives.
+Windows defaults to `composite`: PATH-selected Codex runs in bundled ConPTY, and `@xterm/headless` composes its fullscreen display above one battery row. If Windows VT raw input is unavailable, a private SHA256-verified Node 24.21.0 is installed without changing system Node or PATH. Runtime/dependency failure falls back to the native HUD. `auto` selects composite; `fullscreen`/`hud` explicitly select the HUD. `plain` disables the display. Legacy rowpty modes remain opt-in.
 
-The rowpty-based terminal row remains available with `AI_BATTERY_WIN_LAYOUT=tui`; `reserve`, `overlay`, and `inline` are compatibility modes. The default docked HUD does not require rowpty, so normal `setup` no longer compiles it. Set `AI_BATTERY_WIN_LAYOUT=tui` or `AI_BATTERY_INSTALL_ROWPTY=1` before running `ai-battery setup codex` to build `vendor/rowpty/RowPty.cs` locally. `plain` runs Codex without a HUD.
+Windows defaults to `composite`: PATH-selected Codex runs in bundled ConPTY, and `@xterm/headless` composes its fullscreen display above one battery row. If Windows VT raw input is unavailable, a private SHA256-verified Node 24.21.0 is installed without changing system Node or PATH. Runtime/dependency failure falls back to the native HUD. `auto` selects composite; `fullscreen`/`hud` explicitly select the HUD. `plain` disables the display. Legacy rowpty modes remain opt-in.
 
 In tmux, reserving a bottom row in every pane would duplicate the same global battery as many times as there are panes. Instead, you can show it once per session in the tmux status bar.
 
