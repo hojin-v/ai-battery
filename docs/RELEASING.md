@@ -4,6 +4,8 @@ The current release candidate is **0.1.19**. `latest` on npm was checked as **0.
 
 Preflight on 2026-10-09 passed 105 Windows tests (24 platform skips) and 117 WSL tests (12 platform skips). The installed tarball passed all 13 actual Codex 0.161.0 fullscreen checks under system Node 22.15.1 with automatic private-runtime selection. A fresh official runtime download, SHA256 verification, extraction and launch also passed. Windows and WSL installed CLI readings were checked against the same shared account usage. npm publication and remote Git changes remain pending.
 
+The final focused Windows regression uses separate Node 22 and 24.21 installations and compares the original npm launcher with the compositor launcher: Codex Node, unchanged PATH, npm selection, simulated update destination, and the next launch agree in both PATH orders. Removing both original Nodes fails on both paths rather than using the private display Node to rescue Codex. Updates in this test use temporary fixtures, not the production Codex installation or npm registry. A PATH that already mixes one installation's Codex with another installation's npm can still mismatch without AI Battery; the wrapper preserves that original selection.
+
 ## Changes
 
 - Codex wrappers on Windows and POSIX resolve the original command from the caller's current PATH, skipping AI Battery wrappers. Node version changes do not pin Codex to an older installation.
