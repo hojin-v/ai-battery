@@ -2,8 +2,10 @@
 
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { HeadlessTerminalCompositor, HOST_RESTORE_SEQUENCE } from "./terminal-compositor.js";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const BATTERY_BIN = process.env.AI_BATTERY_BIN
@@ -15,15 +17,22 @@ const DEFAULT_COLUMN_GUARD = 4;
 const DEFAULT_LEFT_PADDING = 2;
 const DEFAULT_CODEX_OVERLAY_BOTTOM_OFFSET = 1;
 const DEFAULT_VSCODE_CODEX_OVERLAY_BOTTOM_OFFSET = 2;
+const MAX_COMPOSITOR_PENDING_OUTPUT_BYTES = 1024 * 1024;
+const RESUME_COMPOSITOR_OUTPUT_BYTES = 256 * 1024;
+const UNSAFE_CMD_ARGUMENT_RE = /[\r\n&|<>^%!()]/;
+const UNSAFE_CMD_PATH_RE = /[\r\n&|<>^%!]/;
 
 function usage() {
-  console.log(`Usage: ai-battery-run-win [--interval SECONDS] [--bar-width N] [--provider auto|all|codex|claude] [--layout auto|reserve|overlay] [--left-padding N] -- COMMAND [ARGS...]
+  console.log(`Usage: ai-battery-run-win [--interval SECONDS] [--bar-width N] [--provider auto|all|codex|claude] [--layout auto|composite|rowpty|reserve|overlay|plain] [--left-padding N] -- COMMAND [ARGS...]
 
 Runs COMMAND and keeps AI Battery on the terminal bottom row.
-On Windows, the rowpty host (a native ConPTY host with a reserved bottom row) is preferred when its executable
-is available; otherwise AI Battery falls back to a same-console overlay row.
---layout reserve additionally allows the legacy node-pty/ConPTY path when rowpty is missing.`);
+On Windows, the default composite layout renders the child ConPTY into an isolated
+headless terminal screen before drawing it above the status row. This prevents child
+VT state, cursor queries, and scroll regions from colliding with the physical terminal.
+The old raw rowpty relay and same-console overlay remain explicit compatibility modes.`);
 }
+
+const WINDOWS_LAYOUTS = new Set(["auto", "composite", "rowpty", "reserve", "overlay", "plain"]);
 
 function debugLog(event, details = {}) {
   if (!DEBUG_LOG) return;
@@ -65,8 +74,8 @@ function parseArgs(argv) {
       }
     } else if (arg === "--layout") {
       args.layout = argv[++i] || args.layout;
-      if (!["auto", "reserve", "overlay"].includes(args.layout)) {
-        throw new Error("--layout must be one of: auto, reserve, overlay");
+      if (!WINDOWS_LAYOUTS.has(args.layout)) {
+        throw new Error("--layout must be one of: auto, composite, rowpty, reserve, overlay, plain");
       }
     } else if (arg === "--left-padding") {
       const value = Number(argv[++i]);
@@ -87,7 +96,7 @@ function parseArgs(argv) {
     process.exit(2);
   }
   if (!Number.isFinite(args.interval)) args.interval = 10;
-  if (!["auto", "reserve", "overlay"].includes(args.layout)) args.layout = "auto";
+  if (!WINDOWS_LAYOUTS.has(args.layout)) args.layout = "auto";
   return args;
 }
 
@@ -101,8 +110,8 @@ function inferProvider(command) {
 
 function termSize() {
   const windowSize = process.stdout.getWindowSize?.();
-  const cols = process.stdout.columns || windowSize?.[0] || 80;
-  const rows = process.stdout.rows || windowSize?.[1] || 24;
+  const cols = windowSize?.[0] || process.stdout.columns || 80;
+  const rows = windowSize?.[1] || process.stdout.rows || 24;
   return {
     cols: Math.max(20, cols),
     rows: Math.max(1, rows)
@@ -212,7 +221,7 @@ function rowptyStatusCommand(args, activeProvider) {
 }
 
 function rowptyConptyMode() {
-  const raw = process.env.AI_BATTERY_ROWPTY_CONPTY ?? process.env.CLAUDEX_BATTERY_ROWPTY_CONPTY ?? "os";
+  const raw = process.env.AI_BATTERY_ROWPTY_CONPTY ?? process.env.CLAUDEX_BATTERY_ROWPTY_CONPTY ?? "auto";
   const mode = String(raw).toLowerCase();
   if (["bundled", "node-pty", "nodepty"].includes(mode)) return "bundled";
   if (["auto", "default"].includes(mode)) return "auto";
@@ -327,6 +336,8 @@ class StatusLine {
     this.refreshInFlight = false;
     this.refreshQueued = false;
     this.disposed = false;
+    this.refreshChild = null;
+    this.refreshTimeout = null;
     this.onRefresh = null;
     this.resize();
   }
@@ -354,9 +365,11 @@ class StatusLine {
       stdio: ["ignore", "pipe", "ignore"],
       windowsHide: true
     });
+    this.refreshChild = child;
 
     let stdout = "";
     const timeout = setTimeout(() => child.kill(), 1500);
+    this.refreshTimeout = timeout;
     child.stdout?.setEncoding("utf8");
     child.stdout?.on("data", (chunk) => {
       stdout += chunk;
@@ -368,6 +381,8 @@ class StatusLine {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      if (this.refreshChild === child) this.refreshChild = null;
+      if (this.refreshTimeout === timeout) this.refreshTimeout = null;
       this.refreshInFlight = false;
       if (this.disposed) return;
       const text = statusOutputText(stdout);
@@ -390,6 +405,17 @@ class StatusLine {
     child.on("error", () => finish(1));
   }
 
+  dispose() {
+    this.disposed = true;
+    this.refreshQueued = false;
+    if (this.refreshTimeout) clearTimeout(this.refreshTimeout);
+    this.refreshTimeout = null;
+    try {
+      this.refreshChild?.kill?.();
+    } catch {}
+    this.refreshChild = null;
+  }
+
   paint(force = false) {
     if (this.disposed) return;
     const now = Date.now();
@@ -409,7 +435,7 @@ class StatusLine {
   }
 
   clear() {
-    this.disposed = true;
+    this.dispose();
     const row = statusRow(this.rows, this.bottomOffset);
     process.stdout.write(`\x1b7\x1b[0m\x1b[${row};1H\r\x1b[1G\x1b[2K\x1b8`);
   }
@@ -441,10 +467,48 @@ function resolveWindowsCommandFile(commandPath) {
   return commandPath;
 }
 
+function resolveNpmCmdShim(commandPath) {
+  if (!/\.cmd$/i.test(commandPath)) return null;
+  let source;
+  try {
+    source = fs.readFileSync(commandPath, "utf8");
+  } catch {
+    return null;
+  }
+  if (!source.includes("%dp0%") || !source.includes("%*")) return null;
+  const match = source.match(/%dp0%[\\/]([^"\r\n]+?\.(?:cjs|mjs|js))"?\s+%\*/i);
+  if (!match) return null;
+  const scriptPath = path.resolve(path.dirname(commandPath), match[1].replace(/[\\/]+/g, path.sep));
+  if (!fs.existsSync(scriptPath)) return null;
+  const localNode = path.join(path.dirname(commandPath), "node.exe");
+  return {
+    file: fs.existsSync(localNode) ? localNode : process.execPath,
+    scriptPath
+  };
+}
+
+function assertSafeCmdArguments(commandPath, args) {
+  const unsafePath = UNSAFE_CMD_PATH_RE.test(String(commandPath));
+  const unsafeArgument = args.find((value) => UNSAFE_CMD_ARGUMENT_RE.test(String(value)));
+  if (!unsafePath && unsafeArgument === undefined) return;
+  throw new Error(
+    `Cannot safely pass shell metacharacters through legacy batch command ${commandPath}. `
+    + "Use an .exe/.js entrypoint or an npm-generated .cmd shim instead."
+  );
+}
+
 function windowsCommand(command) {
   const exe = resolveWindowsCommandFile(command[0]);
   const rest = command.slice(1);
   if (/\.(cmd|bat)$/i.test(exe)) {
+    const npmShim = resolveNpmCmdShim(exe);
+    if (npmShim) {
+      return {
+        file: npmShim.file,
+        args: [npmShim.scriptPath, ...rest]
+      };
+    }
+    assertSafeCmdArguments(exe, rest);
     return {
       file: "cmd.exe",
       args: ["/d", "/s", "/c", "call", exe, ...rest]
@@ -474,6 +538,285 @@ async function loadNodePty() {
     debugLog("node-pty:missing", { error: error.message });
     return null;
   }
+}
+
+function compositorFrameIntervalMs() {
+  const raw = Number(process.env.AI_BATTERY_COMPOSITOR_FRAME_MS || process.env.CLAUDEX_BATTERY_COMPOSITOR_FRAME_MS);
+  if (Number.isFinite(raw)) return Math.max(0, Math.min(250, Math.floor(raw)));
+  return 16;
+}
+
+function compositorUsesBundledConpty() {
+  return rowptyConptyMode() !== "os";
+}
+
+function windowsBuildNumber(release = os.release()) {
+  const parts = String(release || "").split(".");
+  const parsed = Number(parts.at(-1));
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 21376;
+}
+
+function compositorWindowsPty(release = os.release()) {
+  return {
+    backend: "conpty",
+    // node-pty's bundled OpenConsole provider has the native wrapping fix.
+    buildNumber: compositorUsesBundledConpty()
+      ? 21376
+      : windowsBuildNumber(release)
+  };
+}
+
+function windowsVtInputSupported(stream = process.stdin) {
+  // Newer Node TTY streams expose rawMode and use libuv's RAW_VT input.
+  // Legacy RAW input loses Win32 key metadata (Backspace becomes Ctrl+H)
+  // and drops mouse/paste events before the compositor can forward them.
+  return Boolean(stream && "rawMode" in stream);
+}
+
+async function runComposedPty(args, activeProvider) {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    debugLog("compositor:unavailable", {
+      reason: "stdin/stdout is not a TTY",
+      stdinTty: Boolean(process.stdin.isTTY),
+      stdoutTty: Boolean(process.stdout.isTTY)
+    });
+    return null;
+  }
+
+  if (!windowsVtInputSupported()) {
+    debugLog("compositor:unavailable", { reason: "Node lacks VT raw input", node: process.version });
+    console.error(`ai-battery-run-win: Node ${process.version} cannot preserve Windows terminal input for the battery row. Use a Node version with VT raw input support (verified with 24.21.0).`);
+    return null;
+  }
+
+  const pty = await loadNodePty();
+  if (!pty) {
+    debugLog("compositor:unavailable", { reason: "node-pty is not installed" });
+    return null;
+  }
+
+  const size = termSize();
+  const childRows = Math.max(1, size.rows - 1);
+  const command = windowsCommand(args.command);
+  const status = new StatusLine(args, activeProvider);
+  let term;
+  let compositor;
+  const pendingReplies = [];
+
+  try {
+    compositor = new HeadlessTerminalCompositor({
+      columns: size.cols,
+      rows: size.rows,
+      frameIntervalMs: compositorFrameIntervalMs(),
+      windowsMode: false,
+      windowsPty: compositorWindowsPty(),
+      onReply: (data) => {
+        if (term) term.write(data);
+        else pendingReplies.push(data);
+      },
+      onTitle: (title) => {
+        const safeTitle = String(title || "").replace(/[\x00-\x1f\x7f]/g, " ");
+        if (safeTitle) compositor.emitHost(`\x1b]0;${safeTitle}\x07`);
+      }
+    });
+
+    term = pty.spawn(command.file, command.args, {
+      name: "xterm-256color",
+      cols: size.cols,
+      rows: childRows,
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        TERM: process.env.TERM || "xterm-256color",
+        COLORTERM: process.env.COLORTERM || "truecolor"
+      },
+      encoding: null,
+      useConpty: true,
+      useConptyDll: compositorUsesBundledConpty(),
+      conptyInheritCursor: false
+    });
+  } catch (error) {
+    await compositor?.dispose?.().catch(() => {});
+    debugLog("compositor:error", { stage: "spawn", error: error.message, command });
+    return null;
+  }
+
+  let pendingOutputBytes = 0;
+  let outputGeneration = 0;
+  let outputPaused = false;
+  let outputTail = Promise.resolve();
+  const resumeOutput = () => {
+    if (!outputPaused || pendingOutputBytes > RESUME_COMPOSITOR_OUTPUT_BYTES) return;
+    outputPaused = false;
+    try {
+      term.resume?.();
+    } catch (error) {
+      debugLog("compositor:error", { stage: "output-resume", error: error.message });
+    }
+  };
+  const outputDisposable = term.onData((data) => {
+    const bytes = Buffer.isBuffer(data) ? data.length : Buffer.byteLength(String(data));
+    pendingOutputBytes += bytes;
+    outputGeneration += 1;
+    if (!outputPaused && pendingOutputBytes >= MAX_COMPOSITOR_PENDING_OUTPUT_BYTES) {
+      try {
+        term.pause?.();
+        outputPaused = true;
+        debugLog("compositor:output-pause", { pendingOutputBytes });
+      } catch (error) {
+        debugLog("compositor:error", { stage: "output-pause", error: error.message });
+      }
+    }
+    outputTail = outputTail
+      .then(() => compositor.write(data))
+      .catch((error) => {
+        debugLog("compositor:error", { stage: "parse", error: error.message });
+      })
+      .finally(() => {
+        pendingOutputBytes = Math.max(0, pendingOutputBytes - bytes);
+        resumeOutput();
+      });
+  });
+
+  const waitForOutputDrain = async () => {
+    const deadline = Date.now() + 1000;
+    while (Date.now() < deadline) {
+      const generation = outputGeneration;
+      await outputTail;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      if (pendingOutputBytes === 0 && generation === outputGeneration) return;
+    }
+    debugLog("compositor:error", {
+      stage: "output-drain-timeout",
+      pendingOutputBytes,
+      outputGeneration
+    });
+  };
+
+  let exitResultResolve;
+  let exitSettled = false;
+  const exitResult = new Promise((resolve) => {
+    exitResultResolve = resolve;
+  });
+  const settleExit = (result) => {
+    if (exitSettled) return;
+    exitSettled = true;
+    exitResultResolve(result);
+  };
+  const exitDisposable = term.onExit(({ exitCode, signal }) => {
+    debugLog("compositor:exit", { exitCode, signal });
+    settleExit({ exitCode, signal });
+  });
+  for (const reply of pendingReplies.splice(0)) term.write(reply);
+
+  debugLog("compositor:start", {
+    size,
+    childRows,
+    command,
+    conptyMode: rowptyConptyMode(),
+    bundled: compositorUsesBundledConpty(),
+    frameIntervalMs: compositorFrameIntervalMs()
+  });
+
+  const oldRaw = process.stdin.isRaw;
+  const stdinWasPaused = process.stdin.isPaused?.() ?? false;
+  const onInput = (data) => compositor.input(data);
+  let refreshTimer = null;
+  let resizePollTimer = null;
+  let lastSize = size;
+  const onResize = () => {
+    try {
+      const next = termSize();
+      if (next.cols === lastSize.cols && next.rows === lastSize.rows) return;
+      lastSize = next;
+      const nextChildRows = Math.max(1, next.rows - 1);
+      debugLog("compositor:resize", { size: next, childRows: nextChildRows });
+      compositor.resize(next.cols, next.rows).catch((error) => {
+        debugLog("compositor:error", { stage: "screen-resize", error: error.message });
+      });
+      term.resize(next.cols, nextChildRows);
+      status.resize();
+      status.kickRefresh(true);
+    } catch (error) {
+      debugLog("compositor:error", { stage: "resize", error: error.message });
+    }
+  };
+
+  const emergencyRestore = () => {
+    try {
+      fs.writeSync(process.stdout.fd, HOST_RESTORE_SEQUENCE);
+    } catch {}
+  };
+  process.once("exit", emergencyRestore);
+
+  const terminationHandlers = new Map();
+  for (const signal of ["SIGINT", "SIGTERM", "SIGBREAK"]) {
+    const handler = () => {
+      debugLog("compositor:signal", { signal });
+      try {
+        term.kill?.();
+      } catch {}
+      setTimeout(() => settleExit({ exitCode: null, signal }), 100);
+    };
+    try {
+      process.once(signal, handler);
+      terminationHandlers.set(signal, handler);
+    } catch {}
+  }
+
+  let cleaned = false;
+  const cleanup = async () => {
+    if (cleaned) return;
+    cleaned = true;
+    if (refreshTimer) clearInterval(refreshTimer);
+    if (resizePollTimer) clearInterval(resizePollTimer);
+    process.stdout.off("resize", onResize);
+    process.stdin.off("data", onInput);
+    process.stdin.setRawMode?.(oldRaw);
+    if (stdinWasPaused) process.stdin.pause();
+    status.dispose();
+    await waitForOutputDrain();
+    outputDisposable?.dispose?.();
+    exitDisposable?.dispose?.();
+    for (const [signal, handler] of terminationHandlers) process.off(signal, handler);
+    try {
+      await compositor.dispose();
+    } catch (error) {
+      emergencyRestore();
+      throw error;
+    } finally {
+      process.off("exit", emergencyRestore);
+    }
+  };
+
+  let childResult = { exitCode: 1, signal: null };
+  try {
+    compositor.start();
+    await compositor.setStatusText("AI Battery starting...");
+    status.onRefresh = () => compositor.setStatusText(status.text);
+    status.kickRefresh(true);
+    process.stdin.setRawMode?.(true);
+    process.stdin.resume();
+    process.stdin.on("data", onInput);
+    refreshTimer = setInterval(
+      () => status.kickRefresh(false),
+      Math.max(500, Math.floor(args.interval * 1000))
+    );
+    process.stdout.on("resize", onResize);
+    resizePollTimer = setInterval(onResize, 200);
+    childResult = await exitResult;
+    await waitForOutputDrain();
+  } catch (error) {
+    debugLog("compositor:error", { stage: "run", error: error.message });
+    try {
+      term.kill?.();
+    } catch {}
+    childResult = { exitCode: 1, signal: null };
+  } finally {
+    await cleanup();
+  }
+  const { exitCode, signal } = childResult;
+  return exitCode ?? (signal ? 1 : 0);
 }
 
 async function runConPty(args, activeProvider) {
@@ -708,21 +1051,37 @@ async function main() {
   });
 
   let exitCode = null;
-  if (args.layout !== "overlay") {
+  if (args.layout === "plain") {
+    exitCode = await runPlain(args);
+  } else if (args.layout === "auto" || args.layout === "composite") {
+    exitCode = await runComposedPty(args, activeProvider);
+    if (exitCode === null) {
+      console.error("ai-battery-run-win: compositor unavailable; launching Codex without a terminal overlay.");
+      exitCode = await runPlain(args);
+    }
+  } else if (args.layout === "rowpty") {
     exitCode = await runRowPty(args, activeProvider);
+    if (exitCode === null) exitCode = await runPlain(args);
+  } else if (args.layout === "reserve") {
+    exitCode = await runComposedPty(args, activeProvider);
     if (exitCode === null) exitCode = await runConPty(args, activeProvider);
-  }
-  if (exitCode === null) {
+    if (exitCode === null) exitCode = await runPlain(args);
+  } else if (args.layout === "overlay") {
     exitCode = process.stdin.isTTY && process.stdout.isTTY
       ? await runOverlay(args, activeProvider)
       : await runPlain(args);
   }
+  // The compositor has drained its final host write before returning, so a
+  // deliberate exit cannot truncate the alternate-screen/mode restoration.
   process.exit(exitCode);
 }
 
 export {
   conPtyBackspaceMode,
   conPtyRepaintIntervalMs,
+  compositorFrameIntervalMs,
+  compositorUsesBundledConpty,
+  compositorWindowsPty,
   isVsCodeTerminal,
   normalizeConPtyInput,
   outputMayClearDisplay,
@@ -730,6 +1089,7 @@ export {
   overlayRepaintIntervalMs,
   parseArgs,
   quoteWindowsCommandLineArg,
+  resolveNpmCmdShim,
   resolveWindowsCommandFile,
   rowptyConptyMode,
   rowptyExePath,
@@ -738,7 +1098,9 @@ export {
   rowptyStatusCommand,
   statusRow,
   statusOutputText,
-  windowsCommand
+  windowsBuildNumber,
+  windowsCommand,
+  windowsVtInputSupported
 };
 
 function sameFilePath(leftPath, rightPath) {

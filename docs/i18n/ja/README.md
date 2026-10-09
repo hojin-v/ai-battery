@@ -55,7 +55,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | `ai-battery` | 対応 | 対応 | 対応 | 対応 | Node.js 18 以上が必要です。 |
 | `ai-battery --watch` | 対応 | 対応 | 対応 | 対応 | ターミナル内で定期的に更新します。 |
 | Claude statusLine | 対応 | 対応 | 対応 | 対応 | Claude Code `statusLine` に `node <script>` コマンドを保存します。 |
-| Codex terminal row | 対応 | 対応 | 対応 | 対応 | Windows では `rowpty.exe`（専用 ConPTY host）がある場合は下部行を予約し、ない場合は同じコンソールに重ねて描画する overlay row として動作します。WSL/Linux/macOS は POSIX PTY と `python3` を使います。 |
+| Codex terminal row | 対応 | 対応 | 対応 | 対応 | Windows ではデフォルトの VT compositor が子 ConPTY を隔離された `rows - 1` 画面にレンダリングし、status row と合成します。compositor を利用できない場合は、追加行なしで通常の Codex を安全に実行します。WSL/Linux/macOS は POSIX PTY と `python3` を使います。 |
 | `ai-battery setup codex` | 対応 | 対応 | 対応 | 対応 | Codex `[tui].status_line` を設定し、Windows では `codex.cmd` wrapper、WSL/Linux/macOS では POSIX shell wrapper をインストールします。 |
 | `ai-battery hud` | 対応 | 対応 | 未対応 | 対応 | Windows/WSL は PowerShell/WinForms HUD、macOS は menu bar status item です。 |
 
@@ -179,7 +179,13 @@ ai-battery setup codex
 
 Codex setup は `~/.codex/config.toml` の `[tui]` に `model-with-reasoning`、`current-dir`、`git-branch` status line を設定します。既存値がある場合は uninstall 復旧用にバックアップします。Codex wrapper は既存の `codex` コマンドを直接上書きしません。`~/.local/bin` がすでに PATH で元の `codex` より前にあり、`~/.local/bin/codex` が空か AI Battery 管理ファイルであれば、すぐに使われるようその場所に wrapper を置きます。そうでない場合は `~/.local/share/ai-battery/bin/codex` に管理 wrapper を作成し、必要に応じて shell 設定でこのディレクトリを PATH の前方に追加します。`~/.local/bin/codex` のような共有場所に別のファイルがすでにある場合は上書きしません。新しいターミナルからは `codex` が自動で AI Battery の下部行付きで実行されます。同じターミナルで既に `codex` を実行したことがある場合は shell cache のために一度 `hash -r` が必要になることがあり、PATH 追加が必要な場合は `setup` 出力に表示される `source ...` コマンドを実行してください。
 
-Windows native の `cmd`/PowerShell では、`codex.cmd` wrapper が Windows runner を実行します。runner は `rowpty.exe`（別 rowpty プロジェクトの専用 ConPTY host）がある場合、WSL と同じ方式で下部行を予約します。子プログラムは 1 行短い画面を使い、ステータス行は出力が落ち着いたタイミングでだけ描画されるため、ちらつきなく下部に固定されます。`rowpty.exe` はバイナリ配布されません。`ai-battery setup` がパッケージ同梱のソース（`vendor/rowpty/RowPty.cs`）を Windows 内蔵 .NET Framework の `csc.exe` でユーザーマシン上で直接コンパイルし、`%LOCALAPPDATA%\ai-battery\bin` にインストールします。その隣に Microsoft 署名済みの ConPTY（`conpty.dll`/`OpenConsole.exe`、node-pty パッケージからコピー）も配置します。Codex の起動遅延を避けるため、実行時のデフォルトは Windows 内蔵 OS ConPTY です。バンドル provider が必要な場合は `AI_BATTERY_ROWPTY_CONPTY=bundled` で戻せます。rowpty は Windows Terminal の scrollback を保つため、alternate-screen 切り替えと scrollback clear シーケンスをデフォルトでブロックします。必要な場合は `AI_BATTERY_ROWPTY_PRESERVE_SCROLLBACK=0` で無効化できます。未署名のダウンロード済みバイナリがないため、SmartScreen/Defender 系の評判警告を根本から避けられ、ソースはテキストとして監査できます。自分でビルドした exe を使う場合は `AI_BATTERY_ROWPTY` 環境変数で指定します。rowpty がない場合は同じコンソールに重ね描きする overlay layout として動作します（`AI_BATTERY_WIN_LAYOUT=overlay` で強制可能）。legacy `node-pty` reserve は、`AI_BATTERY_WIN_LAYOUT=reserve` で rowpty がない場合にのみ使われます。Claude statusLine は通常の `cmd`/PowerShell プロンプトではなく、Claude Code 内でのみ表示されます。
+Windows native の `cmd`/PowerShell では、`codex.cmd` wrapper が Windows runner を実行します。デフォルトの `auto`/`composite` layout は、子 ConPTY の出力を物理コンソールへそのまま転送しません。まず `@xterm/headless` が提供する隔離された `rows - 1` の VT 画面で解釈し、その画面と AI Battery 専用の最下行をターミナル上で合成します。これにより、Codex の alternate-screen 切り替え、画面消去、scroll region、cursor query が status row のターミナル状態と分離されます。ウィンドウサイズが変わると、子 ConPTY と 2 つの画面をまとめてリサイズします。
+
+`@xterm/headless` または任意依存の `node-pty` を読み込めない場合や、入出力が TTY でない場合、自動モードは同じコンソール上に無理に重ね描きせず、追加行のない通常の Codex へ安全に切り替えます。再インストール後に `ai-battery doctor` を実行すると、compositor の依存関係を確認できます。以前の raw relay と same-console 方式は、互換性確認・デバッグ用の明示的な opt-in としてのみ残されています: `AI_BATTERY_WIN_LAYOUT=rowpty`、`reserve`、`overlay`。意図的に行を無効にする場合は `plain` を使ってください。`rowpty` には別途インストールした `rowpty.exe` が必要で、`setup` は自動コンパイルしません。Claude statusLine は通常の `cmd`/PowerShell プロンプトではなく、Claude Code 内でのみ表示されます。
+
+Windows compositor を検証するには、Windows native ターミナルで `npm run smoke:win`、または WSL から実際の Windows コンソールを開いて検証する場合は `npm run smoke:wsl-win` を実行します。これらは `cmd.exe` と `powershell.exe` の子プロセス、遅延出力、status row の隔離、alternate-screen の復元を検査し、`rowpty-smoke-report.json` を保存します。実際の Codex の長い応答と frame の重複も確認するには、それぞれ `npm run smoke:codex-win` または `npm run smoke:codex-wsl-win` を実行してください。この E2E には有効な Codex ログインとネットワーク接続が必要で、`codex-compositor-e2e-report.json` を保存します。
+
+Codex の `/tui` fullscreen でも、Node が VT raw input をサポートしていれば別の HUD なしで統合行を表示できます。Windows Codex 0.161.0 と Node 24.21.0 で確認しました。Node 22.15.1 では通常の Backspace が単語全体を削除する問題が再現されるため、更新された runner は `rawMode` を確認し、非対応の場合は理由を表示して追加行なしの Codex に切り替えます。native fullscreen と HUD を既定とする 0.1.18 では、対応する Node で `AI_BATTERY_WIN_LAYOUT=composite` を指定してください。Codex の使用量だけなら `/statusline` の `five-hour-limit` と `weekly-limit` を使えます。`npm run smoke:codex-fullscreen-win` は実際の Codex、隔離した一時設定とローカルの模擬応答で、使用枠を消費せず出力・キー入力・リサイズ・画面復元を検査します。マウス選択と IME は別途検証が必要です。
 
 tmux では pane ごとに下部行を予約すると、同じグローバルバッテリーが pane の数だけ重複表示されます。代わりに tmux の status bar にセッションごと 1 回だけ表示できます。
 
@@ -211,7 +217,7 @@ ai-battery on all
 <a id="codex-terminal-row"></a>
 ## Codex ターミナル行
 
-`ai-battery setup` は Codex 自体の status line を `モデル/推論強度 · ワークスペース · git branch` 構成に設定します。使用量表示は別の `codex` wrapper が担当するため、ユーザーは通常どおり `codex` と入力するだけで、`ai-battery-run` が内部で Codex を 1 行短い PTY の中で実行します。
+`ai-battery setup` は Codex 自体の status line を `モデル/推論強度 · ワークスペース · git branch` 構成に設定します。使用量表示は別の `codex` wrapper が担当するため、ユーザーは通常どおり `codex` と入力するだけです。Windows では隔離された VT screen compositor が Codex の下に AI Battery 行を配置し、WSL/Linux/macOS では 1 行短い POSIX PTY 内で Codex を実行します。
 
 ```bash
 codex
@@ -315,7 +321,9 @@ flowchart LR
     L[Claude local logs] --> F[Fallback token view]
     F --> R
     R --> T[Terminal output]
-    R --> P[PTY reserved row]
+    R --> P[Codex terminal row]
+    P --> W[Windows: ConPTY → headless VT → composed screen]
+    P --> U[WSL/Linux/macOS: POSIX PTY]
     R --> H[Desktop HUD / menu bar]
 ```
 
@@ -327,7 +335,8 @@ Codex は直近のセッションログから `rate_limits` イベントを探�
 | レイヤー | 技術 | 役割 |
 | --- | --- | --- |
 | CLI | Node.js | ログ解析、Claude cache、ANSI/statusLine 出力 |
-| PTY row | Python 3 | Codex 実行用の reserved terminal row |
+| Windows terminal row | `node-pty` / ConPTY、`@xterm/headless` | 子 VT を隔離された画面で解釈し、Codex 画面と status row を合成 |
+| POSIX terminal row | Python 3 / POSIX PTY | WSL/Linux/macOS で Codex の最下行を予約 |
 | HUD launcher | Node.js / Bash compatibility wrapper | Windows native/WSL PowerShell HUD と macOS menu bar の起動 |
 | HUD UI | PowerShell WinForms / AppleScriptObjC | Windows floating overlay、tray icon、macOS menu bar item |
 | Data | JSONL logs, statusLine JSON | Codex/Claude 使用量ソース |
@@ -335,7 +344,7 @@ Codex は直近のセッションログから `rate_limits` イベントを探�
 <a id="source-environment"></a>
 ## ソース環境
 
-基本 CLI は Node.js 18 以上があれば Windows native、WSL、Linux、macOS で実行できます。Windows native の Codex terminal row は `rowpty.exe`（専用 ConPTY host、.NET Framework 4.8 内蔵 csc.exe でビルド）がある場合は reserved row を使い、ない場合は Node runner の same-console overlay row として動作します。WSL/Linux/macOS の `ai-battery-run` は Python 3 と POSIX PTY を使います。HUD は Windows/WSL では PowerShell/WinForms、macOS では内蔵 `osascript` と AppleScriptObjC を使います。
+基本 CLI は Node.js 18 以上があれば Windows native、WSL、Linux、macOS で実行できます。Windows native の Codex terminal row は、`node-pty`/ConPTY と `@xterm/headless` を使う VT compositor が担当します。必要な compositor 構成要素を利用できない場合は status row のない plain 実行へ安全に切り替え、raw の `rowpty`、`reserve`、`overlay` layout を自動選択することはありません。WSL/Linux/macOS の `ai-battery-run` は Python 3 と POSIX PTY を使います。HUD は Windows/WSL では PowerShell/WinForms、macOS では内蔵 `osascript` と AppleScriptObjC を使います。
 
 Codex データはデフォルトで `~/.codex/sessions` を読みます。別の場所を使っている場合は `CODEX_HOME` を設定してください。
 
@@ -352,4 +361,7 @@ Claude の使用量表示は、Claude Code statusLine hook をインストール
 - Codex rate limit イベントがまだ生成されていない、または古い場合、最新状態と差が出ることがあります。
 - Claude statusLine は使用率と reset 時刻だけを提供するため、実際の hit 状態は Claude が残した 429 rate-limit ログと合わせて反映します。
 - HUD は Windows では PowerShell/WinForms ベース、macOS では menu bar status item ベースです。WSL では `powershell.exe` と `wsl.exe` を一緒に使います。
-- `ai-battery-run` は PTY wrapper です。一部の全画面 TUI では画面を消去する escape sequence のため、status row が一時的に揺れることがあります。
+- Windows compositor は子の VT 出力をそのまま転送せず、再レンダリングします。まれな非標準 escape sequence はホストターミナルと完全に同じ表示にならない場合があります。問題がある場合は `AI_BATTERY_WIN_LAYOUT=plain` で回避し、報告時に smoke report を添付してください。
+- Windows compositor 自体が物理ターミナルの alternate screen を使うため、Codex で `tui.alternate_screen=never` または `--no-alt-screen` を設定しても、終了後にセッション内容がホストの scrollback へ再現されることはありません。
+- `rowpty`、`reserve`、`overlay` は legacy opt-in です。これらのモードでは子 VT と status row が物理ターミナル状態を共有するため、通常のデフォルトとしては推奨しません。
+- WSL/Linux/macOS の `ai-battery-run` は POSIX PTY wrapper です。一部の全画面 TUI では画面を消去する escape sequence のため、status row が一時的に揺れることがあります。

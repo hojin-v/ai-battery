@@ -23,14 +23,20 @@
   },
   "files": [
     "bin/ai-battery.js",
+    "bin/codex-wrapper.sh",
     "bin/ai-battery-run",
     "bin/ai-battery-run-win.js",
+    "bin/terminal-compositor.js",
     "bin/ai-battery-hud",
     "bin/ai-battery-hud.js",
     "bin/ai-battery-macos-status.applescript",
     "bin/ai-battery-hud.ps1",
     "scripts/windows-rowpty-smoke.ps1",
     "scripts/wsl-windows-rowpty-smoke.sh",
+    "scripts/windows-codex-compositor-e2e.ps1",
+    "scripts/launch-windows-codex-compositor-e2e.ps1",
+    "scripts/wsl-windows-codex-compositor-e2e.sh",
+    "scripts/windows-codex-fullscreen-check.mjs",
     "vendor/rowpty/RowPty.cs",
     "docs/*.svg",
     "README.md"
@@ -40,11 +46,17 @@
     "sync:rowpty": "node ./scripts/sync-rowpty.mjs",
     "smoke:win": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/windows-rowpty-smoke.ps1",
     "smoke:wsl-win": "bash ./scripts/wsl-windows-rowpty-smoke.sh",
+    "smoke:codex-win": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/windows-codex-compositor-e2e.ps1",
+    "smoke:codex-wsl-win": "bash ./scripts/wsl-windows-codex-compositor-e2e.sh",
+    "smoke:codex-fullscreen-win": "node ./scripts/windows-codex-fullscreen-check.mjs",
     "check": "node --check ./bin/ai-battery.js && node --check ./bin/ai-battery-hud.js && node --check ./bin/ai-battery-run-win.js && node --test",
     "test": "node --test"
   },
   "engines": {
     "node": ">=18"
+  },
+  "dependencies": {
+    "@xterm/headless": "6.0.0"
   },
   "optionalDependencies": {
     "node-pty": "^1.0.0"

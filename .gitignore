@@ -8,6 +8,9 @@ npm-debug.log*
 # Runtime logs
 *.log
 rowpty-smoke-report.json
+codex-compositor-e2e-report.json
+codex-fullscreen-*-report.json
+.ai-battery-fullscreen-*/
 
 # Environment files
 .env

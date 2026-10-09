@@ -79,7 +79,7 @@ PS1
 
 rm -f "$REPORT_PATH"
 
-echo "[ai-battery smoke] Opening a native Windows PowerShell console for rowpty smoke testing..."
+echo "[ai-battery smoke] Opening a native Windows PowerShell console for compositor smoke testing..."
 echo "[ai-battery smoke] Report will be written to: $REPORT_PATH"
 
 set +e

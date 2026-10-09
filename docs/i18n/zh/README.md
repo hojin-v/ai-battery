@@ -55,7 +55,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | `ai-battery` | 支持 | 支持 | 支持 | 支持 | 需要 Node.js 18 或更高版本。 |
 | `ai-battery --watch` | 支持 | 支持 | 支持 | 支持 | 在终端内周期性刷新。 |
 | Claude statusLine | 支持 | 支持 | 支持 | 支持 | 将 `node <script>` 命令保存到 Claude Code `statusLine`。 |
-| Codex terminal row | 支持 | 支持 | 支持 | 支持 | Windows 上如果存在 `rowpty.exe`（专用 ConPTY host），会预留下方一行；否则会在同一控制台中绘制 overlay row。WSL/Linux/macOS 使用 POSIX PTY 和 `python3`。 |
+| Codex terminal row | 支持 | 支持 | 支持 | 支持 | Windows 默认使用 VT compositor，将子 ConPTY 渲染到隔离的 `rows - 1` 屏幕，再与状态行合成。如果 compositor 不可用，会安全地运行不带附加状态行的普通 Codex。WSL/Linux/macOS 使用 POSIX PTY 和 `python3`。 |
 | `ai-battery setup codex` | 支持 | 支持 | 支持 | 支持 | 配置 Codex `[tui].status_line`，并在 Windows 上安装 `codex.cmd` wrapper，在 WSL/Linux/macOS 上安装 POSIX shell wrapper。 |
 | `ai-battery hud` | 支持 | 支持 | 不支持 | 支持 | Windows/WSL 使用 PowerShell/WinForms HUD，macOS 使用 menu bar status item。 |
 
@@ -179,7 +179,13 @@ ai-battery setup codex
 
 Codex setup 会在 `~/.codex/config.toml` 的 `[tui]` 中设置 `model-with-reasoning`、`current-dir`、`git-branch` status line。已有值会备份，以便 uninstall 时恢复。Codex wrapper 不会直接覆盖现有的 `codex` 命令。如果 `~/.local/bin` 已经在 PATH 中位于原始 `codex` 之前，并且 `~/.local/bin/codex` 为空或由 AI Battery 管理，则 wrapper 会放在该位置以便立即生效。否则会在 `~/.local/share/ai-battery/bin/codex` 创建受管理的 wrapper，并在需要时将该目录添加到 shell 配置中 PATH 的前部。如果 `~/.local/bin/codex` 这类公共位置已经存在其他文件，则不会覆盖。新的终端会自动以 AI Battery 下方状态行运行 `codex`。如果同一终端中已经运行过 `codex`，shell 缓存可能需要执行一次 `hash -r`；如果需要追加 PATH，请执行 `setup` 输出中显示的 `source ...` 命令。
 
-在 Windows 原生 `cmd`/PowerShell 中，`codex.cmd` wrapper 会运行 Windows runner。runner 在存在 `rowpty.exe`（独立 rowpty 项目的专用 ConPTY host）时，会以和 WSL 相同的方式预留下方一行：子程序使用少一行的屏幕，状态行只在输出安静时绘制，因此可以无闪烁地固定在底部。`rowpty.exe` 不以二进制形式分发。`ai-battery setup` 会在用户机器上使用 Windows 内置 .NET Framework `csc.exe` 直接编译包内源码（`vendor/rowpty/RowPty.cs`），安装到 `%LOCALAPPDATA%\ai-battery\bin`，并在旁边放置 Microsoft 签名的 ConPTY（`conpty.dll`/`OpenConsole.exe`，从 node-pty 包复制）。为了避免拖慢 Codex 启动，运行时默认使用 Windows 内置 OS ConPTY；如果需要 bundled provider，可设置 `AI_BATTERY_ROWPTY_CONPTY=bundled` 切回。rowpty 默认会阻止 alternate-screen 切换和清空 scrollback 的序列，以保留 Windows Terminal 的 scrollback；如需关闭，可设置 `AI_BATTERY_ROWPTY_PRESERVE_SCROLLBACK=0`。由于没有未签名的下载二进制文件，可以从根源避免 SmartScreen/Defender 类声誉警告，并且源码以文本形式可供审计。要使用自己构建的 exe，请通过 `AI_BATTERY_ROWPTY` 环境变量指定。没有 rowpty 时，会退回到在同一控制台中绘制的 overlay layout（可用 `AI_BATTERY_WIN_LAYOUT=overlay` 强制）；legacy `node-pty` reserve 只有在 `AI_BATTERY_WIN_LAYOUT=reserve` 且没有 rowpty 时才会使用。Claude statusLine 只会显示在 Claude Code 内部，而不是普通 `cmd`/PowerShell 提示符中。
+在 Windows 原生 `cmd`/PowerShell 中，`codex.cmd` wrapper 会运行 Windows runner。默认的 `auto`/`composite` layout 不会把子 ConPTY 输出直接转发到物理控制台，而是先在 `@xterm/headless` 提供的隔离 `rows - 1` VT 屏幕中解析，再把该屏幕与 AI Battery 专用底部状态行合成到终端。这样，Codex 的 alternate-screen 切换、清屏、scroll region 和 cursor query 就不会与状态行的终端状态相互冲突。窗口尺寸变化时，子 ConPTY 和两个屏幕会一起调整大小。
+
+如果无法加载 `@xterm/headless` 或可选的 `node-pty` 模块，或者输入/输出不是 TTY，自动模式不会勉强在同一控制台上叠加绘制，而是安全地启动不带附加状态行的普通 Codex。重新安装后可运行 `ai-battery doctor` 检查 compositor 依赖。原来的 raw relay 和 same-console 方式只保留为显式的兼容性/调试选项：`AI_BATTERY_WIN_LAYOUT=rowpty`、`reserve` 或 `overlay`；若要主动关闭状态行，请使用 `plain`。`rowpty` 需要单独安装的 `rowpty.exe`，`setup` 不再自动编译它。Claude statusLine 只会显示在 Claude Code 内部，而不是普通 `cmd`/PowerShell 提示符中。
+
+要验证 Windows compositor，请在 Windows 原生终端运行 `npm run smoke:win`；如果要从 WSL 打开并测试真实 Windows 控制台，请运行 `npm run smoke:wsl-win`。这些命令会测试 `cmd.exe` 和 `powershell.exe` 子进程、延迟输出、状态行隔离和 alternate-screen 恢复，并保存 `rowpty-smoke-report.json`。若要进一步用真实 Codex 测试长响应和重复 frame 检测，请分别运行 `npm run smoke:codex-win` 或 `npm run smoke:codex-wsl-win`。该 E2E 需要有效的 Codex 登录和网络连接，并保存 `codex-compositor-e2e-report.json`。
+
+Codex `/tui` fullscreen 在 Node 支持 VT raw input 时可以显示集成状态行，无需另一个 HUD。已验证 Windows Codex 0.161.0 和 Node 24.21.0。Node 22.15.1 会将普通 Backspace 变成删除整个单词，因此更新后的 runner 检查 `rawMode`，不支持时说明原因并运行不带附加行的 Codex。默认使用 native fullscreen 加 HUD 的 0.1.18 安装可在支持的 Node 下设置 `AI_BATTERY_WIN_LAYOUT=composite`。只查看 Codex 用量时可在 `/statusline` 选择 `five-hour-limit` 和 `weekly-limit`。`npm run smoke:codex-fullscreen-win` 使用真实 Codex、隔离的临时配置和本地模拟响应，不消耗用量，检查输出、键盘输入、调整大小与屏幕恢复。鼠标选择和 IME 需要单独验证。
 
 在 tmux 中，如果每个 pane 都预留下方一行，同一个全局电量状态会按 pane 数量重复显示。可以改为在 tmux status bar 中每个 session 只显示一次。
 
@@ -211,7 +217,7 @@ ai-battery on all
 <a id="codex-terminal-row"></a>
 ## Codex 终端行
 
-`ai-battery setup` 会将 Codex 自身的 status line 配置为 `模型/推理强度 · 工作区 · git branch`。使用量显示由单独的 `codex` wrapper 负责，因此用户只需像平常一样输入 `codex`，`ai-battery-run` 就会在内部以少一行的 PTY 运行 Codex。
+`ai-battery setup` 会将 Codex 自身的 status line 配置为 `模型/推理强度 · 工作区 · git branch`。使用量显示由单独的 `codex` wrapper 负责，因此用户只需像平常一样输入 `codex`。Windows 上由隔离的 VT screen compositor 把 AI Battery 状态行放在 Codex 下方；WSL/Linux/macOS 上则在少一行的 POSIX PTY 中运行 Codex。
 
 ```bash
 codex
@@ -315,7 +321,9 @@ flowchart LR
     L[Claude local logs] --> F[Fallback token view]
     F --> R
     R --> T[Terminal output]
-    R --> P[PTY reserved row]
+    R --> P[Codex terminal row]
+    P --> W[Windows: ConPTY → headless VT → composed screen]
+    P --> U[WSL/Linux/macOS: POSIX PTY]
     R --> H[Desktop HUD / menu bar]
 ```
 
@@ -327,7 +335,8 @@ Codex 会在最近的会话日志中查找 `rate_limits` 事件。Claude Code �
 | 层 | 技术 | 作用 |
 | --- | --- | --- |
 | CLI | Node.js | 日志解析、Claude cache、ANSI/statusLine 输出 |
-| PTY row | Python 3 | Codex 运行用 reserved terminal row |
+| Windows terminal row | `node-pty` / ConPTY、`@xterm/headless` | 在隔离屏幕中解析子 VT，并将 Codex 屏幕与状态行合成 |
+| POSIX terminal row | Python 3 / POSIX PTY | 在 WSL/Linux/macOS 上预留 Codex 底部状态行 |
 | HUD launcher | Node.js / Bash compatibility wrapper | 启动 Windows 原生/WSL PowerShell HUD 和 macOS menu bar |
 | HUD UI | PowerShell WinForms / AppleScriptObjC | Windows floating overlay、tray icon、macOS menu bar item |
 | Data | JSONL logs, statusLine JSON | Codex/Claude 使用量来源 |
@@ -335,7 +344,7 @@ Codex 会在最近的会话日志中查找 `rate_limits` 事件。Claude Code �
 <a id="source-environment"></a>
 ## 源环境
 
-默认 CLI 在 Node.js 18 或更高版本可用时，可运行于 Windows 原生、WSL、Linux 和 macOS。Windows 原生的 Codex terminal row 在有 `rowpty.exe`（专用 ConPTY host，由 .NET Framework 4.8 内置 csc.exe 构建）时使用 reserved row，否则使用 Node runner 的 same-console overlay row。WSL/Linux/macOS 的 `ai-battery-run` 使用 Python 3 和 POSIX PTY。HUD 在 Windows/WSL 上使用 PowerShell/WinForms，在 macOS 上使用内置 `osascript` 和 AppleScriptObjC。
+默认 CLI 在 Node.js 18 或更高版本可用时，可运行于 Windows 原生、WSL、Linux 和 macOS。Windows 原生的 Codex terminal row 由基于 `node-pty`/ConPTY 和 `@xterm/headless` 的 VT compositor 提供。如果缺少必要的 compositor 组件，会安全地切换为不带状态行的 plain 运行，且不会自动选择 raw `rowpty`、`reserve` 或 `overlay` layout。WSL/Linux/macOS 的 `ai-battery-run` 使用 Python 3 和 POSIX PTY。HUD 在 Windows/WSL 上使用 PowerShell/WinForms，在 macOS 上使用内置 `osascript` 和 AppleScriptObjC。
 
 Codex 数据默认读取 `~/.codex/sessions`。如果使用其他位置，请设置 `CODEX_HOME`。
 
@@ -352,4 +361,7 @@ Claude 使用量显示从安装 Claude Code statusLine hook 后开始可用。
 - 如果 Codex rate limit 事件尚未生成或已经过旧，显示结果可能与最新状态存在差异。
 - Claude statusLine 只提供使用率和 reset 时间，因此真实 hit 状态会结合 Claude 留下的 429 rate-limit 日志一起反映。
 - HUD 在 Windows 上基于 PowerShell/WinForms，在 macOS 上基于 menu bar status item。WSL 中会同时使用 `powershell.exe` 和 `wsl.exe`。
-- `ai-battery-run` 是 PTY wrapper。一些全屏 TUI 可能会因为清屏 escape sequence 让 status row 短暂晃动。
+- Windows compositor 会重新渲染子进程的 VT 输出，而不是直接透传。少见的非标准 escape sequence 可能无法与宿主终端显示得完全一致；遇到问题时可用 `AI_BATTERY_WIN_LAYOUT=plain` 临时绕过，并在反馈时附上 smoke report。
+- 由于 Windows compositor 本身使用物理终端的 alternate screen，即使为 Codex 设置 `tui.alternate_screen=never` 或 `--no-alt-screen`，退出后也不会将会话内容回放到宿主终端的 scrollback 中。
+- `rowpty`、`reserve` 和 `overlay` 是 legacy 显式选项。这些模式中子 VT 与状态行共享物理终端状态，因此不建议作为日常默认值。
+- WSL/Linux/macOS 的 `ai-battery-run` 是 POSIX PTY wrapper。一些全屏 TUI 可能会因为清屏 escape sequence 让 status row 短暂晃动。

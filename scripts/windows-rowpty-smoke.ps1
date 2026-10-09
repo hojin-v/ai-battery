@@ -17,9 +17,7 @@ $script:SmokeReport = [ordered]@{
   root = $null
   node = $null
   tempDir = $null
-  rowptyExe = $null
   debugLog = $null
-  install = $null
   processExitCode = $null
   checks = [ordered]@{}
   cases = @()
@@ -138,11 +136,6 @@ function Join-WindowsArgs {
   return (($Values | ForEach-Object { Quote-WindowsArg $_ }) -join " ")
 }
 
-function ConvertTo-FileUrl($Path) {
-  $resolved = (Resolve-Path $Path).ProviderPath
-  return ([System.Uri]$resolved).AbsoluteUri
-}
-
 function Add-ConsoleReaderType {
   if ("AiBatteryConsoleSmoke" -as [type]) {
     return
@@ -206,13 +199,14 @@ public static class AiBatteryConsoleSmoke
         StringBuilder all = new StringBuilder(width * Math.Min(height, 2000));
         for (short y = 0; y < height; y++)
         {
-            StringBuilder line = new StringBuilder(width);
+            StringBuilder line = new StringBuilder(width + 1);
             COORD origin = new COORD();
             origin.X = 0;
             origin.Y = y;
             uint read;
             if (ReadConsoleOutputCharacterW(handle, line, (uint)width, origin, out read))
             {
+                line.Length = (int)read;
                 all.Append(line.ToString());
                 all.Append('\n');
             }
@@ -235,6 +229,11 @@ function Find-LastLineIndex($Text, $Marker) {
     }
   }
   return -1
+}
+
+function Get-OccurrenceCount($Text, $Marker) {
+  if (-not $Marker) { return 0 }
+  return ([regex]::Matches([string]$Text, [regex]::Escape([string]$Marker))).Count
 }
 
 function Ensure-ConsoleScrollback {
@@ -276,8 +275,7 @@ $node = $nodeCommand.Source
 Set-Check "nodeOnPath" $true $node
 
 $runner = (Resolve-Path (Join-Path $root "bin/ai-battery-run-win.js")).ProviderPath
-$aiBatteryModule = (Resolve-Path (Join-Path $root "bin/ai-battery.js")).ProviderPath
-$tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("ai-battery-rowpty-smoke-" + [System.Guid]::NewGuid().ToString("N"))
+$tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("ai-battery-compositor-smoke-" + [System.Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Path $tempDir | Out-Null
 $script:SmokeReport.node = $node
 $script:SmokeReport.tempDir = $tempDir
@@ -285,16 +283,6 @@ $script:SmokeReport.tempDir = $tempDir
 try {
   Add-ConsoleReaderType
   Ensure-ConsoleScrollback
-
-  $installScript = Join-Path $tempDir "install-rowpty.mjs"
-  $moduleUrl = ConvertTo-FileUrl $aiBatteryModule
-
-  Set-Content -Path $installScript -Encoding UTF8 -Value @"
-import { installRowPtyHost } from "$moduleUrl";
-const result = installRowPtyHost();
-console.log(JSON.stringify(result));
-process.exit(result.ok ? 0 : 1);
-"@
 
   function Write-StatusScript($Path, $Marker) {
     Set-Content -Path $Path -Encoding UTF8 -Value "console.log(`"$Marker 99%`");"
@@ -316,6 +304,7 @@ process.stdout.write(prefix + "_DELAYED_OUTPUT\n");
 process.stdout.write("\x1b[999;1H" + prefix + "_PROMPT_AREA> ");
 await sleep(4500);
 process.stdout.write(prefix + "_CHILD_END\n");
+await sleep(500);
 "@
   }
 
@@ -344,29 +333,12 @@ Start-Sleep -Milliseconds 700
 [Console]::Out.Write("$esc[999;1H" + $prefix + "_PROMPT_AREA> ")
 Start-Sleep -Milliseconds 4500
 [Console]::Out.Write($prefix + "_CHILD_END`n")
+Start-Sleep -Milliseconds 500
 '@
     Set-Content -Path $Path -Encoding UTF8 -Value $content.Replace("__PREFIX__", $Prefix)
   }
 
-  Write-Step "Compiling/installing rowpty host if needed..."
-  $installOutput = & $node $installScript 2>&1
-  if ($LASTEXITCODE -ne 0) {
-    Set-Check "rowptyInstall" $false (($installOutput | Out-String).Trim())
-    Fail ("rowpty install failed: " + (($installOutput | Out-String).Trim()))
-  }
-
-  $installJson = ($installOutput | Select-Object -Last 1 | ConvertFrom-Json)
-  $script:SmokeReport.install = $installJson
-  $rowptyExe = [string]$installJson.exePath
-  if (-not (Test-Path $rowptyExe)) {
-    Set-Check "rowptyInstall" $false "missing exePath=$rowptyExe"
-    Fail "rowpty.exe was not installed at $rowptyExe"
-  }
-  $script:SmokeReport.rowptyExe = $rowptyExe
-  Set-Check "rowptyInstall" $true "compiled=$($installJson.compiled), conpty=$($installJson.conpty)"
-  Write-Step "Using rowpty: $rowptyExe"
-
-  function Invoke-RowPtySmokeCase($Name, [string[]]$ChildArgs) {
+  function Invoke-CompositorSmokeCase($Name, [string[]]$ChildArgs) {
     $upperName = $Name.ToUpperInvariant()
     $prefix = "AI_BATTERY_SMOKE_$upperName"
     $statusMarker = "${prefix}_STATUS"
@@ -415,8 +387,8 @@ Start-Sleep -Milliseconds 4500
     $psi.RedirectStandardOutput = $false
     $psi.RedirectStandardError = $false
     $psi.EnvironmentVariables["AI_BATTERY_BIN"] = $statusScript
-    $psi.EnvironmentVariables["AI_BATTERY_ROWPTY"] = $rowptyExe
-    $psi.EnvironmentVariables["AI_BATTERY_ROWPTY_PRESERVE_SCROLLBACK"] = "1"
+    $psi.EnvironmentVariables["AI_BATTERY_WIN_LAYOUT"] = "composite"
+    $psi.EnvironmentVariables["AI_BATTERY_ROWPTY_CONPTY"] = "auto"
     $psi.EnvironmentVariables["AI_BATTERY_DEBUG_LOG"] = $debugLog
 
     $process = [System.Diagnostics.Process]::Start($psi)
@@ -428,8 +400,10 @@ Start-Sleep -Milliseconds 4500
     $delayedSeenBeforeExit = $false
     $statusSeenBeforeExit = $false
     $promptSeenBeforeExit = $false
+    $endSeenBeforeExit = $false
     $promptLineIndex = -1
     $statusLineIndex = -1
+    $activeText = ""
     while ([DateTime]::UtcNow -lt $deadline) {
       Start-Sleep -Milliseconds 100
       $text = Get-ConsoleText
@@ -443,8 +417,13 @@ Start-Sleep -Milliseconds 4500
         $promptSeenBeforeExit = $true
         $promptLineIndex = Find-LastLineIndex $text $promptMarker
         $statusLineIndex = Find-LastLineIndex $text $statusMarker
+        $activeText = $text
       }
-      if ($delayedSeenBeforeExit -and $statusSeenBeforeExit -and $promptSeenBeforeExit) {
+      if (-not $process.HasExited -and $text.Contains($endMarker)) {
+        $endSeenBeforeExit = $true
+        $activeText = $text
+      }
+      if ($delayedSeenBeforeExit -and $statusSeenBeforeExit -and $promptSeenBeforeExit -and $endSeenBeforeExit) {
         break
       }
       if ($process.HasExited -and -not $delayedSeenBeforeExit) {
@@ -470,14 +449,14 @@ Start-Sleep -Milliseconds 4500
       Fail ("${Name}: ai-battery-run-win exited with code $($process.ExitCode).")
     }
     Set-CaseCheck $caseResult "processExitCode" $true $process.ExitCode
-    if (-not $debugText.Contains('"event":"rowpty:start"')) {
-      Set-CaseCheck $caseResult "rowptyStarted" $false $debugLog
-      Fail ("${Name}: debug log does not show rowpty:start; rowpty path was not exercised.")
+    if (-not $debugText.Contains('"event":"compositor:start"')) {
+      Set-CaseCheck $caseResult "compositorStarted" $false $debugLog
+      Fail ("${Name}: debug log does not show compositor:start; compositor path was not exercised.")
     }
-    Set-CaseCheck $caseResult "rowptyStarted" $true $debugLog
-    if ($debugText.Contains('"event":"overlay:start"') -or $debugText.Contains('"event":"conpty:start"')) {
+    Set-CaseCheck $caseResult "compositorStarted" $true $debugLog
+    if ($debugText.Contains('"event":"overlay:start"') -or $debugText.Contains('"event":"conpty:start"') -or $debugText.Contains('"event":"rowpty:start"')) {
       Set-CaseCheck $caseResult "noFallback" $false $debugLog
-      Fail ("${Name}: runner fell back to overlay/node-pty instead of rowpty.")
+      Fail ("${Name}: runner fell back from the compositor path.")
     }
     Set-CaseCheck $caseResult "noFallback" $true $debugLog
     if (-not $delayedSeenBeforeExit) {
@@ -487,12 +466,12 @@ Start-Sleep -Milliseconds 4500
     Set-CaseCheck $caseResult "delayedOutputVisibleBeforeExit" $true $delayedMarker
     if (-not $statusSeenBeforeExit) {
       Set-CaseCheck $caseResult "statusVisibleBeforeExit" $false $statusMarker
-      Fail ("${Name}: status row output was not visible while rowpty was running.")
+      Fail ("${Name}: status row output was not visible while the compositor was running.")
     }
     Set-CaseCheck $caseResult "statusVisibleBeforeExit" $true $statusMarker
     if (-not $promptSeenBeforeExit) {
       Set-CaseCheck $caseResult "promptVisibleBeforeExit" $false $promptMarker
-      Fail ("${Name}: prompt marker was not visible while rowpty was running.")
+      Fail ("${Name}: prompt marker was not visible while the compositor was running.")
     }
     Set-CaseCheck $caseResult "promptVisibleBeforeExit" $true $promptMarker
     if ($promptLineIndex -lt 0 -or $statusLineIndex -lt 0 -or $statusLineIndex -le $promptLineIndex) {
@@ -500,11 +479,18 @@ Start-Sleep -Milliseconds 4500
       Fail ("${Name}: status row did not remain below the prompt marker.")
     }
     Set-CaseCheck $caseResult "statusBelowPrompt" $true "promptLine=$promptLineIndex, statusLine=$statusLineIndex"
-    if (-not $afterText.Contains($endMarker)) {
-      Set-CaseCheck $caseResult "childEndMarker" $false $endMarker
-      Fail ("${Name}: child end marker is missing from the console buffer.")
+    if (-not $endSeenBeforeExit) {
+      Set-CaseCheck $caseResult "childEndMarkerBeforeExit" $false $endMarker
+      Fail ("${Name}: child end marker was not composed before alternate-screen restoration.")
     }
-    Set-CaseCheck $caseResult "childEndMarker" $true $endMarker
+    Set-CaseCheck $caseResult "childEndMarkerBeforeExit" $true $endMarker
+    $promptOccurrences = Get-OccurrenceCount $activeText $promptMarker
+    $statusOccurrences = Get-OccurrenceCount $activeText $statusMarker
+    if ($promptOccurrences -ne 1 -or $statusOccurrences -ne 1) {
+      Set-CaseCheck $caseResult "noGhostCopies" $false "prompt=$promptOccurrences,status=$statusOccurrences"
+      Fail ("${Name}: composed frame contains duplicated prompt/status cells.")
+    }
+    Set-CaseCheck $caseResult "noGhostCopies" $true "prompt=$promptOccurrences,status=$statusOccurrences"
     if (-not $afterText.Contains($scrollbackSentinel)) {
       Set-CaseCheck $caseResult "scrollbackPreservedAfter3J" $false $scrollbackSentinel
       Fail ("${Name}: scrollback sentinel disappeared after the child emitted CSI 3J.")
@@ -520,12 +506,12 @@ Start-Sleep -Milliseconds 4500
   Write-CmdChildWrapper $cmdChildWrapper $node $cmdChildScript
   Write-PowerShellChildScript $powershellChildScript "AI_BATTERY_SMOKE_POWERSHELL"
 
-  Invoke-RowPtySmokeCase "cmd" @($cmdChildWrapper)
-  Invoke-RowPtySmokeCase "powershell" @("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $powershellChildScript)
+  Invoke-CompositorSmokeCase "cmd" @($cmdChildWrapper)
+  Invoke-CompositorSmokeCase "powershell" @("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $powershellChildScript)
 
   $script:SmokeReport.ok = $true
   Write-SmokeReport
-  Write-Host "[ai-battery smoke] PASS: cmd and PowerShell rowpty output, status paint, and scrollback preservation look healthy." -ForegroundColor Green
+  Write-Host "[ai-battery smoke] PASS: cmd and PowerShell compositor output, isolated status row, and alternate-screen restoration look healthy." -ForegroundColor Green
   if ($ReportPath) {
     Write-Host "[ai-battery smoke] Report: $ReportPath"
   }

@@ -32,7 +32,9 @@ def battery_command_base():
     # Running the .js file directly depends on its exec bit and shebang;
     # prefer an explicit node invocation when node is available.
     if BATTERY_BIN.endswith(".js"):
-        node = shutil.which("node")
+        node = os.environ.get("AI_BATTERY_NODE")
+        if not node or not os.path.isfile(node) or not os.access(node, os.X_OK):
+            node = shutil.which("node")
         if node:
             return [node, BATTERY_BIN]
     return [BATTERY_BIN]

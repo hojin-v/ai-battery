@@ -52,7 +52,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | `ai-battery` | 지원 | 지원 | 지원 | 지원 | Node.js 18 이상이 필요합니다. |
 | `ai-battery --watch` | 지원 | 지원 | 지원 | 지원 | 터미널 안에서 주기적으로 갱신합니다. |
 | Claude statusLine | 지원 | 지원 | 지원 | 지원 | Claude Code `statusLine`에 `node <script>` 명령을 저장합니다. |
-| Codex terminal row | 지원 | 지원 | 지원 | 지원 | Windows는 `rowpty.exe`(전용 ConPTY host)가 있으면 하단 row를 예약하고, 없으면 같은 콘솔에 덧그리는 overlay row로 동작합니다. WSL/Linux/macOS는 POSIX PTY와 `python3`를 사용합니다. |
+| Codex terminal row | 지원 | 지원 | 지원 | 지원 | Windows는 기본 VT compositor가 자식 ConPTY를 격리된 `rows - 1` 화면에 렌더링한 뒤 상태 행과 합성합니다. compositor를 사용할 수 없으면 상태 행 없이 안전하게 일반 Codex를 실행합니다. WSL/Linux/macOS는 POSIX PTY와 `python3`를 사용합니다. |
 | `ai-battery setup codex` | 지원 | 지원 | 지원 | 지원 | Codex `[tui].status_line`을 맞추고, Windows는 `codex.cmd` wrapper, WSL/Linux/macOS는 POSIX shell wrapper를 설치합니다. |
 | `ai-battery hud` | 지원 | 지원 | 미지원 | 지원 | Windows/WSL은 PowerShell/WinForms HUD, macOS는 menu bar status item입니다. |
 
@@ -171,9 +171,17 @@ ai-battery setup codex
 
 Codex setup은 `~/.codex/config.toml`의 `[tui]`에 `model-with-reasoning`, `current-dir`, `git-branch` status line을 설정합니다. 기존 값이 있으면 uninstall 복구용으로 백업합니다. Codex wrapper는 기존 `codex` 명령을 직접 덮어쓰지 않습니다. `~/.local/bin`이 이미 PATH에서 원본 `codex`보다 앞에 있고 `~/.local/bin/codex`가 비어 있거나 AI Battery 관리 파일이면 그 위치에 wrapper를 둬서 바로 잡히게 합니다. 그렇지 않으면 `~/.local/share/ai-battery/bin/codex`에 관리형 wrapper를 만들고, 필요한 경우 셸 설정에 이 디렉터리를 PATH 앞쪽으로 추가합니다. `~/.local/bin/codex` 같은 공용 위치에 이미 다른 파일이 있으면 덮어쓰지 않습니다. 새 터미널부터 `codex`가 자동으로 AI Battery 하단 행과 함께 실행됩니다. 같은 터미널에서 이미 `codex`를 실행한 적이 있으면 셸 캐시 때문에 `hash -r`이 한 번 필요할 수 있고, PATH 추가가 필요한 경우에는 `setup` 출력에 표시되는 `source ...` 명령을 실행하세요.
 
-Windows native `cmd`/PowerShell에서는 `codex.cmd` wrapper가 Windows runner를 실행합니다. runner는 `rowpty.exe`(별도 rowpty 프로젝트의 전용 ConPTY host)가 있으면 WSL과 같은 방식으로 하단 row를 예약합니다: 자식 프로그램은 한 줄 짧은 화면을 쓰고, 상태줄은 출력이 잠잠해진 시점에만 그려져 깜빡임 없이 하단에 고정됩니다. `rowpty.exe`는 바이너리로 배포되지 않습니다 — `ai-battery setup`이 패키지에 동봉된 소스(`vendor/rowpty/RowPty.cs`)를 Windows 내장 .NET Framework `csc.exe`로 사용자 머신에서 직접 컴파일해 `%LOCALAPPDATA%\ai-battery\bin`에 설치하고, 그 옆에 Microsoft 서명된 ConPTY(`conpty.dll`/`OpenConsole.exe`, node-pty 패키지에서 복사)를 배치합니다. Codex 시작 지연을 피하기 위해 실행 기본값은 Windows 내장 OS ConPTY이며, 번들 provider가 필요하면 `AI_BATTERY_ROWPTY_CONPTY=bundled`로 되돌릴 수 있습니다. rowpty는 Windows Terminal scrollback을 보존하기 위해 alternate-screen 전환과 scrollback clear 시퀀스를 기본적으로 막으며, 필요하면 `AI_BATTERY_ROWPTY_PRESERVE_SCROLLBACK=0`으로 끌 수 있습니다. 서명 없는 다운로드 바이너리가 없으므로 SmartScreen/Defender류 평판 경고를 원천적으로 피하고, 소스가 텍스트로 열려 있어 감사할 수 있습니다. 직접 빌드한 exe를 쓰려면 `AI_BATTERY_ROWPTY` 환경변수로 지정합니다. rowpty가 없으면 같은 콘솔에 덧그리는 overlay layout으로 동작하며(`AI_BATTERY_WIN_LAYOUT=overlay`로 강제 가능), legacy `node-pty` reserve는 `AI_BATTERY_WIN_LAYOUT=reserve`이면서 rowpty가 없을 때만 사용됩니다. Claude statusLine은 일반 `cmd`/PowerShell 프롬프트가 아니라 Claude Code 안에서만 표시됩니다.
+Windows native `cmd`/PowerShell에서는 `codex.cmd` wrapper가 Windows runner를 실행합니다. 기본 `auto`/`composite` layout은 `node-pty`의 ConPTY 출력을 실제 콘솔로 그대로 전달하지 않고 `@xterm/headless`의 격리된 `rows - 1` VT 화면에서 먼저 해석합니다. runner가 그 화면과 AI Battery 전용 하단 행을 물리 터미널에 다시 합성하므로, Codex의 alternate screen, 화면 지우기, scroll region, cursor query가 상태 행의 터미널 상태와 충돌하지 않습니다. 창 크기가 바뀌면 자식 ConPTY와 두 화면을 함께 다시 배치합니다.
 
-Windows rowpty 문제를 재현할 때는 말로 설명하지 말고 smoke report를 남기는 쪽이 가장 빠릅니다. WSL에서는 `npm run smoke:wsl-win`을 실행하면 새 Windows PowerShell 콘솔을 열어 실제 Windows 콘솔 핸들에서 테스트하고, `rowpty-smoke-report.json`을 repo 루트에 저장합니다. Windows native 터미널에서는 `npm run smoke:win`을 바로 실행하면 됩니다. smoke test는 `cmd.exe` child와 `powershell.exe` child를 모두 rowpty 안에서 실행합니다. report에는 rowpty 사용 여부, overlay/node-pty fallback 여부, 키 입력 없이 delayed output이 화면 버퍼에 나타났는지, status row가 보였는지, `CSI 3J` 이후 scrollback sentinel이 남았는지가 case별로 기록됩니다.
+`@xterm/headless` 또는 선택적 `node-pty`를 불러올 수 없거나 입출력이 TTY가 아니면, 자동 모드는 같은 콘솔 위에 억지로 덧그리지 않고 상태 행 없는 일반 Codex로 안전하게 전환합니다. 다시 설치한 뒤 `ai-battery doctor`에서 compositor 의존성을 확인할 수 있습니다. 예전 raw relay와 same-console 방식은 호환성 진단용 명시적 opt-in으로만 남아 있습니다: `AI_BATTERY_WIN_LAYOUT=rowpty`, `reserve`, `overlay`; 상태 행을 의도적으로 끄려면 `plain`을 사용하세요. `rowpty`는 별도로 설치한 `rowpty.exe`가 있어야 하며 `setup`이 자동으로 컴파일하지 않습니다. Claude statusLine은 일반 `cmd`/PowerShell 프롬프트가 아니라 Claude Code 안에서만 표시됩니다.
+
+Windows compositor를 검증하려면 Windows native 터미널에서 `npm run smoke:win`, WSL에서 실제 Windows 콘솔을 띄워 같은 검사를 하려면 `npm run smoke:wsl-win`을 실행합니다. 두 명령은 `cmd.exe`와 `powershell.exe` child, 지연 출력, 상태 행 격리, alternate-screen 복원을 검사하고 `rowpty-smoke-report.json`을 저장합니다. 실제 Codex의 긴 응답과 중복 frame까지 확인하려면 각각 `npm run smoke:codex-win` 또는 `npm run smoke:codex-wsl-win`을 실행하세요. 이 E2E는 실제 Codex 로그인과 네트워크가 필요하며 `codex-compositor-e2e-report.json`을 저장합니다.
+
+Codex의 `/tui` full screen에서도 별도 HUD 없이 통합 행을 표시할 수 있습니다. Windows runner의 Node가 VT raw input을 지원해야 하며, 실제 Windows Codex 0.161.0 + Node 24.21.0에서 `/tui` 메뉴, 긴 응답, 한글 출력, 창 축소·확대, Backspace, 두 번째 입력과 종료 후 화면 복원을 확인했습니다. Node 22.15.1에서는 일반 Backspace가 단어 전체를 지우는 문제가 재현됐습니다. 업데이트된 runner는 Node 버전 번호 대신 TTY의 `rawMode` 지원을 확인하며, 지원하지 않으면 이유를 안내하고 추가 행 없는 일반 Codex로 전환합니다. 기존 0.1.18에서 native fullscreen + HUD가 기본이라면, VT 입력을 지원하는 Node에서 `AI_BATTERY_WIN_LAYOUT=composite`를 지정해 터미널 내부 행을 선택할 수 있습니다. 전역 Node나 Codex 설정을 자동으로 변경하지 않습니다. 이 검사는 실제 ConPTY에서 출력·키 입력·크기 변경·종료 복원을 확인하며, 마우스 선택·복사와 IME는 별도 검증 범위입니다.
+
+Codex 사용량만 필요하면 Codex 안의 `/statusline`에서 `five-hour-limit`, `weekly-limit`를 선택할 수 있습니다. Codex 내부 기능이므로 외부 HUD 없이 사용할 수 있으며, Codex와 Claude 사용량을 함께 표시하려면 AI Battery의 통합 행을 사용합니다.
+
+현재 full screen을 계정 사용량 없이 검사하려면 Windows에서 `npm run smoke:codex-fullscreen-win`을 실행합니다. 실제 Windows Codex와 ConPTY를 사용하고, `CODEX_HOME`과 프로젝트는 임시 폴더로 분리하며 localhost의 모의 Responses API로 응답합니다. 결과는 `codex-fullscreen-check-report.json`에 저장됩니다. 직접 실행과 비교하려면 `node scripts/windows-codex-fullscreen-check.mjs --native`를, 구형 Node의 일반 실행 전환을 확인하려면 `--expect-plain`을 사용하세요. `--runner <path>`와 `--report <path>`로 runner와 보고서 경로를 지정할 수 있습니다. compositor를 지원하지 않는 환경에서 기본 검사는 실패 원인을 보고서에 기록합니다.
 
 tmux에서는 pane마다 하단 행을 예약하면 같은 전역 배터리가 pane 수만큼 중복 표시됩니다. 대신 tmux의 status bar에 세션당 한 번만 표시할 수 있습니다.
 
@@ -204,7 +212,23 @@ ai-battery on all
 
 ## Codex Terminal Row
 
-`ai-battery setup`은 Codex 자체 status line을 `모델/추론강도 · 워크스페이스 · git branch` 구성으로 맞춥니다. 사용량 표시는 별도의 `codex` wrapper가 담당하므로, 사용자는 원래처럼 `codex`만 입력하면 `ai-battery-run`이 내부에서 Codex를 한 줄 짧은 PTY 안에서 실행합니다.
+WSL/Linux/macOS에서는 setup, wrapper 실행, doctor가 같은 설치 resolver를 사용합니다. resolver는 실행 경로와 파일 헤더만 확인하며 시작할 때 Codex나 패키지 관리자를 실행하거나 네트워크를 조회하지 않습니다. 생성된 wrapper 안에 resolver를 포함하므로 setup에 사용한 AI Battery 패키지 경로가 삭제돼도 설치 검색은 동작합니다.
+
+선택 순서는 **현재 PATH의 Node 옆에 실제로 설치된 npm Codex → PATH의 다른 원본 Codex → setup 때 저장한 진입 경로 → 알려진 설치 진입 경로 → 다른 nvm 설치**입니다. 현재 Node에 npm Codex가 생기면 다음 실행부터 자동 전환됩니다. npm 설치가 없으면 brew나 독립 실행 파일도 PATH 순서대로 선택합니다. 알려진 진입 경로는 `$HOMEBREW_PREFIX/bin/codex`, 일반적인 Homebrew prefix의 `bin/codex`, `~/.local/bin/codex`이며, 버전별 설치 트리를 무작정 검색하지 않습니다. nvm 대체 후보끼리는 가장 높은 Node 버전의 실행 가능한 설치를 선택합니다. `ai-battery-run`도 사용 가능한 현재 설치 또는 기존 설치를 재사용합니다.
+
+setup은 심볼릭 링크를 버전별 실제 경로로 고정하지 않고 진입 경로를 저장합니다. 매 실행마다 링크를 다시 확인하므로 brew나 독립 설치가 같은 진입 경로의 대상을 교체하면 새 버전을 사용합니다. 구형 wrapper에 저장된 `Caskroom/codex/<version>` 또는 `Cellar/codex/<version>` 경로도 개선된 wrapper에서는 같은 Homebrew 설치의 `bin/codex` 또는 `opt/codex/bin/codex`로 복구할 수 있습니다. 원본인 `~/.local/bin/codex`는 덮어쓰지 않고 별도의 AI Battery shim을 설치합니다.
+
+Node launcher에는 필요한 실행용 Node를 확인하고, nvm에 속한 npm Codex는 그 설치의 Node로 실행합니다. 원래 Node가 삭제된 npm 설치는 다른 디렉터리의 링크를 통해 발견됐더라도 제외합니다. brew와 독립 실행 파일에는 Node를 요구하지 않습니다. 프로젝트의 PATH, npm prefix와 nvm 선택은 유지되며 AI Battery 상태 조회는 runner 설치의 Node를 사용합니다.
+
+업데이트 대상도 선택된 설치에서 결정합니다. npm의 기본 안내가 다른 Node나 npm prefix를 갱신할 수 있으면 해당 실행에서만 기본 팝업을 끄고, 실행용 Node·npm CLI·명시적 `--prefix`를 사용하는 명령을 안내합니다. 표시된 명령이나 `codex update`로 선택된 설치를 갱신합니다. Homebrew는 선택된 Codex와 같은 prefix의 brew를 사용하며, `Caskroom` 설치에는 `upgrade --cask codex`, 기존 `Cellar` 설치에는 `upgrade --formula codex`를 사용합니다. PATH의 brew가 다르면 정확한 brew 경로를 안내하고 팝업을 해당 실행에서만 대체합니다. 업데이트 도구가 사라져도 실행 가능한 Codex는 사용할 수 있지만, 다른 설치를 대신 업데이트하지는 않습니다. 독립 실행 파일과 소유자를 확인할 수 없는 launcher는 Codex 자체 업데이트 동작을 유지합니다. 안내는 최신 버전 존재 여부가 아니라 업데이트 대상과 실행 방법을 설명합니다.
+
+기존 설치가 실행 가능하면 선택 입력 없이 자동으로 재사용하고 다른 Node나 Homebrew 설치를 쓰는 경우 해당 경로를 안내합니다. runner가 모두 없으면 안내 후 배터리 행 없이 Codex를 실행합니다. 사용할 수 있는 Codex가 전혀 없을 때만 대화형 실행에서 PATH에 있는 npm 또는 brew로 설치하거나 종료하는 메뉴를 제공합니다. 독립 설치 방법도 안내하며, 설치는 사용자가 옵션을 선택했을 때만 실행합니다. 비대화형 실행, `--help`, `--version`, `exec` 같은 명령은 입력을 기다리거나 자동 설치하지 않습니다. `AI_BATTERY_CODEX_RECOVERY=off`로 복구 메뉴를 생략할 수 있습니다.
+
+wrapper는 `CODEX_HOME`, HOME, 작업 디렉터리, resume 세션 ID와 사용자 인자를 유지합니다. Codex의 저장소를 설치 방식이나 Node 버전별로 나누지 않습니다. 실제 Codex 0.161.0에서 기존 npm → 독립 실행 파일 → 현재 npm으로 전환해도 같은 세션 ID, 작업 디렉터리와 저장 기록으로 resume되는 것을 확인했습니다. 서로 다른 Codex 릴리스의 세션 형식 호환성까지 wrapper가 보장하지는 않습니다.
+
+기존 wrapper를 새 방식으로 바꾸려면 업데이트된 패키지로 `ai-battery setup codex`를 한 번 실행해야 합니다. 구형 wrapper는 옛 경로를 바로 실행하므로 npm 패키지 업데이트만으로 이미 생성된 파일을 고칠 수는 없습니다. 새 wrapper가 PATH에서 원본보다 먼저 실행되는 환경에서는 Node나 설치 방식을 바꿀 때마다 setup을 반복할 필요가 없습니다. 원본 Codex가 wrapper보다 먼저 잡혀 AI Battery 행이 나오지 않으면 `ai-battery doctor`로 실제 설치 방식·진입 경로·대상·Node를 확인하고 필요한 경우 setup을 한 번 실행하세요. 실행 시에는 셸 설정이나 설치 파일을 자동으로 바꾸지 않습니다.
+
+`ai-battery setup`은 Codex 자체 status line을 `모델/추론강도 · 워크스페이스 · git branch` 구성으로 맞춥니다. 사용량 표시는 별도의 `codex` wrapper가 담당합니다. 사용자는 원래처럼 `codex`만 입력하면 됩니다. Windows에서는 격리된 VT screen compositor가, WSL/Linux/macOS에서는 한 줄 짧은 POSIX PTY가 Codex 화면 위에 AI Battery 행을 배치합니다.
 
 ```bash
 codex
@@ -316,25 +340,30 @@ flowchart LR
     L[Claude local logs] --> F[Fallback token view]
     F --> R
     R --> T[Terminal output]
-    R --> P[PTY reserved row]
+    R --> P[Codex terminal row]
+    P --> W[Windows: ConPTY → headless VT → composed screen]
+    P --> U[WSL/Linux/macOS: POSIX PTY]
     R --> H[Desktop HUD / menu bar]
 ```
 
 Codex는 최근 세션 로그에서 `rate_limits` 이벤트를 찾습니다. Claude Code는 statusLine payload로 사용률과 리셋 시각을 제공하고, 실제 429 rate-limit hit 로그가 있으면 reset 전까지 0%로 반영합니다. fallback 모드에서는 최근 토큰 사용량만 확인할 수 있습니다.
+
+Codex는 기본 `codex` 한도의 마지막 유효한 사용률을 표시합니다. 소진 직후 기록될 수 있는 `premium` 같은 별도 한도나 수치가 없는 이벤트가 기존 사용률을 덮어쓰지 않습니다. `100% 사용`이 기록되면 잔량 `0%`를 유지하며, 수치가 전혀 없으면 `--%`를 표시합니다. 마지막 보고값이 `99%`라면 임의로 `100%`로 바꾸지 않습니다.
 
 ## Tech Stack
 
 | Layer | Technology | Role |
 | --- | --- | --- |
 | CLI | Node.js | 로그 파싱, Claude cache, ANSI/statusLine 출력 |
-| PTY row | Python 3 | Codex 실행용 reserved terminal row |
+| Windows terminal row | `node-pty` / ConPTY, `@xterm/headless` | 자식 VT를 격리된 화면에 해석하고 물리 터미널에 Codex 화면과 상태 행을 합성 |
+| POSIX terminal row | Python 3 / POSIX PTY | WSL/Linux/macOS에서 Codex용 하단 행 예약 |
 | HUD launcher | Node.js / Bash compatibility wrapper | Windows native/WSL PowerShell HUD와 macOS menu bar 실행 |
 | HUD UI | PowerShell WinForms / AppleScriptObjC | Windows floating overlay, tray icon, macOS menu bar item |
 | Data | JSONL logs, statusLine JSON | Codex/Claude 사용량 소스 |
 
 ## Source Environment
 
-기본 CLI는 Node.js 18 이상이 있으면 Windows native, WSL, Linux, macOS에서 실행됩니다. Windows native의 Codex terminal row는 `rowpty.exe`(전용 ConPTY host, .NET Framework 4.8 내장 csc.exe로 빌드)가 있으면 reserved row를 사용하고, 없으면 Node runner의 same-console overlay row로 동작합니다. WSL/Linux/macOS의 `ai-battery-run`은 Python 3와 POSIX PTY를 사용합니다. HUD는 Windows/WSL에서는 PowerShell/WinForms, macOS에서는 내장 `osascript`와 AppleScriptObjC를 사용합니다.
+기본 CLI는 Node.js 18 이상이 있으면 Windows native, WSL, Linux, macOS에서 실행됩니다. Windows native의 Codex terminal row는 `node-pty`/ConPTY와 `@xterm/headless`를 이용하는 VT compositor가 담당합니다. 필수 compositor 구성요소를 사용할 수 없으면 상태 행 없는 plain 실행으로 안전하게 전환하며 raw `rowpty`, `reserve`, `overlay` layout을 자동 선택하지 않습니다. WSL/Linux/macOS의 `ai-battery-run`은 Python 3와 POSIX PTY를 사용합니다. HUD는 Windows/WSL에서는 PowerShell/WinForms, macOS에서는 내장 `osascript`와 AppleScriptObjC를 사용합니다.
 
 Codex 데이터는 기본적으로 `~/.codex/sessions`를 읽습니다. 다른 위치를 쓰고 있다면 `CODEX_HOME`을 설정하세요.
 
@@ -350,4 +379,7 @@ Claude의 사용량 표시는 Claude Code statusLine hook을 설치한 뒤부터
 - Codex rate limit 이벤트가 아직 생성되지 않았거나 오래된 경우 최신 상태와 차이가 있을 수 있습니다.
 - Claude statusLine은 사용률과 reset 시각만 제공하므로, 실제 hit 상태는 Claude가 남긴 429 rate-limit 로그를 함께 읽어 반영합니다.
 - HUD는 Windows에서는 PowerShell/WinForms 기반이고, macOS에서는 menu bar status item 기반입니다. WSL에서는 `powershell.exe`와 `wsl.exe`를 함께 사용합니다.
-- `ai-battery-run`은 PTY wrapper입니다. 일부 전체 화면 TUI는 화면을 지우는 escape sequence 때문에 status row가 잠시 흔들릴 수 있습니다.
+- Windows compositor는 자식의 VT 출력을 직접 전달하지 않고 다시 렌더링합니다. 드문 비표준 escape sequence는 원래 터미널과 완전히 같게 보이지 않을 수 있으므로 문제가 있으면 `AI_BATTERY_WIN_LAYOUT=plain`으로 우회하고 smoke report를 첨부하세요.
+- Windows compositor 자체가 물리 터미널의 alternate screen을 사용하므로, Codex에 `tui.alternate_screen=never` 또는 `--no-alt-screen`을 설정해도 세션 종료 후 내용을 host scrollback에 replay하지 않습니다.
+- `rowpty`, `reserve`, `overlay`는 legacy opt-in입니다. 자식 VT와 상태 행이 같은 물리 화면 상태를 공유하므로 일반 사용 기본값으로 권장하지 않습니다.
+- WSL/Linux/macOS의 `ai-battery-run`은 POSIX PTY wrapper입니다. 일부 전체 화면 TUI에서는 화면을 지우는 escape sequence 때문에 status row가 잠시 흔들릴 수 있습니다.

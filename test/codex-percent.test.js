@@ -41,6 +41,9 @@ import {
 import {
   conPtyBackspaceMode,
   conPtyRepaintIntervalMs,
+  compositorFrameIntervalMs,
+  compositorUsesBundledConpty,
+  compositorWindowsPty,
   isVsCodeTerminal,
   normalizeConPtyInput,
   outputMayClearDisplay,
@@ -48,6 +51,7 @@ import {
   overlayRepaintIntervalMs,
   parseArgs as parseWindowsRunnerArgs,
   quoteWindowsCommandLineArg,
+  resolveNpmCmdShim,
   rowptyConptyMode,
   rowptyExePath,
   rowptyPreserveScrollback,
@@ -55,8 +59,11 @@ import {
   rowptyStatusCommand,
   statusOutputText,
   statusRow,
-  windowsCommand
+  windowsBuildNumber,
+  windowsCommand,
+  windowsVtInputSupported
 } from "../bin/ai-battery-run-win.js";
+import { HeadlessTerminalCompositor } from "../bin/terminal-compositor.js";
 import {
   describeWindowsHudOptions,
   macHudCommandMatches,
@@ -155,6 +162,113 @@ test("fractional ratio fields are still scaled to percentages", () => {
 
   assert.equal(primary.usedPercent, 25);
   assert.equal(primary.remainingPercent, 75);
+});
+
+function codexUsageFixture(t, snapshots) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-codex-usage-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const codexHome = path.join(root, "codex");
+  const sessions = path.join(codexHome, "sessions");
+  fs.mkdirSync(sessions, { recursive: true });
+  fs.writeFileSync(path.join(sessions, "usage.jsonl"), snapshots.map((rate_limits, index) => JSON.stringify({
+    timestamp: new Date(Date.now() - ((snapshots.length - index) * 1000)).toISOString(),
+    type: "event_msg",
+    payload: { type: "token_count", rate_limits }
+  })).join("\n") + "\n");
+  return (args = []) => {
+    const result = spawnNode([CLI_PATH, "--provider", "codex", ...args], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: path.join(root, "home"),
+        CODEX_HOME: codexHome,
+        CODEX_THREAD_ID: "",
+        AI_BATTERY_STATE_DIR: path.join(root, "state"),
+        AI_BATTERY_SCAN_CACHE_SECONDS: "0"
+      },
+      timeout: 5000
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout;
+  };
+}
+
+function codexRateSnapshot(usedPercent = 100, limitId = "codex") {
+  return {
+    limit_id: limitId,
+    plan_type: "plus",
+    primary: { used_percent: usedPercent, window_minutes: 300, resets_at: 4102444800 },
+    secondary: { used_percent: 29, window_minutes: 10080, resets_at: 4103050000 }
+  };
+}
+
+test("exhausted Codex keeps zero remaining after an empty premium limit event", (t) => {
+  const run = codexUsageFixture(t, [
+    codexRateSnapshot(),
+    { limit_id: "premium", primary: null, secondary: null, plan_type: "plus" }
+  ]);
+  const data = JSON.parse(run(["--json"])).results[0];
+  assert.equal(data.limitId, "codex");
+  assert.equal(data.percentRemaining, 0);
+  assert.equal(data.percentUsed, 100);
+  assert.equal(data.primary.windowMinutes, 300);
+  assert.equal(data.secondary.remainingPercent, 71);
+  const text = run(["--no-color"]);
+  assert.match(text, /Codex .* 0%/);
+  assert.match(text, /7d 71%/);
+  assert.doesNotMatch(text, /null%/);
+});
+
+test("model-specific percentages do not replace the Codex usage bucket", (t) => {
+  const run = codexUsageFixture(t, [codexRateSnapshot(99), codexRateSnapshot(12, "premium")]);
+  const data = JSON.parse(run(["--json"])).results[0];
+  assert.equal(data.limitId, "codex");
+  assert.equal(data.percentRemaining, 1);
+  assert.equal(data.percentUsed, 99);
+});
+
+test("empty Codex updates retain the latest numeric usage and newer numeric updates still win", (t) => {
+  const run = codexUsageFixture(t, [
+    codexRateSnapshot(40), codexRateSnapshot(100),
+    { limit_id: "codex", primary: null, secondary: null }
+  ]);
+  const data = JSON.parse(run(["--json"])).results[0];
+  assert.equal(data.percentRemaining, 0);
+  assert.equal(data.percentUsed, 100);
+});
+
+test("legacy Codex snapshots without a limit ID remain readable", (t) => {
+  const legacy = codexRateSnapshot(0);
+  delete legacy.limit_id;
+  const run = codexUsageFixture(t, [legacy, { limit_id: "premium", primary: null, secondary: null }]);
+  assert.equal(JSON.parse(run(["--json"])).results[0].percentRemaining, 100);
+});
+
+test("unknown Codex percentages display a placeholder in full and compact output", (t) => {
+  const run = codexUsageFixture(t, [{ limit_id: "codex", primary: null, secondary: null }]);
+  for (const args of [["--no-color"], ["--no-color", "--max-width", "20"], ["--tmux"]]) {
+    const text = run(args);
+    assert.match(text, /--%/);
+    assert.doesNotMatch(text, /null%/);
+  }
+});
+
+test("Codex with only a weekly window uses that window without inventing five-hour usage", (t) => {
+  const weekly = { ...codexRateSnapshot(), primary: null };
+  const run = codexUsageFixture(t, [weekly]);
+  const data = JSON.parse(run(["--json"])).results[0];
+  assert.equal(data.primary, null);
+  assert.equal(data.percentRemaining, 71);
+  assert.match(run(["--no-color"]), /Codex .*71%.*7d 71%/);
+});
+
+test("exhausted Codex recovers after its recorded reset even if a premium event follows", (t) => {
+  const snapshot = codexRateSnapshot();
+  snapshot.primary.resets_at = Math.floor(Date.now() / 1000) - 60;
+  const run = codexUsageFixture(t, [snapshot, { limit_id: "premium", primary: null, secondary: null }]);
+  const data = JSON.parse(run(["--json"])).results[0];
+  assert.equal(data.percentRemaining, 100);
+  assert.equal(data.primary.resetPassed, true);
 });
 
 test("active provider supplies running state without a process scan hint", () => {
@@ -821,7 +935,7 @@ test("Codex wrapper falls back to original codex when AI Battery runner is unava
   const script = codexWrapperScript("/tmp/original-codex");
 
   assert.match(script, /\[ -t 0 \] && \[ -t 1 \] && \[ -x /);
-  assert.match(script, /exec '\/tmp\/original-codex' "\$@"/);
+  assert.match(script, /exec "\$@"/);
 });
 
 test("Windows runner launches Node scripts through node instead of spawning them directly", () => {
@@ -830,6 +944,32 @@ test("Windows runner launches Node scripts through node instead of spawning them
 
   assert.equal(command.file, process.execPath);
   assert.deepEqual(command.args, [scriptPath, "--version"]);
+});
+
+test("Windows runner resolves npm cmd shims without a second shell parse", () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-npm-shim-"));
+  const scriptPath = path.join(tmpDir, "node_modules", "@openai", "codex", "bin", "codex.js");
+  const shimPath = path.join(tmpDir, "codex.cmd");
+  fs.mkdirSync(path.dirname(scriptPath), { recursive: true });
+  fs.writeFileSync(scriptPath, "console.log('codex');\n");
+  fs.writeFileSync(shimPath, [
+    "@ECHO off",
+    '"%_prog%" "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*'
+  ].join("\r\n"));
+
+  const resolved = resolveNpmCmdShim(shimPath);
+  assert.equal(resolved.scriptPath, scriptPath);
+  const command = windowsCommand([shimPath, "prompt & literal %PATH% !value!"]);
+  assert.equal(command.file, process.execPath);
+  assert.deepEqual(command.args, [scriptPath, "prompt & literal %PATH% !value!"]);
+
+  const legacyPath = path.join(tmpDir, "legacy (x86).cmd");
+  fs.writeFileSync(legacyPath, "@echo off\r\necho %*\r\n");
+  assert.equal(windowsCommand([legacyPath, "safe-value"]).file, "cmd.exe");
+  assert.throws(
+    () => windowsCommand([legacyPath, "unsafe&command"]),
+    /Cannot safely pass shell metacharacters/
+  );
 });
 
 test("Windows runner lets wrapper left padding zero override environment padding", () => {
@@ -865,6 +1005,13 @@ test("Windows ConPTY input passes DEL backspace through by default", () => {
   assert.equal(withEnv({
     AI_BATTERY_CONPTY_BACKSPACE: "unknown-mode"
   }, () => conPtyBackspaceMode()), "passthrough");
+});
+
+test("Windows compositor requires VT raw input without guessing from Node versions", () => {
+  assert.equal(windowsVtInputSupported({ isTTY: true, isRaw: false }), false);
+  assert.equal(windowsVtInputSupported({ isTTY: true, isRaw: true }), false);
+  assert.equal(windowsVtInputSupported({ isTTY: true, isRaw: false, rawMode: false }), true);
+  assert.equal(windowsVtInputSupported({ isTTY: true, isRaw: true, rawMode: "raw" }), true);
 });
 
 test("rowpty status command carries the {MAXWIDTH} token and provider flags", () => {
@@ -1073,7 +1220,7 @@ test("Codex doctor rowpty diagnostic reports bundled ConPTY request without Refe
     path: exePath,
     installed: true,
     bundledConpty: false,
-    bundledConptyRequested: false
+    bundledConptyRequested: true
   });
 
   fs.writeFileSync(path.join(tmpDir, "conpty.dll"), "stub");
@@ -1087,7 +1234,7 @@ test("Codex doctor rowpty diagnostic reports bundled ConPTY request without Refe
   });
 });
 
-test("rowpty spawn defaults to the OS ConPTY provider for faster startup", () => {
+test("Windows compositor defaults to bundled passthrough ConPTY", () => {
   const clean = {
     AI_BATTERY_ROWPTY_CONPTY: undefined,
     CLAUDEX_BATTERY_ROWPTY_CONPTY: undefined,
@@ -1097,8 +1244,9 @@ test("rowpty spawn defaults to the OS ConPTY provider for faster startup", () =>
     ROWPTY_NO_CONPTY_DLL: undefined,
     ROWPTY_CONPTY_DLL: undefined
   };
-  assert.equal(withEnv(clean, () => rowptyConptyMode()), "os");
-  assert.equal(withEnv(clean, () => rowptySpawnEnv().ROWPTY_NO_CONPTY_DLL), "1");
+  assert.equal(withEnv(clean, () => rowptyConptyMode()), "auto");
+  assert.equal(withEnv(clean, () => compositorUsesBundledConpty()), true);
+  assert.equal(withEnv(clean, () => rowptySpawnEnv().ROWPTY_NO_CONPTY_DLL), undefined);
   assert.equal(withEnv(clean, () => rowptyPreserveScrollback()), true);
   assert.equal(withEnv(clean, () => rowptySpawnEnv().ROWPTY_PRESERVE_SCROLLBACK), "1");
 
@@ -1125,12 +1273,278 @@ test("rowpty spawn defaults to the OS ConPTY provider for faster startup", () =>
 
   assert.equal(withEnv({
     ...clean,
+    AI_BATTERY_ROWPTY_CONPTY: "os"
+  }, () => compositorUsesBundledConpty()), false);
+
+  assert.equal(withEnv({
+    ...clean,
     AI_BATTERY_ROWPTY_PRESERVE_SCROLLBACK: "off"
   }, () => rowptyPreserveScrollback()), false);
   assert.equal(withEnv({
     ...clean,
     AI_BATTERY_ROWPTY_PRESERVE_SCROLLBACK: "off"
   }, () => rowptySpawnEnv().ROWPTY_PRESERVE_SCROLLBACK), "0");
+
+  assert.equal(windowsBuildNumber("10.0.26200"), 26200);
+  assert.deepEqual(withEnv({
+    ...clean,
+    AI_BATTERY_ROWPTY_CONPTY: "auto"
+  }, () => compositorWindowsPty("10.0.19045")), {
+    backend: "conpty",
+    buildNumber: 21376
+  });
+  assert.deepEqual(withEnv({
+    ...clean,
+    AI_BATTERY_ROWPTY_CONPTY: "os"
+  }, () => compositorWindowsPty("10.0.26200")), {
+    backend: "conpty",
+    buildNumber: 26200
+  });
+});
+
+test("Windows runner defaults to the VT compositor and keeps unsafe relays explicit", () => {
+  const clean = {
+    AI_BATTERY_WIN_LAYOUT: undefined,
+    CLAUDEX_BATTERY_WIN_LAYOUT: undefined,
+    AI_BATTERY_LAYOUT: undefined
+  };
+  assert.equal(withEnv(clean, () => parseWindowsRunnerArgs(["--", "codex"]).layout), "auto");
+  assert.equal(parseWindowsRunnerArgs(["--layout", "composite", "--", "codex"]).layout, "composite");
+  assert.equal(parseWindowsRunnerArgs(["--layout", "rowpty", "--", "codex"]).layout, "rowpty");
+  assert.equal(parseWindowsRunnerArgs(["--layout", "plain", "--", "codex"]).layout, "plain");
+});
+
+test("Windows compositor frame interval is bounded", () => {
+  assert.equal(withEnv({
+    AI_BATTERY_COMPOSITOR_FRAME_MS: undefined,
+    CLAUDEX_BATTERY_COMPOSITOR_FRAME_MS: undefined
+  }, () => compositorFrameIntervalMs()), 16);
+  assert.equal(withEnv({ AI_BATTERY_COMPOSITOR_FRAME_MS: "-5" }, () => compositorFrameIntervalMs()), 0);
+  assert.equal(withEnv({ AI_BATTERY_COMPOSITOR_FRAME_MS: "999" }, () => compositorFrameIntervalMs()), 250);
+});
+
+test("headless compositor isolates height-dependent VT operations from the status row", async () => {
+  let hostOutput = "";
+  const replies = [];
+  const compositor = new HeadlessTerminalCompositor({
+    columns: 24,
+    rows: 6,
+    frameIntervalMs: 0,
+    windowsMode: false,
+    writeHost: (data) => { hostOutput += data; },
+    onReply: (data) => replies.push(String(data))
+  });
+  compositor.start();
+  await compositor.setStatusText("\x1b[32mCodex 88% | Claude 77%\x1b[0m");
+  await compositor.write("top\x1b[5;1Hbottom\x1b[r\nnext\x1b[2J\x1b[1;1Hfinal\x1b[?9001h\x1b[6n");
+  await compositor.flush();
+
+  const snapshot = compositor.snapshot();
+  assert.equal(snapshot.childRows, 5);
+  assert.equal(snapshot.status, "Codex 88% | Claude 77%");
+  assert.equal(snapshot.lines[0].startsWith("final"), true);
+  assert.equal(snapshot.lines.some((line) => line.includes("Claude 77%")), false);
+  assert.equal(snapshot.modes.win32InputMode, true);
+  assert.equal(replies.at(-1), "\x1b[1;6R");
+  assert.equal(hostOutput.includes("\x1b[6;1H"), true);
+  assert.equal(hostOutput.includes("\x1b[?9001h"), true);
+  await compositor.dispose();
+});
+
+test("headless compositor preserves synchronized-output frame atomicity", async () => {
+  let hostOutput = "";
+  const compositor = new HeadlessTerminalCompositor({
+    columns: 20,
+    rows: 5,
+    frameIntervalMs: 0,
+    windowsMode: false,
+    writeHost: (data) => { hostOutput += data; },
+    onReply: () => {}
+  });
+  compositor.start();
+  await compositor.flush();
+  hostOutput = "";
+
+  await compositor.write("\x1b[?2026hPARTIAL");
+  await compositor.setStatusText("STATUS DURING FRAME");
+  assert.equal(hostOutput, "");
+
+  await compositor.write(" COMPLETE\x1b[?2026l");
+  await compositor.flush();
+  assert.equal(hostOutput.includes("PARTIAL COMPLETE"), true);
+  assert.equal(hostOutput.includes("STATUS DURING FRAME"), true);
+  await compositor.dispose();
+});
+
+test("headless compositor mirrors exact input modes and resets them after RIS", async () => {
+  let hostOutput = "";
+  const replies = [];
+  const compositor = new HeadlessTerminalCompositor({
+    columns: 20,
+    rows: 5,
+    frameIntervalMs: 0,
+    windowsMode: false,
+    writeHost: (data) => { hostOutput += data; },
+    onReply: (data) => replies.push(String(data))
+  });
+  compositor.start();
+  await compositor.flush();
+  hostOutput = "";
+
+  await compositor.write("\x1b[?1h\x1b=\x1b[?9001h\x1b[?9h\x1b[?1006h\x1b[18t");
+  await compositor.flush();
+  const activeModes = compositor.snapshot().modes;
+  assert.equal(activeModes.applicationCursorKeysMode, true);
+  assert.equal(activeModes.applicationKeypadMode, true);
+  assert.equal(activeModes.win32InputMode, true);
+  assert.deepEqual(activeModes.mousePrivateModes, [9, 1006]);
+  assert.equal(hostOutput.includes("\x1b[?9h"), true);
+  assert.equal(hostOutput.includes("\x1b[?1006h"), true);
+  assert.equal(hostOutput.includes("\x1b[?1000h"), false);
+  assert.equal(replies.includes("\x1b[8;4;20t"), true);
+
+  hostOutput = "";
+  await compositor.write("\x1bc");
+  await compositor.flush();
+  const resetModes = compositor.snapshot().modes;
+  assert.equal(resetModes.applicationCursorKeysMode, false);
+  assert.equal(resetModes.applicationKeypadMode, false);
+  assert.equal(resetModes.win32InputMode, false);
+  assert.deepEqual(resetModes.mousePrivateModes, []);
+  assert.equal(hostOutput.includes("\x1b[?9001l"), true);
+  assert.equal(hostOutput.includes("\x1b[?9l"), true);
+
+  hostOutput = "";
+  await compositor.dispose();
+  assert.equal(hostOutput.includes("\x1b[?1l\x1b>"), true);
+  assert.equal(hostOutput.endsWith("\x1b[?1049l\x1b[?2026l"), true);
+});
+
+test("headless compositor waits for host backpressure before teardown completes", async () => {
+  let releaseDrain;
+  let teardownBlocked = false;
+  const writes = [];
+  const compositor = new HeadlessTerminalCompositor({
+    columns: 20,
+    rows: 5,
+    frameIntervalMs: 0,
+    windowsMode: false,
+    writeHost: (data) => {
+      writes.push(data);
+      if (!String(data).includes("\x1b[?1049l")) return true;
+      teardownBlocked = true;
+      return false;
+    },
+    waitForHostDrain: () => new Promise((resolve) => { releaseDrain = resolve; }),
+    onReply: () => {}
+  });
+  compositor.start();
+  await compositor.write("ready");
+  await compositor.flush();
+
+  let disposed = false;
+  const disposePromise = compositor.dispose().then(() => { disposed = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(teardownBlocked, true);
+  assert.equal(disposed, false);
+  releaseDrain();
+  await disposePromise;
+  assert.equal(disposed, true);
+  assert.equal(writes.at(-1).endsWith("\x1b[?1049l\x1b[?2026l"), true);
+});
+
+test("headless compositor does not resend an accepted frame after host drain", async () => {
+  let backpressure = false;
+  let releaseDrain;
+  const writes = [];
+  const compositor = new HeadlessTerminalCompositor({
+    columns: 20,
+    rows: 5,
+    frameIntervalMs: 0,
+    windowsMode: false,
+    writeHost: (data) => {
+      writes.push(data);
+      return !backpressure;
+    },
+    waitForHostDrain: () => new Promise((resolve) => { releaseDrain = resolve; }),
+    onReply: () => {}
+  });
+  compositor.start();
+  await compositor.flush();
+
+  writes.length = 0;
+  backpressure = true;
+  await compositor.write("changed");
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(writes.length, 1);
+  releaseDrain();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(writes.length, 1);
+
+  backpressure = false;
+  await compositor.dispose();
+});
+
+test("headless compositor parser is invariant to every input chunk boundary", async () => {
+  const stream = [
+    "\x1b[?1049h",
+    "\x1b[2J\x1b[1;1Halpha",
+    "\x1b[?2026h\x1b[31mred\x1b[0m\x1b[4;1Homega\x1b[?2026l",
+    "\x1b[?9001h"
+  ].join("");
+
+  async function snapshotForChunks(chunks) {
+    const compositor = new HeadlessTerminalCompositor({
+      columns: 20,
+      rows: 5,
+      frameIntervalMs: 0,
+      windowsMode: false,
+      writeHost: () => {},
+      onReply: () => {}
+    });
+    compositor.start();
+    await compositor.setStatusText("STATUS");
+    for (const chunk of chunks) await compositor.write(chunk);
+    await compositor.flush();
+    const snapshot = compositor.snapshot();
+    await compositor.dispose();
+    return snapshot;
+  }
+
+  const whole = await snapshotForChunks([stream]);
+  for (let split = 1; split < stream.length; split += 1) {
+    const splitSnapshot = await snapshotForChunks([stream.slice(0, split), stream.slice(split)]);
+    assert.deepEqual(splitSnapshot, whole, `split at byte ${split}`);
+  }
+});
+
+test("headless compositor keeps the status on the new bottom row after resize", async () => {
+  let hostOutput = "";
+  const compositor = new HeadlessTerminalCompositor({
+    columns: 20,
+    rows: 5,
+    frameIntervalMs: 0,
+    windowsMode: false,
+    writeHost: (data) => { hostOutput += data; },
+    onReply: () => {}
+  });
+  compositor.start();
+  await compositor.setStatusText("STATUS");
+  await compositor.write("first\x1b[4;1Hlast");
+  await compositor.flush();
+
+  hostOutput = "";
+  await compositor.resize(30, 7);
+  await compositor.flush();
+  const snapshot = compositor.snapshot();
+
+  assert.equal(snapshot.columns, 30);
+  assert.equal(snapshot.rows, 7);
+  assert.equal(snapshot.childRows, 6);
+  assert.equal(snapshot.status, "STATUS");
+  assert.equal(snapshot.lines.some((line) => line.includes("STATUS")), false);
+  assert.equal(hostOutput.includes("\x1b[7;1H"), true);
+  await compositor.dispose();
 });
 
 test("Windows ConPTY repaint interval and clear-screen detection are bounded", () => {
