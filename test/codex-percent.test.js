@@ -2303,7 +2303,7 @@ test("setup prefers empty ~/.local/bin when it is already before codex on PATH",
   assert.equal(result.ok, true);
   assert.equal(result.wrapperPath, localCodex);
   assert.equal(result.path.changed, false);
-  assert.match(result.path.note, /already before the original codex/);
+  assert.match(result.path.note, process.platform === "win32" ? /Skipped Windows user PATH update/ : /already before the original codex/);
   assert.match(fs.readFileSync(localCodex, "utf8"), /AI_BATTERY_MANAGED_CODEX_WRAPPER/);
   if (process.platform === "win32") {
     assert.match(fs.readFileSync(result.bridgePath, "utf8"), /"--left-padding", "2", "--"/);
