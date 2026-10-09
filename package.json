@@ -24,6 +24,7 @@
   "files": [
     "bin/ai-battery.js",
     "bin/codex-wrapper.sh",
+    "bin/codex-wrapper-win.cjs",
     "bin/ai-battery-run",
     "bin/ai-battery-run-win.js",
     "bin/terminal-compositor.js",

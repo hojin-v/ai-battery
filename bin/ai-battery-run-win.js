@@ -6,6 +6,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { HeadlessTerminalCompositor, HOST_RESTORE_SEQUENCE } from "./terminal-compositor.js";
+import windowsLauncher from "./codex-wrapper-win.cjs";
+const { resolveNpmCmdShim, resolveWindowsCommandFile, windowsCommand } = windowsLauncher;
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const BATTERY_BIN = process.env.AI_BATTERY_BIN
@@ -19,8 +21,6 @@ const DEFAULT_CODEX_OVERLAY_BOTTOM_OFFSET = 1;
 const DEFAULT_VSCODE_CODEX_OVERLAY_BOTTOM_OFFSET = 2;
 const MAX_COMPOSITOR_PENDING_OUTPUT_BYTES = 1024 * 1024;
 const RESUME_COMPOSITOR_OUTPUT_BYTES = 256 * 1024;
-const UNSAFE_CMD_ARGUMENT_RE = /[\r\n&|<>^%!()]/;
-const UNSAFE_CMD_PATH_RE = /[\r\n&|<>^%!]/;
 
 function usage() {
   console.log(`Usage: ai-battery-run-win [--interval SECONDS] [--bar-width N] [--provider auto|all|codex|claude] [--layout auto|composite|rowpty|reserve|overlay|plain] [--left-padding N] -- COMMAND [ARGS...]
@@ -439,94 +439,6 @@ class StatusLine {
     const row = statusRow(this.rows, this.bottomOffset);
     process.stdout.write(`\x1b7\x1b[0m\x1b[${row};1H\r\x1b[1G\x1b[2K\x1b8`);
   }
-}
-
-function normalizeWindowsCommandPath(value) {
-  let text = String(value || "").trim();
-  for (let i = 0; i < 6; i += 1) {
-    const before = text;
-    text = text.replace(/\\"/g, "\"").trim();
-    if (
-      (text.startsWith("\"") && text.endsWith("\""))
-      || (text.startsWith("'") && text.endsWith("'"))
-    ) {
-      text = text.slice(1, -1).trim();
-    }
-    if (text === before) break;
-  }
-  return text;
-}
-
-function resolveWindowsCommandFile(commandPath) {
-  commandPath = normalizeWindowsCommandPath(commandPath);
-  if (path.extname(commandPath)) return commandPath;
-  for (const suffix of [".cmd", ".exe", ".bat", ".ps1"]) {
-    const candidate = `${commandPath}${suffix}`;
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return commandPath;
-}
-
-function resolveNpmCmdShim(commandPath) {
-  if (!/\.cmd$/i.test(commandPath)) return null;
-  let source;
-  try {
-    source = fs.readFileSync(commandPath, "utf8");
-  } catch {
-    return null;
-  }
-  if (!source.includes("%dp0%") || !source.includes("%*")) return null;
-  const match = source.match(/%dp0%[\\/]([^"\r\n]+?\.(?:cjs|mjs|js))"?\s+%\*/i);
-  if (!match) return null;
-  const scriptPath = path.resolve(path.dirname(commandPath), match[1].replace(/[\\/]+/g, path.sep));
-  if (!fs.existsSync(scriptPath)) return null;
-  const localNode = path.join(path.dirname(commandPath), "node.exe");
-  return {
-    file: fs.existsSync(localNode) ? localNode : process.execPath,
-    scriptPath
-  };
-}
-
-function assertSafeCmdArguments(commandPath, args) {
-  const unsafePath = UNSAFE_CMD_PATH_RE.test(String(commandPath));
-  const unsafeArgument = args.find((value) => UNSAFE_CMD_ARGUMENT_RE.test(String(value)));
-  if (!unsafePath && unsafeArgument === undefined) return;
-  throw new Error(
-    `Cannot safely pass shell metacharacters through legacy batch command ${commandPath}. `
-    + "Use an .exe/.js entrypoint or an npm-generated .cmd shim instead."
-  );
-}
-
-function windowsCommand(command) {
-  const exe = resolveWindowsCommandFile(command[0]);
-  const rest = command.slice(1);
-  if (/\.(cmd|bat)$/i.test(exe)) {
-    const npmShim = resolveNpmCmdShim(exe);
-    if (npmShim) {
-      return {
-        file: npmShim.file,
-        args: [npmShim.scriptPath, ...rest]
-      };
-    }
-    assertSafeCmdArguments(exe, rest);
-    return {
-      file: "cmd.exe",
-      args: ["/d", "/s", "/c", "call", exe, ...rest]
-    };
-  }
-  if (/\.ps1$/i.test(exe)) {
-    return {
-      file: "powershell.exe",
-      args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", exe, ...rest]
-    };
-  }
-  if (/\.(js|mjs|cjs)$/i.test(exe)) {
-    return {
-      file: process.execPath,
-      args: [exe, ...rest]
-    };
-  }
-  return { file: exe, args: rest };
 }
 
 async function loadNodePty() {

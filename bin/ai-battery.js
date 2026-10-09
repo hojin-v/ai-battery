@@ -2,6 +2,7 @@
 
 import crypto from "node:crypto";
 import fs from "node:fs";
+import windowsLauncher from "./codex-wrapper-win.cjs";
 import https from "node:https";
 import os from "node:os";
 import path from "node:path";
@@ -41,9 +42,7 @@ const PROVIDERS = ["codex", "claude"];
 const TEARDOWN_TARGETS = ["codex", "claude", "hud", "tmux"];
 const CODEX_WRAPPER_MARKER = "AI_BATTERY_MANAGED_CODEX_WRAPPER";
 const CODEX_PATH_LOOKUP_MARKER = "AI_BATTERY_CODEX_PATH_LOOKUP=1";
-const CODEX_NVM_LOOKUP_MARKER = "AI_BATTERY_CODEX_NVM_LOOKUP=1";
-const CODEX_SCOPED_UPDATES_MARKER = "AI_BATTERY_CODEX_SCOPED_UPDATES=1";
-const CODEX_INSTALLATION_RESOLVER_MARKER = "AI_BATTERY_CODEX_INSTALLATION_RESOLVER=1";
+const CODEX_PATH_ONLY_MARKER = "AI_BATTERY_CODEX_PATH_ONLY=1";
 const CODEX_PREFERRED_BACKUP_SUFFIX = ".ai-battery-original-link";
 const CODEX_TIMESTAMP_BACKUP_MARKER = ".ai-battery-backup-";
 const CODEX_STATUS_LINE = ["model-with-reasoning", "current-dir", "git-branch"];
@@ -499,7 +498,7 @@ function shQuote(value) {
 function pathEntries() {
   return (process.env.PATH || "")
     .split(path.delimiter)
-    .filter(Boolean);
+    .map((entry) => process.platform === "win32" ? entry.replace(/^"(.*)"$/, "$1") : entry);
 }
 
 function isExecutable(filePath) {
@@ -550,9 +549,7 @@ function findCommand(command, skipPaths = []) {
 }
 
 function commandNames(command) {
-  return process.platform === "win32"
-    ? [`${command}.cmd`, `${command}.exe`, `${command}.bat`, command]
-    : [command];
+  return process.platform === "win32" ? windowsLauncher.windowsCommandNames(command) : [command];
 }
 
 function nvmVersionRoot(commandPath) {
@@ -580,47 +577,12 @@ function commandHeader(commandPath) {
   }
 }
 
-function codexUsesNode(commandPath) {
-  return /^#![^\r\n]*\bnode(?:\s|$)/.test(commandHeader(commandPath).split("\n")[0]);
-}
-
 function usableCodexCommand(commandPath) {
   return Boolean(commandPath && safeStat(commandPath)?.isFile() && isExecutable(commandPath)
-    && !managedCodexWrapper(commandPath)
-    && (!nvmVersionRoot(commandPath) || !codexUsesNode(commandPath) || nvmNodeForCommand(commandPath)));
+    && !managedCodexWrapper(commandPath));
 }
 
-function findNvmCommand(command, savedCommand = null) {
-  const savedRoot = nvmVersionRoot(savedCommand);
-  const nvmDir = process.env.NVM_DIR
-    || (savedRoot ? path.dirname(path.dirname(path.dirname(savedRoot))) : homePath(".nvm"));
-  const versionsDir = path.join(nvmDir, "versions", "node");
-  let versions;
-  try {
-    versions = fs.readdirSync(versionsDir)
-      .map((name) => ({ name, version: /^v(\d+)\.(\d+)\.(\d+)$/.exec(name)?.slice(1).map(Number) }))
-      .filter((entry) => entry.version)
-      .sort((a, b) => b.version[0] - a.version[0] || b.version[1] - a.version[1] || b.version[2] - a.version[2]);
-  } catch {
-    return null;
-  }
-  for (const entry of versions) {
-    const candidate = path.join(versionsDir, entry.name, "bin", command);
-    if (command === "codex" ? usableCodexCommand(candidate) : (safeStat(candidate)?.isFile()
-      && isExecutable(candidate) && nvmNodeForCommand(candidate))) return candidate;
-  }
-  return null;
-}
-
-function findActiveNodeTool(command) {
-  if (process.platform === "win32") return null;
-  const node = findCommand("node");
-  const candidate = node ? path.join(path.dirname(node), command) : null;
-  return candidate && (command === "codex" ? usableCodexCommand(candidate)
-    : codexRunnerExists(candidate)) ? candidate : null;
-}
-
-function codexWrapperScript(originalCommand, runner = path.join(scriptDir(), "ai-battery-run"), skipPaths = []) {
+function codexWrapperScript(runner = path.join(scriptDir(), "ai-battery-run"), skipPaths = []) {
   // Embed the shared resolver: installed wrappers survive removal of this package.
   const excluded = skipPaths.flatMap((entry) => [path.resolve(entry), executableTarget(entry)]);
   const exclusionChecks = excluded.map((entry) => `  [ "$1" != ${shQuote(entry)} ] && [ "$ai_battery_target" != ${shQuote(entry)} ] || return 0`);
@@ -628,10 +590,7 @@ function codexWrapperScript(originalCommand, runner = path.join(scriptDir(), "ai
     "#!/bin/sh",
     `# ${CODEX_WRAPPER_MARKER}=1`,
     `# ${CODEX_PATH_LOOKUP_MARKER}`,
-    `# ${CODEX_NVM_LOOKUP_MARKER}`,
-    `# ${CODEX_SCOPED_UPDATES_MARKER}`,
-    `# ${CODEX_INSTALLATION_RESOLVER_MARKER}`,
-    `ai_battery_configured_codex=${shQuote(originalCommand || "")}`,
+    "# " + CODEX_PATH_ONLY_MARKER,
     `ai_battery_configured_runner=${shQuote(runner || "")}`,
     "ai_battery_is_excluded() {",
     ...exclusionChecks,
@@ -641,9 +600,9 @@ function codexWrapperScript(originalCommand, runner = path.join(scriptDir(), "ai
   ].join("\n");
 }
 
-function resolveCodexInstallation(originalCommand = null, runner = codexRunnerPath(), skipPaths = [], wrapperPath = null) {
+function resolveCodexPaths(runner = codexRunnerPath(), skipPaths = [], wrapperPath = null) {
   if (process.platform === "win32") return null;
-  const invocation = wrapperPath ? [wrapperPath] : ["-c", codexWrapperScript(originalCommand, runner, skipPaths)];
+  const invocation = wrapperPath ? [wrapperPath] : ["-c", codexWrapperScript(runner, skipPaths)];
   const result = spawnSync("/bin/sh", invocation, {
     encoding: "utf8",
     env: { ...process.env, AI_BATTERY_CODEX_RESOLVE_ONLY: "1" },
@@ -651,76 +610,39 @@ function resolveCodexInstallation(originalCommand = null, runner = codexRunnerPa
     maxBuffer: 64 * 1024
   });
   if (result.status !== 0 || typeof result.stdout !== "string") return null;
-  const keys = ["command", "target", "kind", "node", "prefix", "source", "runner", "runnerNode", "activeNode", "scopedUpdate"];
+  const keys = ["command", "target", "runner", "runnerNode", "activeNode"];
   const fields = result.stdout.split("\0");
   if (fields.length !== keys.length + 1 || fields.at(-1) !== "") return null;
   return Object.fromEntries(keys.map((key, index) => [key, fields[index] || null]));
 }
 
-function cmdQuote(value) {
-  return `"${String(value).replace(/"/g, '""')}"`;
+function windowsCodexWrapperScript() {
+  return [
+    "@echo off",
+    "rem " + CODEX_WRAPPER_MARKER + "=1",
+    "rem " + CODEX_PATH_LOOKUP_MARKER,
+    "rem " + CODEX_PATH_ONLY_MARKER,
+    "setlocal EnableExtensions DisableDelayedExpansion",
+    'set "_ai_battery_node=' + process.execPath + '"',
+    'if not exist "%_ai_battery_node%" set "_ai_battery_node=node"',
+    '"%_ai_battery_node%" "%~f0.ai-battery.cjs" %*',
+    "exit /b %ERRORLEVEL%",
+    ""
+  ].join("\r\n");
 }
 
-function normalizeWindowsCommandPath(value) {
-  let text = String(value || "").trim();
-  for (let i = 0; i < 6; i += 1) {
-    const before = text;
-    text = text.replace(/\\"/g, "\"").trim();
-    if (
-      (text.startsWith("\"") && text.endsWith("\""))
-      || (text.startsWith("'") && text.endsWith("'"))
-    ) {
-      text = text.slice(1, -1).trim();
-    }
-    if (text === before) break;
-  }
-  return text;
+function windowsCodexWrapperBridge() {
+  return "// " + CODEX_WRAPPER_MARKER + "=1\n"
+    + fs.readFileSync(path.join(scriptDir(), "codex-wrapper-win.cjs"), "utf8")
+    + "\nrunCodexWrapper(" + JSON.stringify(codexRunnerPath()) + ").catch((error) => {\n"
+    + '  console.error("codex: " + error.message); process.exitCode = 1;\n'
+    + "});\n";
 }
 
-function windowsCommandSibling(commandPath) {
-  commandPath = normalizeWindowsCommandPath(commandPath);
-  if (path.extname(commandPath)) return commandPath;
-  for (const suffix of [".cmd", ".exe", ".bat", ".ps1"]) {
-    const candidate = `${commandPath}${suffix}`;
-    if (fs.existsSync(candidate)) return candidate;
-  }
-  return commandPath;
-}
-
-function windowsCmdFallbackCommand(commandPath) {
-  const command = windowsCommandSibling(commandPath);
-  const quotedCommand = cmdQuote(command);
-  if (/\.(cmd|bat)$/i.test(command)) return `  call ${quotedCommand} %*`;
-  if (/\.ps1$/i.test(command)) {
-    return `  powershell.exe -NoProfile -ExecutionPolicy Bypass -File ${quotedCommand} %*`;
-  }
-  if (/\.(js|mjs|cjs)$/i.test(command)) {
-    return `  ${cmdQuote(process.execPath)} ${quotedCommand} %*`;
-  }
-  return `  ${quotedCommand} %*`;
-}
-
-function windowsCodexWrapperScript(originalCommand) {
-  const runner = path.join(scriptDir(), "ai-battery-run-win.js");
-  const command = windowsCommandSibling(originalCommand);
-  return `@echo off
-rem ${CODEX_WRAPPER_MARKER}=1
-set "AI_BATTERY_ORIGINAL_CODEX=${command}"
-if not "%AI_BATTERY_DISABLE_WINDOWS_CODEX_RUNNER%"=="1" if exist ${cmdQuote(runner)} (
-  set "AI_BATTERY_WRAPPED_CODEX=1"
-  ${cmdQuote(process.execPath)} ${cmdQuote(runner)} --provider all --left-padding 2 -- ${cmdQuote(command)} %*
-  exit /b %ERRORLEVEL%
-)
-set "AI_BATTERY_WRAPPED_CODEX="
-${windowsCmdFallbackCommand(command)}
-exit /b %ERRORLEVEL%
-`;
-}
-
-function codexWrapperScriptForPlatform(originalCommand) {
+function codexWrapperScriptForPlatform() {
   return process.platform === "win32"
-    ? windowsCodexWrapperScript(originalCommand)
-    : codexWrapperScript(originalCommand);
+    ? windowsCodexWrapperScript()
+    : codexWrapperScript();
 }
 
 function managedCodexWrapper(filePath) {
@@ -809,18 +731,14 @@ function selectCodexShimDir(originalCommand, pathCommand = originalCommand) {
   };
 }
 
-function findOriginalCodexCommand(skipPaths = [], preferActiveNode = true) {
+function findOriginalCodexCommand(skipPaths = []) {
   const skips = skipPaths.filter(Boolean);
-  const current = preferActiveNode ? findActiveNodeTool("codex") : null;
-  if (current && !skips.some((skip) => samePath(current, skip))) return current;
-  const names = commandNames("codex");
+  if (process.platform === "win32") return windowsLauncher.findWindowsPathCommand("codex", process.env, skips);
   for (const dir of pathEntries()) {
-    for (const name of names) {
-      const candidate = path.join(dir, name);
+    for (const name of commandNames("codex")) {
+      const candidate = path.resolve(dir, name);
       if (skips.some((skip) => samePath(candidate, skip))) continue;
-      if (!safeStat(candidate)?.isFile() || !isExecutable(candidate)) continue;
-      if (!usableCodexCommand(candidate)) continue;
-      return candidate;
+      if (usableCodexCommand(candidate)) return candidate;
     }
   }
   return null;
@@ -1505,6 +1423,8 @@ function removeOrRestoreCodexWrapper(wrapperPath, config) {
     };
   }
   fs.rmSync(wrapperPath, { force: true });
+  const bridgePath = wrapperPath + ".ai-battery.cjs";
+  if (managedCodexWrapper(bridgePath)) fs.rmSync(bridgePath, { force: true });
   if (backupPath) {
     fs.renameSync(backupPath, wrapperPath);
     return {
@@ -1570,18 +1490,16 @@ function uninstallCodexWrapper() {
 
 function installCodexWrapper(args) {
   const config = readConfig();
-  const configuredOriginal = config.codexWrapper?.originalCommand;
   const installation = process.platform !== "win32"
-    ? resolveCodexInstallation(configuredOriginal, codexRunnerPath(), codexInstallSkipPaths(config))
+    ? resolveCodexPaths(codexRunnerPath(), codexInstallSkipPaths(config))
     : null;
   if (process.platform !== "win32" && !installation) {
-    return { ok: false, skipped: true, reason: "Could not resolve Codex installations with the shared POSIX resolver" };
+    return { ok: false, skipped: true, reason: "Could not read Codex PATH resolution" };
   }
   const discoveredOriginal = process.platform === "win32"
     ? findOriginalCodexCommand(codexInstallSkipPaths(config))
     : installation?.command;
-  const originalCandidate = discoveredOriginal || (process.platform === "win32" && usableCodexCommand(configuredOriginal)
-    ? configuredOriginal : null);
+  const originalCandidate = discoveredOriginal;
   const originalPathForPath = discoveredOriginal || originalCandidate;
   // Preserve public symlinks so package-manager upgrades can replace the target.
   const originalCommand = originalCandidate ? (process.platform === "win32"
@@ -1617,7 +1535,14 @@ function installCodexWrapper(args) {
     };
   }
 
-  fs.writeFileSync(wrapperPath, codexWrapperScriptForPlatform(originalCommand), { mode: 0o755 });
+  if (process.platform === "win32") {
+    const bridgePath = wrapperPath + ".ai-battery.cjs";
+    if (fs.existsSync(bridgePath) && !managedCodexWrapper(bridgePath)) {
+      return { ok: false, skipped: true, reason: "Refusing to replace unmanaged bridge at " + bridgePath };
+    }
+    fs.writeFileSync(bridgePath, windowsCodexWrapperBridge(), { mode: 0o755 });
+  }
+  fs.writeFileSync(wrapperPath, codexWrapperScriptForPlatform(), { mode: 0o755 });
 
   const wrapperCleanup = [];
   for (const staleWrapperPath of codexInstallSkipPaths(config)) {
@@ -1712,24 +1637,24 @@ function diagnoseCodex() {
   const configuredOriginal = config.codexWrapper?.originalCommand || null;
   const activeCodex = findCommand("codex");
   const wrapperInstalled = configuredWrapper ? managedCodexWrapper(configuredWrapper) : false;
-  const pathLookup = wrapperInstalled && process.platform !== "win32" && codexWrapperFeatureEnabled(configuredWrapper, CODEX_PATH_LOOKUP_MARKER);
-  const nvmLookup = pathLookup && codexWrapperFeatureEnabled(configuredWrapper, CODEX_NVM_LOOKUP_MARKER);
-  const scopedUpdates = nvmLookup && codexWrapperFeatureEnabled(configuredWrapper, CODEX_SCOPED_UPDATES_MARKER);
-  const unifiedResolver = scopedUpdates && codexWrapperFeatureEnabled(configuredWrapper, CODEX_INSTALLATION_RESOLVER_MARKER);
-  const installation = unifiedResolver ? resolveCodexInstallation(null, null, [], configuredWrapper) : null;
-  const pathOriginal = pathLookup && !unifiedResolver ? findOriginalCodexCommand(codexInstallSkipPaths(config), scopedUpdates) : null;
-  const resolvedOriginalCommand = unifiedResolver ? installation?.command || null : pathLookup
-    ? pathOriginal || (usableCodexCommand(configuredOriginal) ? configuredOriginal : (nvmLookup ? findNvmCommand("codex", configuredOriginal) : null))
+  const pathLookup = wrapperInstalled && codexWrapperFeatureEnabled(configuredWrapper, CODEX_PATH_LOOKUP_MARKER);
+  const pathOnly = pathLookup && codexWrapperFeatureEnabled(configuredWrapper, CODEX_PATH_ONLY_MARKER);
+  const installation = pathOnly && process.platform !== "win32"
+    ? resolveCodexPaths(null, [], configuredWrapper) : null;
+  const pathOriginal = findOriginalCodexCommand(codexInstallSkipPaths(config));
+  // Older wrappers may still launch their recorded path. Flag them for refresh
+  // rather than claiming that they already follow the current PATH.
+  const resolvedOriginalCommand = pathOnly
+    ? (process.platform === "win32" ? pathOriginal : installation?.command || null)
     : configuredOriginal;
-  const codexNode = unifiedResolver ? installation?.node || null
-    : nvmLookup && resolvedOriginalCommand && codexUsesNode(resolvedOriginalCommand) ? nvmNodeForCommand(resolvedOriginalCommand) : null;
   const activeIsWrapper = activeCodex ? managedCodexWrapper(activeCodex) : false;
   const activeWrapperBackup = activeIsWrapper ? existingCodexWrapperBackup(activeCodex, config) : null;
   const originalExists = configuredOriginal ? fs.existsSync(configuredOriginal) : false;
-  const pathRunner = pathLookup && !unifiedResolver ? (scopedUpdates && findActiveNodeTool("ai-battery-run")) || findCommand("ai-battery-run") : null;
-  const runnerPath = unifiedResolver ? installation?.runner || codexRunnerPath()
-    : (pathRunner && codexRunnerExists(pathRunner) ? pathRunner : null) || codexRunnerPath();
-  const runnerExists = unifiedResolver ? Boolean(installation?.runner) : codexRunnerExists(runnerPath);
+  const pathRunner = process.platform !== "win32" ? findCommand("ai-battery-run") : null;
+  const runnerPath = installation?.runner
+    || (pathRunner && codexRunnerExists(pathRunner) ? pathRunner : null) || codexRunnerPath();
+  const runnerExists = pathOnly && process.platform !== "win32"
+    ? Boolean(installation?.runner) : codexRunnerExists(runnerPath);
   const statusLine = diagnoseCodexStatusLine();
   const compositor = compositorDiagnostic();
   const python3 = findCommand("python3");
@@ -1773,23 +1698,17 @@ function diagnoseCodex() {
   if (wrapperInstalled && process.platform !== "win32" && !python3) {
     notes.push("Codex wrapper needs python3 for the POSIX PTY row. Install Python 3, then run plain \"codex\" again.");
   }
-  if (wrapperInstalled && process.platform !== "win32" && !pathLookup) {
-    notes.push("This Codex wrapper pins installation paths. Run ai-battery setup codex once with the updated package to follow PATH automatically after Node version changes.");
+  if (wrapperInstalled && !pathOnly) {
+    notes.push("This Codex wrapper pins installation paths or manages installations. Run ai-battery setup codex once with the updated package to follow only PATH.");
   }
-  if (pathLookup && !scopedUpdates) {
-    notes.push("This Codex wrapper predates automatic reuse and scoped npm updates. Run ai-battery setup codex once with the updated package to refresh the wrapper.");
+  if (pathOnly && process.platform !== "win32" && !installation) {
+    notes.push("The installed Codex PATH resolver could not be read. Run ai-battery setup codex to refresh the wrapper.");
   }
-  if (scopedUpdates && !unifiedResolver) {
-    notes.push("This Codex wrapper predates shared installation resolution and stable installer entrypoints. Run ai-battery setup codex once with the updated package to refresh it.");
+  if (pathOnly && !resolvedOriginalCommand) {
+    notes.push("codex command was not found on PATH (excluding AI Battery wrappers). The wrapper does not reuse installations outside PATH.");
   }
-  if (unifiedResolver && !installation) {
-    notes.push("The installed Codex resolver could not be read. Run ai-battery setup codex to refresh the wrapper.");
-  }
-  if (unifiedResolver && installation && !resolvedOriginalCommand) {
-    notes.push("No usable Codex installation was found. Install Codex with npm, Homebrew or the standalone installer, or restore its entrypoint on PATH.");
-  }
-  if (configuredOriginal && !originalExists && (!pathLookup || !usableCodexCommand(resolvedOriginalCommand))) {
-    notes.push(`Original codex path saved by setup no longer exists: ${configuredOriginal}`);
+  if (configuredOriginal && !originalExists && !pathOnly) {
+    notes.push("Original codex path saved by setup no longer exists: " + configuredOriginal);
   }
   const restartNote = codexRestartNote();
   if (restartNote) notes.push(restartNote);
@@ -1810,12 +1729,10 @@ function diagnoseCodex() {
     originalCommand: configuredOriginal,
     originalExists: configuredOriginal ? originalExists : null,
     pathLookup,
-    nvmLookup,
-    scopedUpdates,
-    unifiedResolver,
+    pathOnly,
+    pathOriginal,
     installation,
     resolvedOriginalCommand,
-    codexNode,
     insideCodex: runningInsideCodex(),
     currentCodexWrapped: runningInsideAiBatteryCodexWrapper(),
     notes
@@ -4789,10 +4706,8 @@ async function main() {
       console.log(`python3: ${result.codex.python3 || "not found"}`);
       console.log(`PATH uses wrapper: ${result.codex.activeIsWrapper ? "yes" : "no"}`);
       console.log(`Codex launch target: ${result.codex.resolvedOriginalCommand || "not found"}`);
-      if (result.codex.installation?.kind) {
-        console.log(`Codex installation: ${result.codex.installation.kind} (${result.codex.installation.target})`);
-      }
-      if (result.codex.codexNode) console.log(`Codex Node runtime: ${result.codex.codexNode}`);
+      console.log("Codex PATH-only wrapper: " + (result.codex.pathOnly ? "yes" : "no"));
+      if (result.codex.installation?.target) console.log("Codex executable target: " + result.codex.installation.target);
       console.log(`Inside Codex: ${result.codex.insideCodex ? "yes" : "no"}`);
       console.log(`Current Codex wrapped: ${result.codex.currentCodexWrapped ? "yes" : "no"}`);
       if (result.codex.notes.length) {
@@ -4931,6 +4846,8 @@ export {
   codexBackgroundReadyInProcesses,
   codexStatusLineMatches,
   codexWrapperScript,
+  windowsCodexWrapperScript,
+  windowsCodexWrapperBridge,
   diagnoseCodex,
   firstPercentValue,
   installClaudeStatusline,

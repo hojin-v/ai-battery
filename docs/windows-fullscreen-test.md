@@ -1,6 +1,6 @@
 # Windows fullscreen 수동 확인
 
-`codex/windows-fullscreen-test`는 Windows 터미널 합성 방식과 Codex 설치 경로 복구를 확인하기 위한 테스트 브랜치입니다. 기존 0.1.16 작업 트리를 기반으로 하며, 원격 `main`의 0.1.18 HUD 기본 설정과 별도로 검증합니다. 아래 명령은 이 브랜치의 소스 runner를 직접 실행합니다.
+`codex/windows-fullscreen-test`는 Windows 터미널 합성 방식과 Codex의 PATH 기반 실행를 확인하기 위한 테스트 브랜치입니다. 기존 0.1.16 작업 트리를 기반으로 하며, 원격 `main`의 0.1.18 HUD 기본 설정과 별도로 검증합니다. 아래 명령은 이 브랜치의 소스 runner를 직접 실행합니다.
 
 Windows Node 24.21.0과 Codex 0.161.0에서 긴 응답, 한글 출력, Backspace, 창 축소·확대와 종료 후 화면 복원은 자동 검사를 통과했습니다. 실제 Windows Terminal에서 장시간 사용하는 안정성, 마우스 선택·복사와 IME는 수동 확인 대상입니다.
 

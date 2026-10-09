@@ -217,6 +217,8 @@ ai-battery on all
 <a id="codex-terminal-row"></a>
 ## Codex ターミナル行
 
+wrapper は AI Battery の wrapper を除き、現在の PATH で最初に見つかる Codex を実行します。npm・Homebrew・独立インストールとも PATH の順序に従い、保存したパスや別の nvm バージョンを再利用しません。Codex が PATH にない場合はエラーで終了します。Codex の Node、更新通知・更新コマンド、HOME、`CODEX_HOME` と resume 引数は変更しません。古い wrapper は更新後に `ai-battery setup codex` を一度実行して置き換えてください。
+
 `ai-battery setup` は Codex 自体の status line を `モデル/推論強度 · ワークスペース · git branch` 構成に設定します。使用量表示は別の `codex` wrapper が担当するため、ユーザーは通常どおり `codex` と入力するだけです。Windows では隔離された VT screen compositor が Codex の下に AI Battery 行を配置し、WSL/Linux/macOS では 1 行短い POSIX PTY 内で Codex を実行します。
 
 ```bash

@@ -217,6 +217,8 @@ ai-battery on all
 <a id="codex-terminal-row"></a>
 ## Codex 终端行
 
+wrapper 会排除 AI Battery 的 wrapper，然后运行当前 PATH 中第一个 Codex。npm、Homebrew 和独立安装都遵循同一 PATH 顺序，不复用保存的路径或其他 nvm 版本。如果 PATH 中没有 Codex，则报错退出。Codex 的 Node、更新提示与更新命令、HOME、`CODEX_HOME` 和 resume 参数保持不变。更新软件包后，旧 wrapper 需要运行一次 `ai-battery setup codex` 才能替换。
+
 `ai-battery setup` 会将 Codex 自身的 status line 配置为 `模型/推理强度 · 工作区 · git branch`。使用量显示由单独的 `codex` wrapper 负责，因此用户只需像平常一样输入 `codex`。Windows 上由隔离的 VT screen compositor 把 AI Battery 状态行放在 Codex 下方；WSL/Linux/macOS 上则在少一行的 POSIX PTY 中运行 Codex。
 
 ```bash

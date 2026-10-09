@@ -64,6 +64,7 @@ import {
   windowsVtInputSupported
 } from "../bin/ai-battery-run-win.js";
 import { HeadlessTerminalCompositor } from "../bin/terminal-compositor.js";
+import windowsLauncher from "../bin/codex-wrapper-win.cjs";
 import {
   describeWindowsHudOptions,
   macHudCommandMatches,
@@ -931,11 +932,11 @@ test("managed shell PATH block removal preserves surrounding rc content", () => 
   assert.equal(removeAiBatteryShellPathBlock(rc), "export BEFORE=1\nexport AFTER=1\n");
 });
 
-test("Codex wrapper falls back to original codex when AI Battery runner is unavailable", () => {
-  const script = codexWrapperScript("/tmp/original-codex");
+test("Codex wrapper runs the PATH-selected command when AI Battery runner is unavailable", () => {
+  const script = codexWrapperScript();
 
   assert.match(script, /\[ -t 0 \] && \[ -t 1 \] && \[ -x /);
-  assert.match(script, /exec "\$@"/);
+  assert.match(script, /exec "\$ai_battery_codex" "\$@"/);
 });
 
 test("Windows runner launches Node scripts through node instead of spawning them directly", () => {
@@ -960,7 +961,7 @@ test("Windows runner resolves npm cmd shims without a second shell parse", () =>
   const resolved = resolveNpmCmdShim(shimPath);
   assert.equal(resolved.scriptPath, scriptPath);
   const command = windowsCommand([shimPath, "prompt & literal %PATH% !value!"]);
-  assert.equal(command.file, process.execPath);
+  assert.equal(command.file, windowsLauncher.findWindowsPathCommand("node") || "node");
   assert.deepEqual(command.args, [scriptPath, "prompt & literal %PATH% !value!"]);
 
   const legacyPath = path.join(tmpDir, "legacy (x86).cmd");
@@ -1731,7 +1732,7 @@ test("uninstall restores a codex command that setup backed up", (t) => {
   const originalShimText = "#!/bin/sh\necho custom shim\n";
   fs.writeFileSync(originalCodex, "#!/bin/sh\necho original codex\n", { mode: 0o755 });
   fs.writeFileSync(backupPath, originalShimText, { mode: 0o755 });
-  fs.writeFileSync(shimCodex, codexWrapperScript(originalCodex), { mode: 0o755 });
+  fs.writeFileSync(shimCodex, codexWrapperScript(), { mode: 0o755 });
   assert.match(fs.readFileSync(shimCodex, "utf8"), /AI_BATTERY_MANAGED_CODEX_WRAPPER/);
 
   const result = removeOrRestoreCodexWrapper(shimCodex, {
@@ -1759,7 +1760,7 @@ test("uninstall does not delete an external managed codex wrapper without a back
   const externalCodex = path.join(externalDir, "codex");
   const originalCodex = path.join(originalDir, "codex");
   fs.writeFileSync(originalCodex, "#!/bin/sh\necho original codex\n", { mode: 0o755 });
-  fs.writeFileSync(externalCodex, codexWrapperScript(originalCodex), { mode: 0o755 });
+  fs.writeFileSync(externalCodex, codexWrapperScript(), { mode: 0o755 });
   const before = fs.readFileSync(externalCodex, "utf8");
 
   const result = removeOrRestoreCodexWrapper(externalCodex, { codexWrapper: null });
@@ -1838,7 +1839,7 @@ test("setup prefers empty ~/.local/bin when it is already before codex on PATH",
   }
 });
 
-test("Windows Codex wrapper runs the Windows runner without forcing a layout", { skip: process.platform !== "win32" }, (t) => {
+test("Windows Codex wrapper resolves PATH and runs headless Codex without a renderer", { skip: process.platform !== "win32" }, (t) => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-"));
   t.after(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
@@ -1872,11 +1873,13 @@ test("Windows Codex wrapper runs the Windows runner without forcing a layout", {
   assert.equal(result.ok, true);
 
   const wrapperText = fs.readFileSync(result.wrapperPath, "utf8");
-  assert.match(wrapperText, /AI_BATTERY_DISABLE_WINDOWS_CODEX_RUNNER/);
+  const bridgeText = fs.readFileSync(result.wrapperPath + ".ai-battery.cjs", "utf8");
+  assert.match(wrapperText, /AI_BATTERY_CODEX_PATH_ONLY=1/);
+  assert.match(bridgeText, /AI_BATTERY_DISABLE_WINDOWS_CODEX_RUNNER/);
   assert.doesNotMatch(wrapperText, /AI_BATTERY_WIN_LAYOUT/);
-  assert.match(wrapperText, /--provider all --left-padding 2 --/);
-  assert.doesNotMatch(wrapperText, /--provider codex --left-padding 2 --/);
-  assert.equal(wrapperText.includes(`call "${originalCodex}" %*`), true);
+  assert.equal(wrapperText.includes(originalCodex), false);
+  assert.match(bridgeText, /"--provider", "all", "--left-padding", "2", "--"/);
+  assert.equal(bridgeText.includes(originalCodex), false);
 
   const run = spawnSync("cmd.exe", ["/d", "/s", "/c", "call", result.wrapperPath, "--version"], {
     encoding: "utf8",
@@ -1889,7 +1892,7 @@ test("Windows Codex wrapper runs the Windows runner without forcing a layout", {
   });
 
   assert.equal(run.status, 0, run.stderr);
-  assert.match(run.stdout, /wrapped:1/);
+  assert.match(run.stdout, /wrapped:\s*(?:\r?\n|$)/);
   assert.match(run.stdout, /args:--version/);
 
   const disabled = spawnSync("cmd.exe", ["/d", "/s", "/c", "call", result.wrapperPath, "--version"], {

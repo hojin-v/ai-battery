@@ -217,6 +217,8 @@ Esta configuración se aplica conjuntamente a la CLI, Claude statusLine, Codex w
 <a id="codex-terminal-row"></a>
 ## Fila de terminal de Codex
 
+El wrapper ejecuta el primer Codex del PATH actual, omitiendo los wrappers de AI Battery. npm, Homebrew y las instalaciones independientes siguen el mismo orden; no reutiliza rutas guardadas ni otras versiones de nvm. Si Codex no está en PATH, termina con un error. Conserva el Node de Codex, sus avisos y comandos de actualización, HOME, `CODEX_HOME` y los argumentos de resume. Para reemplazar un wrapper antiguo, ejecuta `ai-battery setup codex` una vez tras actualizar el paquete.
+
 `ai-battery setup` configura la status line propia de Codex como `modelo/esfuerzo de razonamiento · workspace · git branch`. La visualización de uso la gestiona un wrapper `codex` separado, así que el usuario solo escribe `codex` como siempre. En Windows, un compositor de pantalla VT aislado coloca la fila de AI Battery debajo de Codex; en WSL/Linux/macOS, Codex se ejecuta en un POSIX PTY una línea más corto.
 
 ```bash

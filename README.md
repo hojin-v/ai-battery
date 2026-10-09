@@ -212,21 +212,13 @@ ai-battery on all
 
 ## Codex Terminal Row
 
-WSL/Linux/macOS에서는 setup, wrapper 실행, doctor가 같은 설치 resolver를 사용합니다. resolver는 실행 경로와 파일 헤더만 확인하며 시작할 때 Codex나 패키지 관리자를 실행하거나 네트워크를 조회하지 않습니다. 생성된 wrapper 안에 resolver를 포함하므로 setup에 사용한 AI Battery 패키지 경로가 삭제돼도 설치 검색은 동작합니다.
+AI Battery의 Codex wrapper는 **현재 PATH에서 AI Battery wrapper를 제외하고 가장 먼저 발견한 Codex**를 실행합니다. npm, Homebrew, 독립 설치를 구분해 우선순위를 바꾸거나, setup 당시의 Codex 경로·다른 nvm 버전·PATH 밖의 설치를 찾아 재사용하지 않습니다.
 
-선택 순서는 **현재 PATH의 Node 옆에 실제로 설치된 npm Codex → PATH의 다른 원본 Codex → setup 때 저장한 진입 경로 → 알려진 설치 진입 경로 → 다른 nvm 설치**입니다. 현재 Node에 npm Codex가 생기면 다음 실행부터 자동 전환됩니다. npm 설치가 없으면 brew나 독립 실행 파일도 PATH 순서대로 선택합니다. 알려진 진입 경로는 `$HOMEBREW_PREFIX/bin/codex`, 일반적인 Homebrew prefix의 `bin/codex`, `~/.local/bin/codex`이며, 버전별 설치 트리를 무작정 검색하지 않습니다. nvm 대체 후보끼리는 가장 높은 Node 버전의 실행 가능한 설치를 선택합니다. `ai-battery-run`도 사용 가능한 현재 설치 또는 기존 설치를 재사용합니다.
+따라서 `nvm use` 후 현재 Node에 Codex가 있고 그 경로가 PATH에서 먼저 잡히면 해당 Codex를 사용합니다. 다른 Codex도 PATH에 없으면 일반 npm 환경과 마찬가지로 `codex: command not found on PATH`로 종료합니다. 필요하면 사용자가 해당 환경에 Codex를 설치하거나 PATH를 설정하면 됩니다. npm과 brew로 이중 설치한 경우에도 PATH 순서만 따릅니다.
 
-setup은 심볼릭 링크를 버전별 실제 경로로 고정하지 않고 진입 경로를 저장합니다. 매 실행마다 링크를 다시 확인하므로 brew나 독립 설치가 같은 진입 경로의 대상을 교체하면 새 버전을 사용합니다. 구형 wrapper에 저장된 `Caskroom/codex/<version>` 또는 `Cellar/codex/<version>` 경로도 개선된 wrapper에서는 같은 Homebrew 설치의 `bin/codex` 또는 `opt/codex/bin/codex`로 복구할 수 있습니다. 원본인 `~/.local/bin/codex`는 덮어쓰지 않고 별도의 AI Battery shim을 설치합니다.
+Codex의 shebang, PATH, npm prefix, 업데이트 안내와 업데이트 명령을 그대로 유지합니다. `codex update`를 가로채거나 업데이트 팝업을 숨기지 않습니다. HOME, `CODEX_HOME`, 작업 디렉터리와 resume 인자도 변경하지 않습니다. AI Battery의 설치용 Node는 사용량 조회에만 사용할 수 있으며 Codex의 Node를 강제로 바꾸지 않습니다. runner가 없으면 사용량 행 없이 선택된 Codex를 실행합니다.
 
-Node launcher에는 필요한 실행용 Node를 확인하고, nvm에 속한 npm Codex는 그 설치의 Node로 실행합니다. 원래 Node가 삭제된 npm 설치는 다른 디렉터리의 링크를 통해 발견됐더라도 제외합니다. brew와 독립 실행 파일에는 Node를 요구하지 않습니다. 프로젝트의 PATH, npm prefix와 nvm 선택은 유지되며 AI Battery 상태 조회는 runner 설치의 Node를 사용합니다.
-
-업데이트 대상도 선택된 설치에서 결정합니다. npm의 기본 안내가 다른 Node나 npm prefix를 갱신할 수 있으면 해당 실행에서만 기본 팝업을 끄고, 실행용 Node·npm CLI·명시적 `--prefix`를 사용하는 명령을 안내합니다. 표시된 명령이나 `codex update`로 선택된 설치를 갱신합니다. Homebrew는 선택된 Codex와 같은 prefix의 brew를 사용하며, `Caskroom` 설치에는 `upgrade --cask codex`, 기존 `Cellar` 설치에는 `upgrade --formula codex`를 사용합니다. PATH의 brew가 다르면 정확한 brew 경로를 안내하고 팝업을 해당 실행에서만 대체합니다. 업데이트 도구가 사라져도 실행 가능한 Codex는 사용할 수 있지만, 다른 설치를 대신 업데이트하지는 않습니다. 독립 실행 파일과 소유자를 확인할 수 없는 launcher는 Codex 자체 업데이트 동작을 유지합니다. 안내는 최신 버전 존재 여부가 아니라 업데이트 대상과 실행 방법을 설명합니다.
-
-기존 설치가 실행 가능하면 선택 입력 없이 자동으로 재사용하고 다른 Node나 Homebrew 설치를 쓰는 경우 해당 경로를 안내합니다. runner가 모두 없으면 안내 후 배터리 행 없이 Codex를 실행합니다. 사용할 수 있는 Codex가 전혀 없을 때만 대화형 실행에서 PATH에 있는 npm 또는 brew로 설치하거나 종료하는 메뉴를 제공합니다. 독립 설치 방법도 안내하며, 설치는 사용자가 옵션을 선택했을 때만 실행합니다. 비대화형 실행, `--help`, `--version`, `exec` 같은 명령은 입력을 기다리거나 자동 설치하지 않습니다. `AI_BATTERY_CODEX_RECOVERY=off`로 복구 메뉴를 생략할 수 있습니다.
-
-wrapper는 `CODEX_HOME`, HOME, 작업 디렉터리, resume 세션 ID와 사용자 인자를 유지합니다. Codex의 저장소를 설치 방식이나 Node 버전별로 나누지 않습니다. 실제 Codex 0.161.0에서 기존 npm → 독립 실행 파일 → 현재 npm으로 전환해도 같은 세션 ID, 작업 디렉터리와 저장 기록으로 resume되는 것을 확인했습니다. 서로 다른 Codex 릴리스의 세션 형식 호환성까지 wrapper가 보장하지는 않습니다.
-
-기존 wrapper를 새 방식으로 바꾸려면 업데이트된 패키지로 `ai-battery setup codex`를 한 번 실행해야 합니다. 구형 wrapper는 옛 경로를 바로 실행하므로 npm 패키지 업데이트만으로 이미 생성된 파일을 고칠 수는 없습니다. 새 wrapper가 PATH에서 원본보다 먼저 실행되는 환경에서는 Node나 설치 방식을 바꿀 때마다 setup을 반복할 필요가 없습니다. 원본 Codex가 wrapper보다 먼저 잡혀 AI Battery 행이 나오지 않으면 `ai-battery doctor`로 실제 설치 방식·진입 경로·대상·Node를 확인하고 필요한 경우 setup을 한 번 실행하세요. 실행 시에는 셸 설정이나 설치 파일을 자동으로 바꾸지 않습니다.
+기존 고정 경로나 설치 관리 기능이 있는 wrapper는 업데이트된 패키지에서 `ai-battery setup codex`를 한 번 실행해 교체해야 합니다. 새 wrapper가 원본보다 PATH에서 먼저 실행되는 환경에서는 Node 전환마다 setup을 반복할 필요가 없습니다. `ai-battery doctor`로 PATH의 Codex, 실제 실행 대상과 PATH 전용 wrapper 여부를 확인할 수 있습니다.
 
 `ai-battery setup`은 Codex 자체 status line을 `모델/추론강도 · 워크스페이스 · git branch` 구성으로 맞춥니다. 사용량 표시는 별도의 `codex` wrapper가 담당합니다. 사용자는 원래처럼 `codex`만 입력하면 됩니다. Windows에서는 격리된 VT screen compositor가, WSL/Linux/macOS에서는 한 줄 짧은 POSIX PTY가 Codex 화면 위에 AI Battery 행을 배치합니다.
 
