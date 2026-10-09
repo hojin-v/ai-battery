@@ -1,6 +1,8 @@
 # npm release
 
-The current release candidate is **0.1.19**. `latest` on npm was checked as **0.1.18** on 2026-10-09. Publishing the same name/version twice is not allowed.
+The current release candidate is **0.1.20**. `latest` on npm was checked as **0.1.19** on 2026-10-09. Publishing the same name/version twice is not allowed.
+
+0.1.20 configures the bundled node-pty ConPTY input pipe for blocking writes before forwarding terminal replies or keyboard input. Nonblocking pipe writes can otherwise return EAGAIN and destroy an unhandled Socket. If the installed transport cannot be configured, the compositor closes its child and falls back to native execution. The actual Codex fullscreen fixture passed all 13 checks after the change; the user's intermittent crash has not been independently reproduced.
 
 Preflight on 2026-10-09 passed 105 Windows tests (24 platform skips) and 117 WSL tests (12 platform skips). The installed tarball passed all 13 actual Codex 0.161.0 fullscreen checks under system Node 22.15.1 with automatic private-runtime selection. A fresh official runtime download, SHA256 verification, extraction and launch also passed. Windows and WSL installed CLI readings were checked against the same shared account usage. npm publication and remote Git changes remain pending.
 
@@ -29,26 +31,26 @@ Inspect the package file list. Screenshots, logs, credentials, local runtime bin
 ```powershell
 npm login
 npm whoami
-npm publish ./ai-battery-0.1.19.tgz --access public --tag latest
+npm publish ./ai-battery-0.1.20.tgz --access public --tag latest
 npm view ai-battery version dist-tags --json
 ```
 
-Use the exact tested tarball. Complete npm's authentication/2FA prompt when requested. This repository's preflight does not perform `npm login` or `npm publish` automatically. If 0.1.19 has already been published by the time you release, increment the package version and repeat the preparation.
+Use the exact tested tarball. Complete npm's authentication/2FA prompt when requested. This repository's preflight does not perform `npm login` or `npm publish` automatically. If 0.1.20 has already been published by the time you release, increment the package version and repeat the preparation.
 
 For a preview instead of replacing `latest`:
 
 ```powershell
-npm publish ./ai-battery-0.1.19.tgz --access public --tag next
+npm publish ./ai-battery-0.1.20.tgz --access public --tag next
 ```
 
-After a successful publication, tag the tested commit (`v0.1.19`), push the release commit/tag, and remove merged remote feature branches. Do not delete the remote test branch before the integrated release commit reaches the remote main branch.
+After a successful publication, tag the tested commit (`v0.1.20`), push the release commit/tag, and remove merged remote feature branches. Do not delete the remote test branch before the integrated release commit reaches the remote main branch.
 
 ## Update installed integrations
 
 Run this separately in Windows and WSL:
 
 ```text
-npm install -g ai-battery@0.1.19
+npm install -g ai-battery@0.1.20
 ai-battery setup codex
 ai-battery doctor
 ```
