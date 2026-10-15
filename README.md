@@ -1,6 +1,6 @@
 # AI Battery
 
-0.1.22: 기본 Codex 설치는 실행 명령·PATH·설정을 변경하지 않습니다. `reset settings`는 AI Battery의 설정 변경을 복원하고 생성 파일을 정리하며 npm 패키지는 유지합니다. 패키지 삭제는 `npm uninstall -g ai-battery`로 진행하세요. 기존 Bash 터미널에 삭제된 wrapper 경로가 남았다면 `hash -r`을 실행하세요.
+0.1.23: 기본 Codex 설치는 실행 명령·PATH·설정을 변경하지 않습니다. `reset settings`는 AI Battery의 설정 변경을 복원하고 생성 파일을 정리하며 npm 패키지는 유지합니다. 패키지 삭제는 `npm uninstall -g ai-battery`로 진행하세요. 기존 Bash 터미널에 삭제된 wrapper 경로가 남았다면 `hash -r`을 실행하세요.
 
 [한국어](README.md) · [English](docs/i18n/en/) · [日本語](docs/i18n/ja/) · [中文](docs/i18n/zh/) · [Español](docs/i18n/es/)
 
@@ -29,34 +29,34 @@ Markdown의 텍스트 fallback은 렌더러별 블록 문자 높이 차이를 �
 Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 ```
 
-| Provider | Source | Shows |
-| --- | --- | --- |
-| Codex | `~/.codex/sessions/**/*.jsonl` | 5h 잔량, 5h 리셋 시각, 7d 잔량 |
-| Claude Code | Claude `statusLine` payload cache + 429 hit logs | 5h 잔량, 5h 리셋 시각, 7d 잔량 |
-| Claude fallback | `~/.claude/projects/**/*.jsonl` | 최근 턴 토큰 사용량 |
+| Provider        | Source                                           | Shows                          |
+| --------------- | ------------------------------------------------ | ------------------------------ |
+| Codex           | `~/.codex/sessions/**/*.jsonl`                   | 5h 잔량, 5h 리셋 시각, 7d 잔량 |
+| Claude Code     | Claude `statusLine` payload cache + 429 hit logs | 5h 잔량, 5h 리셋 시각, 7d 잔량 |
+| Claude fallback | `~/.claude/projects/**/*.jsonl`                  | 최근 턴 토큰 사용량            |
 
 ## Features
 
-| Feature | Description |
-| --- | --- |
-| 공통 사용량 표시 | Codex와 Claude Code 사용량을 같은 형식으로 표시합니다. |
-| 리셋 시각 표시 | `5h`, `7d` 창 라벨과 값을 표시합니다. |
-| 색상 기준 | 40% 초과 초록, 21-40% 주황, 20% 이하 빨강으로 배터리만 강조합니다. |
-| Codex terminal row | Windows에서는 가상 터미널 화면과 배터리 행을 합성하고, WSL/Linux/macOS에서는 PTY wrapper로 별도 사용량 행을 고정합니다. |
-| Claude statusLine | Claude Code 내장 statusLine hook과 실제 429 hit 로그로 Claude rate limit 상태를 읽습니다. |
-| HUD / menu bar | Windows native에서는 terminal-docked/floating HUD, WSL에서는 floating HUD, macOS에서는 menu bar status item을 제공합니다. |
-| npm 실행 | `npm install -g` 또는 `npx`로 실행할 수 있습니다. |
+| Feature            | Description                                                                                                               |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------- |
+| 공통 사용량 표시   | Codex와 Claude Code 사용량을 같은 형식으로 표시합니다.                                                                    |
+| 리셋 시각 표시     | `5h`, `7d` 창 라벨과 값을 표시합니다.                                                                                     |
+| 색상 기준          | 40% 초과 초록, 21-40% 주황, 20% 이하 빨강으로 배터리만 강조합니다.                                                        |
+| Codex terminal row | Windows에서는 가상 터미널 화면과 배터리 행을 합성하고, WSL/Linux/macOS에서는 PTY wrapper로 별도 사용량 행을 고정합니다.   |
+| Claude statusLine  | Claude Code 내장 statusLine hook과 실제 429 hit 로그로 Claude rate limit 상태를 읽습니다.                                 |
+| HUD / menu bar     | Windows native에서는 terminal-docked/floating HUD, WSL에서는 floating HUD, macOS에서는 menu bar status item을 제공합니다. |
+| npm 실행           | `npm install -g` 또는 `npx`로 실행할 수 있습니다.                                                                         |
 
 ## Platform Support
 
-| Mode | Windows native | WSL | Linux | macOS | Note |
-| --- | --- | --- | --- | --- | --- |
-| `ai-battery` | 지원 | 지원 | 지원 | 지원 | Node.js 18 이상이 필요합니다. |
-| `ai-battery --watch` | 지원 | 지원 | 지원 | 지원 | 터미널 안에서 주기적으로 갱신합니다. |
-| Claude statusLine | 지원 | 지원 | 지원 | 지원 | Claude Code `statusLine`에 `node <script>` 명령을 저장합니다. |
-| Codex fullscreen | 지원 | 지원 | 지원 | 지원 | Windows 기본값은 Fullscreen PTY 화면과 터미널 배터리 행을 합성합니다. WSL/Linux/macOS는 POSIX PTY와 `python3`를 사용합니다. |
-| `ai-battery setup codex` | 지원 | 지원 | 지원 | 지원 | 기존 AI Battery wrapper를 해제합니다. 새 wrapper나 Codex 설정 변경은 명시적 옵션이 필요합니다. |
-| `ai-battery hud` | 지원 | 지원 | 미지원 | 지원 | Windows/WSL은 PowerShell/WinForms HUD, macOS는 menu bar status item입니다. |
+| Mode                     | Windows native | WSL  | Linux  | macOS | Note                                                                                                                        |
+| ------------------------ | -------------- | ---- | ------ | ----- | --------------------------------------------------------------------------------------------------------------------------- |
+| `ai-battery`             | 지원           | 지원 | 지원   | 지원  | Node.js 18 이상이 필요합니다.                                                                                               |
+| `ai-battery --watch`     | 지원           | 지원 | 지원   | 지원  | 터미널 안에서 주기적으로 갱신합니다.                                                                                        |
+| Claude statusLine        | 지원           | 지원 | 지원   | 지원  | Claude Code `statusLine`에 `node <script>` 명령을 저장합니다.                                                               |
+| Codex fullscreen         | 지원           | 지원 | 지원   | 지원  | Windows 기본값은 Fullscreen PTY 화면과 터미널 배터리 행을 합성합니다. WSL/Linux/macOS는 POSIX PTY와 `python3`를 사용합니다. |
+| `ai-battery setup codex` | 지원           | 지원 | 지원   | 지원  | 기존 AI Battery wrapper를 해제합니다. 새 wrapper나 Codex 설정 변경은 명시적 옵션이 필요합니다.                              |
+| `ai-battery hud`         | 지원           | 지원 | 미지원 | 지원  | Windows/WSL은 PowerShell/WinForms HUD, macOS는 menu bar status item입니다.                                                  |
 
 실행 중 감지는 Linux/WSL은 `/proc`, macOS는 `ps`, Windows는 PowerShell 프로세스 목록을 사용합니다. 텍스트 출력은 흰색/회색으로, macOS HUD는 실행 중인 항목만 색상 배터리바로 강조하고 비실행 항목은 흐린 회색 계열로 표시합니다.
 
@@ -118,18 +118,19 @@ ai-battery off codex
 ai-battery on codex
 ```
 
-| Option | Description |
-| --- | --- |
-| `--provider all\|codex\|claude` | 표시할 provider를 선택합니다. |
-| `--watch [seconds]` | 같은 줄에서 주기적으로 갱신합니다. |
-| `--json` | HUD나 다른 도구에서 쓰기 좋은 JSON을 출력합니다. |
-| `--bar-width N` | 터미널 배터리 바 길이를 조정합니다. |
-| `--show-paths` | 로그 파일 경로와 데이터 관측 시각을 함께 표시합니다. |
-| `-v`, `--version` | 설치된 `ai-battery` 버전을 출력합니다. |
+| Option                          | Description                                          |
+| ------------------------------- | ---------------------------------------------------- |
+| `--provider all\|codex\|claude` | 표시할 provider를 선택합니다.                        |
+| `--watch [seconds]`             | 같은 줄에서 주기적으로 갱신합니다.                   |
+| `--json`                        | HUD나 다른 도구에서 쓰기 좋은 JSON을 출력합니다.     |
+| `--bar-width N`                 | 터미널 배터리 바 길이를 조정합니다.                  |
+| `--show-paths`                  | 로그 파일 경로와 데이터 관측 시각을 함께 표시합니다. |
+| `-v`, `--version`               | 설치된 `ai-battery` 버전을 출력합니다.               |
 
 `doctor`는 설치 상태와 함께 npm latest 버전을 확인합니다. 네트워크가 막혀 있으면 버전 확인만 건너뛰고 나머지 진단은 계속 표시합니다.
 
 <a id="uninstall"></a>
+
 ## Reset Settings
 
 `ai-battery reset settings`는 AI Battery가 추가한 통합 설정을 원래 값으로 복원하고, 소유권을 확인한 AI Battery 캐시·전용 런타임·생성 파일을 정리합니다. Codex·Claude의 관련 없는 설정과 npm 패키지·실행 명령은 유지합니다. Codex나 Claude의 설정 전체를 기본값으로 초기화하는 명령은 아닙니다.
@@ -293,21 +294,21 @@ Codex  [battery:88] │ 5h 00:47 │ 7d 93%
 Claude [battery:76] │ 5h 00:47 │ 7d 59%
 ```
 
-| Command | Role |
-| --- | --- |
-| `ai-battery hud` / `ai-battery hud start` | Windows floating HUD 또는 macOS menu bar item을 시작합니다. |
-| `ai-battery hud stop` | 실행 중인 HUD/menu bar item을 종료합니다. (`--stop`도 동일) |
-| `ai-battery hud status` | HUD/menu bar 실행 여부와 autostart 등록 상태를 보여줍니다. |
-| `ai-battery hud autostart on` | Windows 로그인 또는 macOS 로그인 시 자동 실행을 등록합니다. |
-| `ai-battery hud autostart off` | 자동 실행 등록을 해제합니다. |
-| `ai-battery hud autostart status` | 자동 실행 등록 상태만 보여줍니다. |
-| `ai-battery hud -Foreground` | 디버깅용으로 터미널에 붙여 실행합니다. |
-| `ai-battery hud -Once` | 콘솔에서 한 번만 출력합니다. |
-| `ai-battery hud -Interval 2` | 갱신 주기를 바꿉니다. |
-| `ai-battery hud -Mode tray` | Windows tray icon 모드로 실행합니다. macOS에서는 menu bar item이 기본입니다. |
-| `ai-battery hud light` / `ai-battery hud dark` | Windows floating HUD를 밝은 작업표시줄용 검은 글자 또는 어두운 작업표시줄용 흰 글자로 바꿉니다. |
-| `ai-battery hud black` / `ai-battery hud white` | 글자색을 직접 검은색 또는 흰색으로 바꿉니다. |
-| `ai-battery hud --backdrop` / `ai-battery hud --no-backdrop` | Windows floating HUD 글자 뒤 어두운 backing을 켜거나 끕니다. |
+| Command                                                      | Role                                                                                            |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `ai-battery hud` / `ai-battery hud start`                    | Windows floating HUD 또는 macOS menu bar item을 시작합니다.                                     |
+| `ai-battery hud stop`                                        | 실행 중인 HUD/menu bar item을 종료합니다. (`--stop`도 동일)                                     |
+| `ai-battery hud status`                                      | HUD/menu bar 실행 여부와 autostart 등록 상태를 보여줍니다.                                      |
+| `ai-battery hud autostart on`                                | Windows 로그인 또는 macOS 로그인 시 자동 실행을 등록합니다.                                     |
+| `ai-battery hud autostart off`                               | 자동 실행 등록을 해제합니다.                                                                    |
+| `ai-battery hud autostart status`                            | 자동 실행 등록 상태만 보여줍니다.                                                               |
+| `ai-battery hud -Foreground`                                 | 디버깅용으로 터미널에 붙여 실행합니다.                                                          |
+| `ai-battery hud -Once`                                       | 콘솔에서 한 번만 출력합니다.                                                                    |
+| `ai-battery hud -Interval 2`                                 | 갱신 주기를 바꿉니다.                                                                           |
+| `ai-battery hud -Mode tray`                                  | Windows tray icon 모드로 실행합니다. macOS에서는 menu bar item이 기본입니다.                    |
+| `ai-battery hud light` / `ai-battery hud dark`               | Windows floating HUD를 밝은 작업표시줄용 검은 글자 또는 어두운 작업표시줄용 흰 글자로 바꿉니다. |
+| `ai-battery hud black` / `ai-battery hud white`              | 글자색을 직접 검은색 또는 흰색으로 바꿉니다.                                                    |
+| `ai-battery hud --backdrop` / `ai-battery hud --no-backdrop` | Windows floating HUD 글자 뒤 어두운 backing을 켜거나 끕니다.                                    |
 
 Windows floating HUD는 기본적으로 투명 배경에 밝은 글자로 표시합니다. 밝은 작업표시줄에서는 `ai-battery hud light`, 어두운 작업표시줄에서는 `ai-battery hud dark`를 쓰면 됩니다. 글자색으로 직접 고르려면 `ai-battery hud black` 또는 `ai-battery hud white`를 쓰세요. 로그인 자동 실행에도 같은 모드를 저장하려면 `ai-battery hud autostart on light`처럼 붙이면 됩니다.
 
@@ -341,13 +342,13 @@ Codex는 최근 세션 로그에서 `rate_limits` 이벤트를 찾습니다. Cla
 
 ## Tech Stack
 
-| Layer | Technology | Role |
-| --- | --- | --- |
-| CLI | Node.js | 로그 파싱, Claude cache, ANSI/statusLine 출력 |
-| PTY row | Python 3 | Codex 실행용 reserved terminal row |
-| HUD launcher | Node.js / Bash compatibility wrapper | Windows native/WSL PowerShell HUD와 macOS menu bar 실행 |
-| HUD UI | PowerShell WinForms / AppleScriptObjC | Windows floating overlay, tray icon, macOS menu bar item |
-| Data | JSONL logs, statusLine JSON | Codex/Claude 사용량 소스 |
+| Layer        | Technology                            | Role                                                     |
+| ------------ | ------------------------------------- | -------------------------------------------------------- |
+| CLI          | Node.js                               | 로그 파싱, Claude cache, ANSI/statusLine 출력            |
+| PTY row      | Python 3                              | Codex 실행용 reserved terminal row                       |
+| HUD launcher | Node.js / Bash compatibility wrapper  | Windows native/WSL PowerShell HUD와 macOS menu bar 실행  |
+| HUD UI       | PowerShell WinForms / AppleScriptObjC | Windows floating overlay, tray icon, macOS menu bar item |
+| Data         | JSONL logs, statusLine JSON           | Codex/Claude 사용량 소스                                 |
 
 ## Source Environment
 
