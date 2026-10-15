@@ -1,6 +1,6 @@
 # AI Battery
 
-0.1.22：默认 Codex 设置不修改执行命令、PATH 或配置。`setup codex` 会解除旧 wrapper。完整 `uninstall` 恢复集成后删除自有缓存、专用运行时和当前 npm 安装。现有 Bash 终端请运行 `hash -r`。
+0.1.22：默认 Codex 设置不修改执行命令、PATH 或配置。`reset settings` 恢复 AI Battery 集成并清理生成文件，保留 npm 包。包删除由 npm 单独完成。
 
 [한국어](../../../README.md) · [English](../en/) · [日本語](../ja/) · [中文](../zh/) · [Español](../es/)
 
@@ -117,7 +117,7 @@ ai-battery --version
 ai-battery --provider codex
 ai-battery --provider claude
 ai-battery setup
-ai-battery uninstall
+ai-battery reset settings
 ai-battery doctor
 ai-battery hud
 ai-battery off codex
@@ -136,16 +136,21 @@ ai-battery on codex
 `doctor` 会检查安装状态以及 npm latest 版本。如果网络不可用，只会跳过版本检查，其余诊断仍会继续显示。
 
 <a id="uninstall"></a>
-## 卸载
+## Reset Settings
 
-`ai-battery uninstall` 恢复受管理的集成，然后删除属于 AI Battery 的缓存、专用运行时、别名和当前 npm 安装。开发 checkout 和 npx 不修改 npm 项目。已修改或无法确认归属的文件会保留并报告，同时保留恢复记录。其他 npm 包和用户配置会保留。Windows 与 WSL 请分别运行。
+`ai-battery reset settings` 恢复 AI Battery 修改的设置，并清理归属明确的缓存、专用运行时和生成文件。其他 Codex/Claude 设置与 npm 包会保留。它不会将 Codex/Claude 全部设置重置为默认值。`reset config` 为同义命令。
 
 ```bash
-ai-battery uninstall
-hash -r  # Bash; zsh: rehash
+ai-battery reset settings
 ```
 
-CLI 无法清除父 shell 的命令缓存，打开新终端也可解决。保留包时使用 `ai-battery teardown`；只解除部分集成时使用 `ai-battery uninstall codex` / `claude` / `hud` / `tmux`。旧版本若只通过 npm 删除，请重新安装后先恢复集成。
+只恢复部分集成时使用 `ai-battery reset settings codex` / `claude` / `hud` / `tmux`。已修改或归属未知的文件和未完成的恢复记录会保留。
+
+设置恢复成功后再通过 npm 删除包。本地安装使用 `npm uninstall ai-battery`。`uninstall` 与 `teardown` 是设置恢复的兼容别名，不调用 npm。Windows 与 WSL 请分别运行。Bash 命令缓存用 `hash -r` 清除，zsh 用 `rehash`。
+
+```bash
+ai-battery reset settings && npm uninstall -g ai-battery
+```
 
 <a id="setup"></a>
 ## 设置
@@ -165,7 +170,7 @@ ai-battery setup codex
 ai-battery setup tmux
 ```
 
-这会向 `~/.tmux.conf` 添加受管理 block，在 status-right 中显示电量状态（每 10 秒刷新一次）；在该 tmux 内运行的 `codex` 会省略每个 pane 的电量行，使用完整 pane。Claude statusLine 在同一环境中也会折叠电量行，只显示 header（模型、目录、分支）一行，因为电量已经显示在 tmux bar 中。要应用配置，请运行 `tmux source-file ~/.tmux.conf` 后打开新的 pane。此 block 会覆盖现有 `status-right` 设置，因此它是 opt-in，不包含在 `setup all` 中。用 `ai-battery uninstall tmux` 可解除；如果希望在 tmux 内仍保留每个 pane 的状态行，请设置 `AI_BATTERY_TMUX=row`。Claude statusLine 属于 Claude Code 内部 UI，因此无论是否使用 tmux 都会显示。
+这会向 `~/.tmux.conf` 添加受管理 block，在 status-right 中显示电量状态（每 10 秒刷新一次）；在该 tmux 内运行的 `codex` 会省略每个 pane 的电量行，使用完整 pane。Claude statusLine 在同一环境中也会折叠电量行，只显示 header（模型、目录、分支）一行，因为电量已经显示在 tmux bar 中。要应用配置，请运行 `tmux source-file ~/.tmux.conf` 后打开新的 pane。此 block 会覆盖现有 `status-right` 设置，因此它是 opt-in，不包含在 `setup all` 中。用 `ai-battery reset settings tmux` 可解除；如果希望在 tmux 内仍保留每个 pane 的状态行，请设置 `AI_BATTERY_TMUX=row`。Claude statusLine 属于 Claude Code 内部 UI，因此无论是否使用 tmux 都会显示。
 
 如果看不到 Codex 下方状态行，请运行诊断。
 
@@ -219,7 +224,7 @@ ai-battery setup claude
 移除：
 
 ```bash
-ai-battery uninstall-claude-statusline
+ai-battery reset settings claude
 ```
 
 Claude 至少传递一次 statusLine payload 后，Claude 使用量缓存才会生成。在此之前，会显示基于 Claude 本地日志的 fallback。

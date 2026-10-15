@@ -5,8 +5,8 @@ The current release candidate is **0.1.22**. It includes the 0.1.21 usage-refres
 ## Changes in 0.1.22
 
 - Default `setup codex` restores legacy AI Battery integrations without creating a Codex wrapper, adding PATH entries or configuring Codex's status line. Use an independent watcher/HUD, or explicitly launch a runner for one session. `--wrap-codex` and `--configure-codex-statusline` are separate opt-ins.
-- Full `ai-battery uninstall` restores integrations, selectively removes verified caches and private runtimes, removes aliases belonging to this installation, and runs npm uninstall against the owning prefix. Other npm packages are preserved. `teardown` and targeted uninstall retain the package; development checkouts and npx do not remove an npm project.
-- Shell and tmux recovery records preserve exact original content, permissions and file absence. User edits outside managed blocks survive repeated setup and uninstall. Edited blocks, retargeted symlinks and unresolved recovery records prevent unsafe removal.
+- `ai-battery reset settings` restores integrations and selectively removes verified caches, private runtimes and generated files. `reset config` is an alias. The CLI never invokes npm uninstall; all npm packages, package commands and local project manifests/lockfiles are preserved. `teardown` and `uninstall` remain compatibility aliases. Targeted reset restores only the selected integration.
+- Shell and tmux recovery records preserve exact original content, permissions and file absence. User edits outside managed blocks survive repeated setup and reset. Edited blocks, retargeted symlinks and unresolved recovery records prevent unsafe removal.
 - Windows PATH cleanup preserves unrelated whitespace and separators and reports failed writes. HUD cleanup verifies its Run value and launcher ownership and preserves unknown files. macOS LaunchAgent cleanup refuses foreign files and symlinks.
 - Existing Bash terminals can cache a deleted legacy Codex wrapper. Run `hash -r` (zsh: `rehash`) or open a new terminal. A child CLI cannot clear its parent shell's command cache. A POSIX wrapper whose Python runner cannot start because Python is absent now runs the original Codex directly.
 
@@ -16,12 +16,12 @@ Checked on 2026-10-15:
 
 | Environment | Result |
 | --- | --- |
-| WSL `npm run check` | 155 passed, 16 platform skips, 0 failures |
-| Windows native Node 22.23.2 full suite | 132 passed, 39 platform skips, 0 failures |
+| WSL `npm run check` | 156 passed, 16 platform skips, 0 failures |
+| Windows native Node 22.23.2 full suite | 135 passed, 37 platform skips, 0 failures |
 
-Validation results and tarball manifests are stored in `.cache/releases/0.1.22/`. The regression suite covers default command/config preservation, exact shell restoration, user edits, symlinks, custom integration paths, incomplete recovery, npm failure, global/local prefix selection, actual self-uninstall in isolated installations, and Windows registry ownership. Desktop operations in the npm self-uninstall fixture are stubbed; Windows autostart cleanup is separately exercised against a temporary registry key and profile.
+Validation results and tarball manifests are stored in `.cache/releases/0.1.22/`. The regression suite covers default command/config preservation, exact shell restoration, user edits, symlinks, custom integration paths, incomplete recovery, global/local package preservation, settings/config and compatibility aliases, HUD target parsing, invalid reset scopes, and Windows registry ownership. Desktop operations in the installed CLI fixture are stubbed; Windows autostart cleanup is separately exercised against a temporary registry key and profile.
 
-The current WSL installation was removed with the new cleanup helpers after successful teardown. Original shell, Codex and Claude settings and the original Codex launcher were byte-identical afterward. Codex and Claude still ran successfully. Previous manual test backups were preserved under `.cache/uninstall-audit/preserved-local-test-backups/`.
+Reset behavior is tested in isolated global and local installations, with provider settings and original launchers compared byte for byte. npm removal is a separate explicit operation in the installed-tarball checks.
 
 Native Windows validation uses x64 Node 22.23.2. macOS LaunchAgent ownership and file handling are tested through an isolated fixture; native macOS and Windows ARM64 are not verified here.
 
@@ -57,10 +57,10 @@ ai-battery setup codex
 
 Default setup detaches a legacy wrapper. In an existing Bash terminal run `hash -r`; zsh uses `rehash`. Plain `codex` then runs independently. Display usage with `ai-battery --watch 2` or a supported desktop HUD. There is no built-in `ai-battery update` command.
 
-To remove the installation including npm:
+Restore AI Battery settings first, then remove the package with npm only if restoration succeeded:
 
 ```text
-ai-battery uninstall
+ai-battery reset settings && npm uninstall -g ai-battery
 ```
 
-Modified or unrecognized files are preserved and listed. A running wrapped session retains its loaded code until it exits. Cleanup of one npm prefix does not uninstall another Windows/WSL or Node-version installation.
+Modified or unrecognized files are preserved and listed. A running wrapped session retains its loaded code until it exits. `reset config` is an alias for `reset settings`. The CLI never removes any npm installation. Use `npm uninstall ai-battery` for local installs; Windows/WSL and Node-version installations are managed separately.

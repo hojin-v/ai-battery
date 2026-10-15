@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { cleanupBatteryArtifacts, planPackageRemoval, removeBatteryAliases, removeInstalledPackage } from "../lib/core/uninstall.js";
+import { cleanupBatteryArtifacts } from "../lib/core/uninstall.js";
 import { createIntegrationFiles } from "../lib/core/integration-files.js";
 import { createMacHudPlatform } from "../lib/platforms/macos/hud.js";
 import { windowsAutostartCleanupScript } from "../lib/platforms/windows/autostart-cleanup.js";
@@ -38,7 +38,8 @@ function fixture(t) {
 test("default Codex setup leaves commands, settings, sessions and shell files unchanged", (t) => {
   const f = fixture(t);
   const original = f.write(path.join(f.root, "original", process.platform === "win32" ? "codex.cmd" : "codex"), "original Codex launcher\n");
-  f.env.PATH = path.dirname(original) + path.delimiter + process.env.PATH;
+  f.env.PATH = path.dirname(original) + path.delimiter + f.env.PATH;
+  fs.chmodSync(original, 0o755);
   const files = [
     [path.join(f.codex, "config.toml"), '# user settings\nmodel = "custom-model"\n[tui]\nstatus_line = ["context-remaining"]\n'],
     [path.join(f.codex, "sessions", "keep.jsonl"), 'resume history\n'],
@@ -49,7 +50,7 @@ test("default Codex setup leaves commands, settings, sessions and shell files un
   ];
   for (const [file, content] of files) f.write(file, content);
   const result = f.run(["setup", "codex", "--json"]);
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.status, 0, result.stderr + result.stdout);
   assert.equal(JSON.parse(result.stdout).codex.standalone, true);
   for (const [file, content] of files) assert.equal(fs.readFileSync(file, "utf8"), content, file);
   assert.equal(fs.existsSync(path.join(f.data, "bin", process.platform === "win32" ? "codex.cmd" : "codex")), false);
@@ -111,65 +112,100 @@ test("foreign recovery metadata aborts integration changes", (t) => {
   assert.equal(fs.readFileSync(shell, "utf8"), "keep shell\n");
 });
 
-test("npm removal targets the owning prefix and preserves Codex and other packages", (t) => {
+function installedFixture(t, local = false) {
   const f = fixture(t);
-  const prefix = path.join(f.root, "npm-prefix");
-  const modules = path.join(prefix, ...(process.platform === "win32" ? [] : ["lib"]), "node_modules");
-  const root = path.join(modules, "ai-battery");
-  f.write(path.join(root, "package.json"), JSON.stringify({ name: "ai-battery", version: "0.1.22", bin: { "ai-battery": "bin/app.js" } }));
-  f.write(path.join(root, "bin", "app.js"), "console.log('battery');\n");
-  const codex = f.write(path.join(modules, "@openai", "codex", "package.json"), '{"name":"@openai/codex","version":"1.0.0"}');
-  const claude = f.write(path.join(modules, "@anthropic-ai", "claude-code", "package.json"), '{"name":"@anthropic-ai/claude-code","version":"1.0.0"}');
-  const launcher = f.write(path.join(prefix, process.platform === "win32" ? "codex.cmd" : "bin/codex"), "keep original launcher");
-  const plan = planPackageRemoval(root);
-  assert.equal(plan.error, undefined, plan.error);
-  assert.equal(plan.prefix, prefix);
-  assert.equal(plan.global, true);
-  assert.deepEqual(plan.args.slice(0, 5), ["uninstall", "--global", "--prefix", prefix, "ai-battery"]);
-  const result = removeInstalledPackage(plan, { home: f.home });
-  assert.equal(result.removed, true, JSON.stringify(result));
-  assert.equal(fs.existsSync(root), false);
-  assert.equal(fs.existsSync(codex), true);
-  assert.equal(fs.existsSync(claude), true);
-  assert.equal(fs.readFileSync(launcher, "utf8"), "keep original launcher");
-});
-
-test("installed CLI fully uninstalls itself and owned state while preserving provider settings", (t) => {
-  const f = fixture(t);
-  const prefix = path.join(f.root, "npm-prefix");
-  const root = path.join(prefix, ...(process.platform === "win32" ? [] : ["lib"]), "node_modules", "ai-battery");
+  const prefix = path.join(f.root, local ? "project" : "npm-prefix");
+  const root = path.join(prefix, ...(!local && process.platform !== "win32" ? ["lib"] : []), "node_modules", "ai-battery");
   const source = path.dirname(path.dirname(CLI));
   fs.mkdirSync(root, { recursive: true });
   for (const name of ["lib", "bin"]) fs.cpSync(path.join(source, name), path.join(root, name), { recursive: true });
-  f.write(path.join(root, "package.json"), JSON.stringify({ name: "ai-battery", version: "0.1.22", type: "module", bin: { "ai-battery": "bin/ai-battery.js" } }));
-  // Desktop operations have separate native tests; this fixture must never
-  // stop the user's HUD or access their autostart registry/LaunchAgent.
-  f.write(path.join(root, "bin", "ai-battery-hud.js"), "process.exit(0);\n");
+  const manifest = f.write(path.join(root, "package.json"), JSON.stringify({ name: "ai-battery", version: "0.1.22", type: "module", bin: { "ai-battery": "bin/ai-battery.js" } }));
+  const hudLog = path.join(f.root, "hud-calls.jsonl");
+  // Keep desktop operations isolated from the user's HUD and autostart settings.
+  f.write(path.join(root, "bin", "ai-battery-hud.js"), `import fs from 'node:fs'; fs.appendFileSync(${JSON.stringify(hudLog)}, JSON.stringify(process.argv.slice(2)) + String.fromCharCode(10));`);
   f.write(path.join(f.state, "config.json"), JSON.stringify(config));
   f.write(path.join(f.state, "codex-status-scan-cache.json"), "{}");
-  const codex = f.write(path.join(f.codex, "config.toml"), 'model = "keep-model"\n');
-  const claude = f.write(path.join(f.claude, "settings.json"), '{"theme":"keep"}');
-  const shell = f.write(path.join(f.home, ".bashrc"), "keep shell\n");
-  const retained = f.write(path.join(f.home, "custom-integration"), "keep custom file");
-  f.write(path.join(f.state, "config.json"), JSON.stringify({ ...config, integrationFiles: {
-    [retained]: { beforeText: "original", installedText: "keep custom file", block: "unknown integration" }
-  } }));
-  const blocked = spawnSync(process.execPath, [path.join(root, "bin", "ai-battery.js"), "uninstall", "--json"], { encoding: "utf8", env: f.env, timeout: 30000 });
-  assert.equal(blocked.status, 1, blocked.stderr + blocked.stdout);
-  assert.match(blocked.stdout, /Unrestored integration files/);
-  assert.equal(fs.existsSync(root), true);
-  assert.equal(fs.readFileSync(retained, "utf8"), "keep custom file");
-  assert.ok(JSON.parse(fs.readFileSync(path.join(f.state, "config.json"))).integrationFiles[retained]);
-  f.write(path.join(f.state, "config.json"), JSON.stringify(config));
-  const result = spawnSync(process.execPath, [path.join(root, "bin", "ai-battery.js"), "uninstall", "--json"], { encoding: "utf8", env: f.env, timeout: 30000 });
+  const keep = [
+    [manifest, fs.readFileSync(manifest, "utf8")],
+    [path.join(f.codex, "config.toml"), 'model = "keep-model"\n'],
+    [path.join(f.claude, "settings.json"), '{"theme":"keep"}'],
+    [path.join(f.home, ".bashrc"), "keep shell\n"],
+    [path.join(path.dirname(root), "@openai", "codex", "package.json"), '{"name":"@openai/codex","version":"1.0.0"}'],
+    [path.join(path.dirname(root), "@anthropic-ai", "claude-code", "package.json"), '{"name":"@anthropic-ai/claude-code","version":"1.0.0"}'],
+    [path.join(prefix, process.platform === "win32" ? "codex.cmd" : "bin/codex"), "keep original launcher"]
+  ];
+  if (local) {
+    keep.push([path.join(prefix, "package.json"), '{"dependencies":{"ai-battery":"*","other-package":"*"}}']);
+    keep.push([path.join(prefix, "package-lock.json"), '{"lockfileVersion":3,"packages":{}}']);
+  }
+  for (const [file, text] of keep) f.write(file, text);
+  const run = args => spawnSync(process.execPath, [path.join(root, "bin", "ai-battery.js"), ...args], { encoding: "utf8", env: f.env, timeout: 30000 });
+  return { ...f, root, prefix, keep, hudLog, run };
+}
+
+for (const args of [["reset", "settings"], ["reset", "config"], ["uninstall"], ["teardown"]]) {
+  test(`${args.join(" ")} restores settings and cleans owned state while retaining npm packages`, (t) => {
+    const f = installedFixture(t);
+    const retained = f.write(path.join(f.home, "custom-integration"), "keep custom file");
+    f.write(path.join(f.state, "config.json"), JSON.stringify({ ...config, integrationFiles: {
+      [retained]: { beforeText: "original", installedText: "keep custom file", block: "unknown integration" }
+    } }));
+    const blocked = f.run([...args, "--json"]);
+    assert.equal(blocked.status, 1, blocked.stderr + blocked.stdout);
+    assert.match(blocked.stdout, /Unrestored integration files/);
+    assert.equal(fs.existsSync(f.root), true);
+    assert.equal(fs.readFileSync(retained, "utf8"), "keep custom file");
+    assert.ok(JSON.parse(fs.readFileSync(path.join(f.state, "config.json"))).integrationFiles[retained]);
+    f.write(path.join(f.state, "config.json"), JSON.stringify(config));
+    const result = f.run([...args, "--json"]);
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.fullReset, true);
+    assert.equal(report.results.package, undefined);
+    assert.equal(fs.existsSync(f.root), true);
+    assert.equal(fs.existsSync(f.state), false);
+    for (const [file, text] of f.keep) assert.equal(fs.readFileSync(file, "utf8"), text, file);
+    if (args[0] === "reset") {
+      const again = f.run(args);
+      assert.equal(again.status, 0, again.stderr);
+      assert.match(again.stdout, /npm package.*unchanged/);
+      assert.match(again.stdout, /npm uninstall -g ai-battery/);
+    }
+  });
+}
+
+test("reset settings never changes a local npm project or its lockfile", (t) => {
+  const f = installedFixture(t, true);
+  const result = f.run(["reset", "settings", "--json"]);
   assert.equal(result.status, 0, result.stderr + result.stdout);
-  const report = JSON.parse(result.stdout);
-  assert.equal(report.results.package.removed, true);
-  assert.equal(fs.existsSync(root), false);
-  assert.equal(fs.existsSync(f.state), false);
-  assert.equal(fs.readFileSync(codex, "utf8"), 'model = "keep-model"\n');
-  assert.equal(fs.readFileSync(claude, "utf8"), '{"theme":"keep"}');
-  assert.equal(fs.readFileSync(shell, "utf8"), "keep shell\n");
+  for (const [file, text] of f.keep) assert.equal(fs.readFileSync(file, "utf8"), text, file);
+});
+
+test("HUD targets are parsed as reset targets rather than the HUD start command", (t) => {
+  for (const args of [["reset", "settings", "hud"], ["reset", "config", "hud"], ["uninstall", "hud"], ["teardown", "hud"]]) {
+    const f = installedFixture(t);
+    const result = f.run([...args, "--json"]);
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    const report = JSON.parse(result.stdout);
+    assert.deepEqual(report.targets, ["hud"]);
+    assert.equal(report.fullReset, false);
+    assert.deepEqual(fs.readFileSync(f.hudLog, "utf8").trim().split("\n").map(line => JSON.parse(line)), [["stop"], ["autostart", "off"]]);
+    assert.equal(fs.existsSync(path.join(f.state, "config.json")), true);
+  }
+});
+
+test("reset requires an explicit settings/config scope and rejects command-like targets without side effects", (t) => {
+  const f = fixture(t);
+  const file = f.write(path.join(f.state, "config.json"), JSON.stringify(config));
+  const before = fs.readFileSync(file, "utf8");
+  for (const args of [["reset"], ["reset", "everything"], ["reset", "settings", "on"], ["reset", "settings", "show"]]) {
+    const result = f.run(args);
+    assert.equal(result.status, 1, result.stderr + result.stdout);
+    assert.equal(fs.readFileSync(file, "utf8"), before);
+  }
+  const help = f.run(["reset", "--help"]);
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /ai-battery reset settings/);
 });
 
 test("Bash reproduces a cached deleted shim and hash -r restores the original command", posix, (t) => {
@@ -208,28 +244,6 @@ test("custom shell files are restored from recovery metadata without the old ove
   const result = f.run(["uninstall", "codex", "--json"]);
   assert.equal(result.status, 0, result.stderr + result.stdout);
   assert.equal(fs.readFileSync(file, "utf8"), "original without newline");
-});
-
-test("package ownership checks refuse a manifest that claims the codex command", (t) => {
-  const f = fixture(t);
-  const root = path.join(f.root, "node_modules", "ai-battery");
-  const manifest = f.write(path.join(root, "package.json"), '{"name":"ai-battery","bin":{"codex":"main.js"}}');
-  assert.match(planPackageRemoval(root).error, /ownership/);
-  assert.equal(fs.existsSync(manifest), true);
-});
-
-test("alias cleanup removes only links to this installation, including dangling links", posix, (t) => {
-  const f = fixture(t);
-  const aliases = path.join(f.home, ".local", "bin");
-  fs.mkdirSync(aliases, { recursive: true });
-  const root = path.join(f.root, "removed-package");
-  fs.symlinkSync(path.join(root, "app.js"), path.join(aliases, "ai-battery"));
-  fs.symlinkSync("/different/app.js", path.join(aliases, "ai-battery-hud"));
-  const original = f.write(path.join(aliases, "codex"), "user launcher");
-  const removed = removeBatteryAliases({ packageRoot: root, packageJson: { bin: { "ai-battery": "app.js", "ai-battery-hud": "hud.js" } }, home: f.home });
-  assert.deepEqual(removed, [path.join(aliases, "ai-battery")]);
-  assert.equal(fs.lstatSync(path.join(aliases, "ai-battery-hud")).isSymbolicLink(), true);
-  assert.equal(fs.readFileSync(original, "utf8"), "user launcher");
 });
 
 function integrationFixture(t) {
@@ -303,31 +317,6 @@ test("symlink replacement never redirects integration restoration into another f
     fs.unlinkSync(f.file);
     f.manager.removeManagedText(f.file, text => text);
   }
-});
-
-test("npm failure keeps the package, aliases and an explicit failure result", posix, (t) => {
-  const f = fixture(t);
-  const root = path.join(f.root, "lib", "node_modules", "ai-battery");
-  f.write(path.join(root, "package.json"), '{"name":"ai-battery","bin":{"ai-battery":"app.js"}}');
-  const alias = path.join(f.home, ".local", "bin", "ai-battery");
-  fs.mkdirSync(path.dirname(alias), { recursive: true });
-  fs.symlinkSync(path.join(root, "app.js"), alias);
-  const plan = planPackageRemoval(root);
-  const result = removeInstalledPackage(plan, { home: f.home, run: () => ({ status: 1, stderr: "permission denied" }) });
-  assert.match(result.error, /permission denied/);
-  assert.equal(fs.existsSync(root), true);
-  assert.equal(fs.lstatSync(alias).isSymbolicLink(), true);
-});
-
-test("a local npm project named lib is never treated as a global prefix", (t) => {
-  const f = fixture(t);
-  const project = path.join(f.root, "lib");
-  f.write(path.join(project, "package.json"), '{"dependencies":{"ai-battery":"*"}}');
-  const root = path.join(project, "node_modules", "ai-battery");
-  f.write(path.join(root, "package.json"), '{"name":"ai-battery","bin":{"ai-battery":"app.js"}}');
-  const plan = planPackageRemoval(root);
-  assert.equal(plan.global, false);
-  assert.equal(plan.prefix, project);
 });
 
 test("macOS autostart removes owned agents and refuses foreign or symlinked files", (t) => {

@@ -1,6 +1,6 @@
 # AI Battery
 
-0.1.22: 기본 Codex 설치는 실행 명령·PATH·설정을 변경하지 않습니다. 이전 wrapper는 `setup codex`로 해제할 수 있고, 전체 `uninstall`은 통합 복원 후 캐시·전용 런타임·현재 npm 설치도 제거합니다. 기존 Bash 터미널에 삭제된 wrapper 경로가 남았다면 `hash -r`을 실행하세요.
+0.1.22: 기본 Codex 설치는 실행 명령·PATH·설정을 변경하지 않습니다. `reset settings`는 AI Battery의 설정 변경을 복원하고 생성 파일을 정리하며 npm 패키지는 유지합니다. 패키지 삭제는 `npm uninstall -g ai-battery`로 진행하세요. 기존 Bash 터미널에 삭제된 wrapper 경로가 남았다면 `hash -r`을 실행하세요.
 
 [한국어](README.md) · [English](docs/i18n/en/) · [日本語](docs/i18n/ja/) · [中文](docs/i18n/zh/) · [Español](docs/i18n/es/)
 
@@ -111,7 +111,7 @@ ai-battery --version
 ai-battery --provider codex
 ai-battery --provider claude
 ai-battery setup
-ai-battery uninstall
+ai-battery reset settings
 ai-battery doctor
 ai-battery hud
 ai-battery off codex
@@ -129,34 +129,36 @@ ai-battery on codex
 
 `doctor`는 설치 상태와 함께 npm latest 버전을 확인합니다. 네트워크가 막혀 있으면 버전 확인만 건너뛰고 나머지 진단은 계속 표시합니다.
 
-## Uninstall
+<a id="uninstall"></a>
+## Reset Settings
 
-`off`는 표시만 숨깁니다. 인자 없는 `uninstall`은 통합을 복원하고, 소유권을 확인한 AI Battery 캐시·전용 런타임·별칭과 현재 실행 중인 npm 설치까지 제거합니다. 개발 checkout이나 임시 npx 실행에서는 npm 프로젝트를 삭제하지 않습니다.
+`ai-battery reset settings`는 AI Battery가 추가한 통합 설정을 원래 값으로 복원하고, 소유권을 확인한 AI Battery 캐시·전용 런타임·생성 파일을 정리합니다. Codex·Claude의 관련 없는 설정과 npm 패키지·실행 명령은 유지합니다. Codex나 Claude의 설정 전체를 기본값으로 초기화하는 명령은 아닙니다.
 
 ```bash
-ai-battery uninstall
+ai-battery reset settings
 ```
 
-통합만 해제하고 패키지는 유지하려면 `ai-battery teardown`을 사용합니다. 아래처럼 특정 통합만 제거할 수도 있습니다.
+`ai-battery reset config`도 같은 동작입니다. 일부 통합만 복원하려면 대상을 지정합니다. 대상 지정 시 다른 통합과 공통 캐시는 유지합니다.
 
 ```bash
-ai-battery uninstall codex
-ai-battery uninstall claude
-ai-battery uninstall hud
+ai-battery reset settings codex
+ai-battery reset settings claude
+ai-battery reset settings hud
+ai-battery reset settings tmux
 ```
 
-이 명령은 AI Battery가 관리 마커를 넣은 Codex wrapper, Codex `[tui].status_line`, Claude `statusLine`, HUD/menu bar autostart와 실행 중인 HUD를 정리합니다. 다른 도구가 만든 `codex` 파일이나 Claude `statusLine`은 건드리지 않습니다. setup 전에 복구 기록을 먼저 저장하며, 이후 사용자가 추가한 관련 없는 Codex/Claude 설정은 보존하고 AI Battery가 관리한 값만 원래 값으로 되돌립니다. 관리 중인 status line 자체나 wrapper 파일이 setup 이후 다른 값으로 바뀌었다면 덮어쓰거나 삭제하지 않고 복구 기록과 PATH를 유지한 채 종료 코드 1로 알립니다. 원본 command backup이 있는 wrapper는 현재 wrapper를 임시 보존한 뒤 원본 교체가 성공한 경우에만 삭제합니다. 현재 이미 AI Battery wrapper 안에서 실행 중인 Codex 세션의 terminal row는 그 세션을 종료해야 사라집니다.
+관리 중인 status line이나 설정 블록이 사용자에 의해 변경됐다면 덮어쓰지 않고 복구 기록을 보존하며 종료 코드 1로 알립니다. 관련 없는 Codex·Claude 설정, 사용자 추가 파일, 확인할 수 없는 파일은 보존합니다. 셸·tmux의 사용자 수정도 관리 블록 밖의 내용은 유지합니다. 복구 기록은 해당 항목이 복원되거나 안전하게 제거된 뒤에만 지워집니다.
 
-복구 기록은 `ai-battery uninstall`이 해당 항목을 성공적으로 복원하거나 안전하게 제거한 뒤에만 지워집니다. Claude는 기존 `statusLine`과 파일 존재 여부·권한만 저장하며 `settings.json` 전체를 복제하지 않으므로 다른 설정이나 비밀값을 백업 파일에 중복 보관하지 않습니다. JSON 결과나 종료 코드를 확인하는 자동화에서는 0일 때만 완전한 정리로 간주하세요.
-
-전체 삭제는 통합 복원에 성공한 경우에만 npm 제거로 진행합니다. 수정된 관리 블록, 확인할 수 없는 파일과 복구 기록은 보존하고 결과에 경로를 표시합니다. 같은 폴더에 사용자가 추가한 파일이나 다른 npm 패키지는 삭제하지 않습니다. Windows와 WSL에 각각 설치했다면 각 설치에서 실행하세요.
+패키지까지 삭제하려면 설정 복원이 성공한 다음 npm으로 제거합니다. 로컬 설치는 `npm uninstall ai-battery`, 전역 설치는 아래 명령을 사용합니다. Windows와 WSL, Node 버전별 설치는 각각 진행하세요.
 
 ```bash
-ai-battery uninstall
+ai-battery reset settings && npm uninstall -g ai-battery
 hash -r  # Bash: 기존 터미널의 삭제된 wrapper 경로 캐시 해제 (zsh: rehash)
 ```
 
-자식 프로세스인 CLI는 부모 셸의 명령 캐시를 지울 수 없습니다. 새 터미널을 열어도 캐시는 초기화됩니다. 현대 npm은 외부 통합을 정리하는 uninstall lifecycle을 실행하지 않으므로 `npm uninstall -g ai-battery`만 실행했던 구버전 사용자는 패키지를 다시 설치하고 `ai-battery uninstall`로 통합부터 정리하세요.
+CLI는 npm 제거를 자동 실행하지 않습니다. `teardown`과 `uninstall`은 호환용 별칭으로 남아 있으며, 동일하게 설정과 생성 파일만 정리합니다. `off`는 표시만 숨깁니다. 이미 npm 패키지를 먼저 지웠다면 다시 설치하고 `reset settings`로 통합부터 복원하세요.
+
+자식 프로세스인 CLI는 부모 셸의 명령 캐시를 지울 수 없습니다. 새 터미널을 열어도 캐시는 초기화됩니다. 이미 wrapper로 시작한 Codex 세션의 하단 행은 해당 세션을 종료해야 사라집니다.
 
 ## Setup
 
@@ -175,7 +177,7 @@ ai-battery setup codex
 
 Codex 실행 경로를 그대로 유지하려면 `ai-battery --watch 2` 또는 `ai-battery hud`를 사용하세요. 하단 행을 실행 세션 하나에만 추가하려면 POSIX에서는 `ai-battery-run -- codex`, Windows에서는 `ai-battery-run-win -- codex`를 직접 실행합니다.
 
-기존처럼 `codex` 명령에 wrapper를 연결하려는 경우에만 `ai-battery setup codex --wrap-codex`를 사용합니다. Codex `[tui].status_line` 변경도 별도 옵션인 `--configure-codex-statusline`이 필요합니다. 두 옵션은 실행 경로나 사용자 설정을 변경하므로 기본값에서 제외되어 있습니다. 관리형 변경은 복구 기록을 먼저 저장하고, uninstall 시 해당 변경만 복원합니다.
+기존처럼 `codex` 명령에 wrapper를 연결하려는 경우에만 `ai-battery setup codex --wrap-codex`를 사용합니다. Codex `[tui].status_line` 변경도 별도 옵션인 `--configure-codex-statusline`이 필요합니다. 두 옵션은 실행 경로나 사용자 설정을 변경하므로 기본값에서 제외되어 있습니다. 관리형 변경은 복구 기록을 먼저 저장하고, `reset settings`에서 해당 변경만 복원합니다.
 
 다음 Windows runner 설명은 직접 runner를 실행하거나 wrapper를 명시적으로 선택한 경우에 적용됩니다.
 
@@ -195,7 +197,7 @@ tmux에서는 pane마다 하단 행을 예약하면 같은 전역 배터리가 p
 ai-battery setup tmux
 ```
 
-`~/.tmux.conf`에 관리 블록을 추가해 status-right에 배터리를 표시하고(10초 간격 갱신), 이 tmux 안에서 실행되는 `codex`는 pane별 배터리 행을 생략하고 pane 전체를 사용합니다. Claude statusLine도 같은 환경에서는 배터리 행을 접고 header(모델·디렉터리·브랜치) 1행만 표시합니다 — 배터리는 tmux bar에 이미 있기 때문입니다. 적용하려면 `tmux source-file ~/.tmux.conf` 후 새 pane을 여세요. 이 블록은 기존 `status-right` 설정을 덮어쓰므로 `setup all`에 포함되지 않는 opt-in입니다. 해제는 `ai-battery uninstall tmux`, tmux 안에서도 pane별 행을 유지하려면 `AI_BATTERY_TMUX=row`를 설정합니다.
+`~/.tmux.conf`에 관리 블록을 추가해 status-right에 배터리를 표시하고(10초 간격 갱신), 이 tmux 안에서 실행되는 `codex`는 pane별 배터리 행을 생략하고 pane 전체를 사용합니다. Claude statusLine도 같은 환경에서는 배터리 행을 접고 header(모델·디렉터리·브랜치) 1행만 표시합니다 — 배터리는 tmux bar에 이미 있기 때문입니다. 적용하려면 `tmux source-file ~/.tmux.conf` 후 새 pane을 여세요. 이 블록은 기존 `status-right` 설정을 덮어쓰므로 `setup all`에 포함되지 않는 opt-in입니다. 해제는 `ai-battery reset settings tmux`, tmux 안에서도 pane별 행을 유지하려면 `AI_BATTERY_TMUX=row`를 설정합니다.
 
 Codex 하단 행이 보이지 않으면 진단을 실행합니다.
 
@@ -271,7 +273,7 @@ ai-battery hud -Mode statusline -Position bottomcenter
 제거:
 
 ```bash
-ai-battery uninstall-claude-statusline
+ai-battery reset settings claude
 ```
 
 Claude가 한 번 이상 statusLine payload를 전달해야 Claude의 사용량 캐시가 생성됩니다. 그 전에는 Claude 로컬 로그 기반 fallback이 표시됩니다.

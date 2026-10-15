@@ -1,6 +1,6 @@
 # AI Battery
 
-0.1.22: La configuración predeterminada de Codex conserva su comando, PATH y ajustes. `setup codex` retira wrappers anteriores. `uninstall` restaura las integraciones y elimina cachés, runtimes privados y la instalación npm actual. Ejecuta `hash -r` en una terminal Bash existente.
+0.1.22: La configuración predeterminada de Codex conserva su comando, PATH y ajustes. `reset settings` restaura las integraciones y limpia archivos generados. Conserva el paquete npm; su eliminación se hace por separado con npm.
 
 [한국어](../../../README.md) · [English](../en/) · [日本語](../ja/) · [中文](../zh/) · [Español](../es/)
 
@@ -117,7 +117,7 @@ ai-battery --version
 ai-battery --provider codex
 ai-battery --provider claude
 ai-battery setup
-ai-battery uninstall
+ai-battery reset settings
 ai-battery doctor
 ai-battery hud
 ai-battery off codex
@@ -136,16 +136,21 @@ ai-battery on codex
 `doctor` comprueba el estado de instalación y la versión latest de npm. Si la red está bloqueada, solo se omite la comprobación de versión y el resto del diagnóstico se sigue mostrando.
 
 <a id="uninstall"></a>
-## Desinstalación
+## Reset Settings
 
-`ai-battery uninstall` restaura las integraciones administradas y elimina cachés, runtimes privados, alias y su propia instalación npm. Los checkouts de desarrollo y npx no modifican proyectos npm. Conserva y enumera los archivos modificados o de propiedad desconocida y sus registros de recuperación. Preserva otros paquetes npm y ajustes del usuario. Ejecútalo por separado en Windows y WSL.
+`ai-battery reset settings` restaura los ajustes modificados por AI Battery y limpia sus cachés, runtimes privados y archivos generados verificados. Conserva otros ajustes de Codex/Claude y los paquetes npm. No restablece todos los ajustes de Codex/Claude. `reset config` es un alias.
 
 ```bash
-ai-battery uninstall
-hash -r  # Bash; zsh: rehash
+ai-battery reset settings
 ```
 
-El CLI no puede limpiar la caché de comandos del shell padre; abrir otra terminal también la reinicia. Usa `ai-battery teardown` para conservar el paquete, o `ai-battery uninstall codex` / `claude` / `hud` / `tmux` para una integración. Si eliminaste una versión antigua solo con npm, reinstálala y restaura primero las integraciones.
+Para una sola integración usa `ai-battery reset settings codex` / `claude` / `hud` / `tmux`. Conserva archivos modificados o de propiedad desconocida y registros de recuperación pendientes.
+
+Elimina el paquete con npm después de restaurar los ajustes correctamente. Las instalaciones locales usan `npm uninstall ai-battery`. `uninstall` y `teardown` son alias de compatibilidad para restaurar ajustes y nunca ejecutan npm. Ejecuta cada instalación de Windows y WSL por separado. Limpia la caché de Bash con `hash -r` o la de zsh con `rehash`.
+
+```bash
+ai-battery reset settings && npm uninstall -g ai-battery
+```
 
 <a id="setup"></a>
 ## Configuración
@@ -165,7 +170,7 @@ En tmux, reservar una fila inferior en cada pane duplicaría la misma batería g
 ai-battery setup tmux
 ```
 
-Esto agrega un bloque administrado a `~/.tmux.conf`, muestra la batería en `status-right` con actualización cada 10 segundos, y hace que `codex` dentro de tmux use todo el pane en lugar de añadir una fila de batería por pane. Claude statusLine también colapsa la fila de batería en el mismo entorno y muestra solo la fila de encabezado (modelo, directorio, rama), porque la batería ya está en la barra de tmux. Para aplicarlo, ejecuta `tmux source-file ~/.tmux.conf` y abre un nuevo pane. Este bloque sobrescribe la configuración existente de `status-right`, por lo que es opt-in y no se incluye en `setup all`. Se elimina con `ai-battery uninstall tmux`; si quieres mantener filas por pane dentro de tmux, configura `AI_BATTERY_TMUX=row`. Claude statusLine forma parte de la UI interna de Claude Code, así que se muestra independientemente de tmux.
+Esto agrega un bloque administrado a `~/.tmux.conf`, muestra la batería en `status-right` con actualización cada 10 segundos, y hace que `codex` dentro de tmux use todo el pane en lugar de añadir una fila de batería por pane. Claude statusLine también colapsa la fila de batería en el mismo entorno y muestra solo la fila de encabezado (modelo, directorio, rama), porque la batería ya está en la barra de tmux. Para aplicarlo, ejecuta `tmux source-file ~/.tmux.conf` y abre un nuevo pane. Este bloque sobrescribe la configuración existente de `status-right`, por lo que es opt-in y no se incluye en `setup all`. Se elimina con `ai-battery reset settings tmux`; si quieres mantener filas por pane dentro de tmux, configura `AI_BATTERY_TMUX=row`. Claude statusLine forma parte de la UI interna de Claude Code, así que se muestra independientemente de tmux.
 
 Si la fila inferior de Codex no aparece, ejecuta el diagnóstico.
 
@@ -219,7 +224,7 @@ ai-battery setup claude
 Eliminar:
 
 ```bash
-ai-battery uninstall-claude-statusline
+ai-battery reset settings claude
 ```
 
 Claude debe entregar al menos una vez un payload de statusLine para que se cree la caché de uso de Claude. Hasta entonces se muestra el fallback basado en registros locales de Claude.

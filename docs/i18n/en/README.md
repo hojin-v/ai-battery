@@ -1,6 +1,6 @@
 # AI Battery
 
-0.1.22: Default Codex setup leaves its command, PATH and configuration unchanged. `setup codex` removes legacy wrappers. Full `uninstall` restores integrations, then removes owned caches, runtimes and the current npm installation. Run `hash -r` in an existing Bash terminal if it cached a deleted wrapper (zsh: `rehash`).
+0.1.22: Default Codex setup preserves its command, PATH and configuration. `reset settings` restores AI Battery integrations and cleans owned files while keeping npm packages installed. Remove the package separately with npm. Existing Bash terminals may need `hash -r` after a legacy wrapper is removed.
 
 [한국어](../../../README.md) · [English](../en/) · [日本語](../ja/) · [中文](../zh/) · [Español](../es/)
 
@@ -111,7 +111,7 @@ ai-battery --version
 ai-battery --provider codex
 ai-battery --provider claude
 ai-battery setup
-ai-battery uninstall
+ai-battery reset settings
 ai-battery doctor
 ai-battery hud
 ai-battery off codex
@@ -129,34 +129,36 @@ ai-battery on codex
 
 `doctor` checks the installation state and the latest npm version. If the network is unavailable, only the version check is skipped and the rest of the diagnostics are still shown.
 
-## Uninstall
+<a id="uninstall"></a>
+## Reset Settings
 
-`off` only hides the display. Full `uninstall` restores integrations, removes verified AI Battery caches, private runtimes and aliases, then uninstalls its own npm package from the owning prefix. Development checkouts and temporary npx installations do not change an npm project.
+`ai-battery reset settings` restores settings changed by AI Battery and cleans its verified caches, private runtimes and generated files. It preserves unrelated Codex/Claude settings, npm packages and package commands. It does not reset all Codex or Claude settings to defaults.
 
 ```bash
-ai-battery uninstall
+ai-battery reset settings
 ```
 
-Use `ai-battery teardown` to remove integrations while keeping the npm package. You can also target one integration.
+`ai-battery reset config` is an alias. Select a target to restore only that integration and retain shared caches:
 
 ```bash
-ai-battery uninstall codex
-ai-battery uninstall claude
-ai-battery uninstall hud
+ai-battery reset settings codex
+ai-battery reset settings claude
+ai-battery reset settings hud
+ai-battery reset settings tmux
 ```
 
-This command cleans up the Codex wrapper managed by AI Battery, Codex `[tui].status_line`, Claude `statusLine`, HUD/menu bar autostart, and any running HUD. It does not touch a `codex` file created by another tool or a Claude `statusLine` created elsewhere. Recovery metadata is persisted before setup changes a user file. Unrelated Codex or Claude settings added afterward are preserved while only AI Battery's values are restored. If the managed status line itself or the wrapper file changed after setup, uninstall leaves it and its PATH/recovery metadata untouched and exits with status 1. A backed-up Codex command replaces the wrapper transactionally: the wrapper is parked until restoring the original succeeds. A terminal row in a Codex session already running inside the AI Battery wrapper disappears only after that session exits.
+Edited managed values or blocks are preserved with recovery records, and reset exits with status 1. Unrelated settings, user-added files, unknown files and edits outside managed shell/tmux blocks are preserved. Recovery records are cleared only after successful restoration or safe removal.
 
-Recovery metadata is cleared only after the corresponding item was restored or safely removed. For Claude, AI Battery stores only the previous `statusLine`, file-existence state, and file mode; it does not duplicate the complete `settings.json` or secrets it may contain. Automation should treat only an uninstall exit status of 0 as complete cleanup.
-
-Full uninstall proceeds to npm removal only after integration restoration succeeds. Edited managed blocks and unrecognized files are preserved and listed, together with recovery records. Other npm packages and user files in the same directories are preserved. Run separately for Windows and WSL installations.
+To remove the package, restore settings successfully first, then use npm. For a local installation use `npm uninstall ai-battery`; for a global installation:
 
 ```bash
-ai-battery uninstall
+ai-battery reset settings && npm uninstall -g ai-battery
 hash -r  # Existing Bash terminal; zsh: rehash
 ```
 
-A child CLI cannot clear its parent shell's cached command paths. Opening a new terminal also resets them. Modern npm does not run an external-integration uninstall lifecycle. If an older installation was removed with only `npm uninstall -g ai-battery`, reinstall the package and run `ai-battery uninstall` to restore integrations first.
+The CLI never runs npm uninstall automatically. `teardown` and `uninstall` remain compatibility aliases for settings reset. `off` only hides the display. Run separately for Windows, WSL and each Node installation. If npm was removed first, reinstall AI Battery and reset its integrations before removing it again.
+
+A child CLI cannot clear its parent shell's cached command paths. Opening a new terminal also resets them. A running wrapped session retains its terminal row until that session exits.
 
 ## Setup
 
@@ -175,7 +177,7 @@ ai-battery setup codex
 
 Use `ai-battery --watch 2` or `ai-battery hud` to display usage independently. For one wrapped session, run `ai-battery-run -- codex` on POSIX or `ai-battery-run-win -- codex` on Windows.
 
-Only `ai-battery setup codex --wrap-codex` installs a PATH wrapper. Changing Codex `[tui].status_line` also requires `--configure-codex-statusline`. Both are explicit options because they change the execution path or user configuration. Recovery metadata is recorded before managed changes and restored during uninstall.
+Only `ai-battery setup codex --wrap-codex` installs a PATH wrapper. Changing Codex `[tui].status_line` also requires `--configure-codex-statusline`. Both are explicit options because they change the execution path or user configuration. Recovery metadata is recorded before managed changes and restored by `reset settings`.
 
 Windows runners support the `composite` terminal row and native HUD layouts. These apply when explicitly launching `ai-battery-run-win` or opting into a wrapper. Default setup never installs a `codex.cmd` shim or changes Windows user PATH.
 
@@ -185,7 +187,7 @@ In tmux, reserving a bottom row in every pane would duplicate the same global ba
 ai-battery setup tmux
 ```
 
-This adds a managed block to `~/.tmux.conf`, displays the battery in `status-right` with a 10-second refresh interval, and lets `codex` inside tmux use the full pane instead of adding a per-pane battery row. Claude statusLine also collapses the battery row in the same environment and shows only the header row (model, directory, branch), because the battery is already in the tmux bar. To apply it, run `tmux source-file ~/.tmux.conf` and open a new pane. This block overwrites the existing `status-right` setting, so it is opt-in and not included in `setup all`. Remove it with `ai-battery uninstall tmux`; set `AI_BATTERY_TMUX=row` if you want to keep per-pane rows inside tmux. Claude statusLine is part of the Claude Code internal UI, so it is displayed regardless of tmux.
+This adds a managed block to `~/.tmux.conf`, displays the battery in `status-right` with a 10-second refresh interval, and lets `codex` inside tmux use the full pane instead of adding a per-pane battery row. Claude statusLine also collapses the battery row in the same environment and shows only the header row (model, directory, branch), because the battery is already in the tmux bar. To apply it, run `tmux source-file ~/.tmux.conf` and open a new pane. This block overwrites the existing `status-right` setting, so it is opt-in and not included in `setup all`. Remove it with `ai-battery reset settings tmux`; set `AI_BATTERY_TMUX=row` if you want to keep per-pane rows inside tmux. Claude statusLine is part of the Claude Code internal UI, so it is displayed regardless of tmux.
 
 Run diagnostics if the Codex bottom row does not appear.
 
@@ -247,7 +249,7 @@ ai-battery setup claude
 Remove:
 
 ```bash
-ai-battery uninstall-claude-statusline
+ai-battery reset settings claude
 ```
 
 Claude must deliver a statusLine payload at least once before the Claude usage cache is created. Until then, the Claude local log fallback is shown.

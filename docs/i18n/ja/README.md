@@ -1,6 +1,6 @@
 # AI Battery
 
-0.1.22: Codex の既定セットアップは実行コマンド・PATH・設定を変更しません。`setup codex` は旧 wrapper を解除します。`uninstall` は統合を復元してからキャッシュ・専用ランタイム・現在の npm パッケージを削除します。既存の Bash ターミナルでは `hash -r` を実行してください。
+0.1.22: Codex の既定セットアップは実行コマンド・PATH・設定を変更しません。`reset settings` は AI Battery の統合を復元して生成ファイルを整理します。npm パッケージは保持し、削除は npm で別途行います。
 
 [한국어](../../../README.md) · [English](../en/) · [日本語](../ja/) · [中文](../zh/) · [Español](../es/)
 
@@ -117,7 +117,7 @@ ai-battery --version
 ai-battery --provider codex
 ai-battery --provider claude
 ai-battery setup
-ai-battery uninstall
+ai-battery reset settings
 ai-battery doctor
 ai-battery hud
 ai-battery off codex
@@ -136,16 +136,21 @@ ai-battery on codex
 `doctor` はインストール状態と npm latest バージョンを確認します。ネットワークが使えない場合はバージョン確認だけをスキップし、その他の診断は続けて表示します。
 
 <a id="uninstall"></a>
-## アンインストール
+## Reset Settings
 
-`ai-battery uninstall` は管理対象の統合を復元し、AI Battery 所有のキャッシュ・専用ランタイム・別名・現在の npm インストールを削除します。開発 checkout と npx は npm プロジェクトを変更しません。編集済み・所有権不明のファイルは保護し、復旧情報を残して報告します。他の npm パッケージとユーザー設定は保持します。Windows と WSL はそれぞれ実行してください。
+`ai-battery reset settings` は AI Battery が変更した設定を元に戻し、所有権を確認したキャッシュ・専用ランタイム・生成ファイルを整理します。他の Codex/Claude 設定と npm パッケージは保持します。Codex/Claude の設定全体を初期化するコマンドではありません。`reset config` も同じ動作です。
 
 ```bash
-ai-battery uninstall
-hash -r  # Bash; zsh: rehash
+ai-battery reset settings
 ```
 
-CLI は親シェルのコマンドキャッシュを消去できません。新しいターミナルでも解消します。パッケージを残す場合は `ai-battery teardown`、一部だけなら `ai-battery uninstall codex` / `claude` / `hud` / `tmux` を使います。古い版を npm だけで削除した場合は再インストールしてから統合を解除してください。
+一部だけを復元する場合は `ai-battery reset settings codex` / `claude` / `hud` / `tmux` を使います。編集済み・所有権不明のファイルと未解決の復旧記録は保持します。
+
+パッケージの削除は設定復元に成功してから npm で行います。ローカルインストールは `npm uninstall ai-battery` を使います。`uninstall` と `teardown` は設定復元の互換別名で、npm は実行しません。Windows と WSL はそれぞれ実行してください。Bash のキャッシュは `hash -r`、zsh は `rehash` で消去できます。
+
+```bash
+ai-battery reset settings && npm uninstall -g ai-battery
+```
 
 <a id="setup"></a>
 ## セットアップ
@@ -165,7 +170,7 @@ tmux では pane ごとに下部行を予約すると、同じグローバルバ
 ai-battery setup tmux
 ```
 
-`~/.tmux.conf` に管理ブロックを追加し、status-right にバッテリーを表示します（10 秒間隔で更新）。この tmux 内で実行される `codex` は pane ごとのバッテリー行を省略し、pane 全体を使います。Claude statusLine も同じ環境ではバッテリー行を折りたたみ、ヘッダー（モデル、ディレクトリ、ブランチ）1 行だけを表示します。バッテリーはすでに tmux bar にあるためです。適用するには `tmux source-file ~/.tmux.conf` を実行し、新しい pane を開いてください。このブロックは既存の `status-right` 設定を上書きするため、`setup all` には含まれない opt-in です。解除は `ai-battery uninstall tmux`、tmux 内でも pane ごとの行を維持したい場合は `AI_BATTERY_TMUX=row` を設定します。Claude statusLine は Claude Code 内部 UI なので、tmux かどうかに関係なく表示されます。
+`~/.tmux.conf` に管理ブロックを追加し、status-right にバッテリーを表示します（10 秒間隔で更新）。この tmux 内で実行される `codex` は pane ごとのバッテリー行を省略し、pane 全体を使います。Claude statusLine も同じ環境ではバッテリー行を折りたたみ、ヘッダー（モデル、ディレクトリ、ブランチ）1 行だけを表示します。バッテリーはすでに tmux bar にあるためです。適用するには `tmux source-file ~/.tmux.conf` を実行し、新しい pane を開いてください。このブロックは既存の `status-right` 設定を上書きするため、`setup all` には含まれない opt-in です。解除は `ai-battery reset settings tmux`、tmux 内でも pane ごとの行を維持したい場合は `AI_BATTERY_TMUX=row` を設定します。Claude statusLine は Claude Code 内部 UI なので、tmux かどうかに関係なく表示されます。
 
 Codex の下部行が表示されない場合は診断を実行します。
 
@@ -219,7 +224,7 @@ ai-battery setup claude
 削除:
 
 ```bash
-ai-battery uninstall-claude-statusline
+ai-battery reset settings claude
 ```
 
 Claude が少なくとも一度 statusLine payload を渡すまで、Claude の使用量キャッシュは作成されません。それまでは Claude ローカルログベースの fallback が表示されます。
