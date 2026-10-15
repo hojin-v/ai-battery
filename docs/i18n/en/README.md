@@ -226,6 +226,10 @@ Use `--interval` to reduce the refresh interval.
 ai-battery-run --interval 1 --provider all codex
 ```
 
+The default Windows `composite` mode and the WSL/Linux/macOS status row poll usage in the background every 2 seconds by default. Terminal input and output continue during slow queries, and each poll can take up to 10 seconds. Failed polls retry after 1 second, with longer delays after consecutive failures. The previous reading is marked `[stale]` until a poll succeeds; failures before any successful reading display `AI Battery unavailable`.
+
+New or changed Codex usage logs invalidate the parsing cache for the next poll, even before its normal expiry. Values reflect the latest reading provided by local Codex logs and Claude statusLine, rather than a live server query. Delayed source updates can still delay the display. Use `ai-battery --show-paths` to inspect the data's observation time and source.
+
 ## Claude StatusLine
 
 Claude Code provides rate-limit usage and reset times through the built-in `statusLine` hook. AI Battery combines that with actual 429 rate-limit hit records from Claude JSONL. After installation, Claude renders two lines.

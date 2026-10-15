@@ -232,6 +232,10 @@ ai-battery-run --provider all codex
 ai-battery-run --interval 1 --provider all codex
 ```
 
+Windows 기본 `composite` 모드와 WSL/Linux/macOS 상태줄은 기본 2초 간격으로 사용량을 백그라운드에서 조회합니다. 조회가 느려져도 터미널 입력과 출력은 계속 전달되며, 각 조회는 최대 10초까지 기다립니다. 실패하면 1초 뒤부터 다시 시도하고, 연속 실패 시 재시도 간격을 늘립니다. 이전 정상 값에는 `[stale]`을 붙여 갱신 실패를 알리고, 다음 조회가 성공하면 새 값으로 바꿉니다. 첫 정상 값을 얻기 전에 조회가 실패하면 `AI Battery unavailable`을 표시합니다.
+
+Codex 사용량 로그가 추가·변경되면 기존 캐시의 유효 시간이 남아 있어도 다음 조회에서 다시 읽습니다. 표시되는 값은 로컬 Codex 로그와 Claude statusLine이 마지막으로 제공한 사용량이며, 서버를 직접 조회하는 실시간 사용량은 아닙니다. 로그나 statusLine 자체가 늦게 갱신되면 표시도 늦어질 수 있습니다. `ai-battery --show-paths`로 데이터 관측 시각과 출처를 확인할 수 있습니다.
+
 ## Claude StatusLine
 
 Claude Code는 내장 `statusLine` hook을 통해 rate-limit 사용률과 reset 시각을 제공합니다. AI Battery는 여기에 Claude JSONL의 실제 429 rate-limit hit 기록을 함께 반영합니다. 설치 후 Claude는 두 줄을 렌더링합니다.

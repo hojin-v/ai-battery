@@ -1,6 +1,6 @@
 {
   "name": "ai-battery",
-  "version": "0.1.20",
+  "version": "0.1.21",
   "description": "Tiny terminal battery meter for local Codex and Claude Code usage.",
   "type": "module",
   "keywords": [
@@ -58,8 +58,7 @@
     "node": ">=18"
   },
   "dependencies": {
-    "@xterm/headless": "6.0.0",
-    "ai-battery": "^0.1.19"
+    "@xterm/headless": "6.0.0"
   },
   "optionalDependencies": {
     "node-pty": "1.1.0"

@@ -1,62 +1,64 @@
 # npm release
 
-The current release candidate is **0.1.20**. `latest` on npm was checked as **0.1.19** on 2026-10-09. Publishing the same name/version twice is not allowed.
+The current release candidate is **0.1.21**, prepared from the 0.1.20 main branch. npm `latest` was checked as **0.1.20** on 2026-10-15. This preparation does not publish to npm or create a release tag.
 
-0.1.20 configures the bundled node-pty ConPTY input pipe for blocking writes before forwarding terminal replies or keyboard input. Nonblocking pipe writes can otherwise return EAGAIN and destroy an unhandled Socket. If the installed transport cannot be configured, the compositor closes its child and falls back to native execution. The actual Codex fullscreen fixture passed all 13 checks after the change; the user's intermittent crash has not been independently reproduced.
+## Changes in 0.1.21
 
-Preflight on 2026-10-09 passed 105 Windows tests (24 platform skips) and 117 WSL tests (12 platform skips). The installed tarball passed all 13 actual Codex 0.161.0 fullscreen checks under system Node 22.15.1 with automatic private-runtime selection. A fresh official runtime download, SHA256 verification, extraction and launch also passed. Windows and WSL installed CLI readings were checked against the same shared account usage. npm publication and remote Git changes remain pending.
+- Windows default PTY composition and POSIX terminal rows poll every 2 seconds by default. POSIX polling runs asynchronously so usage scans do not block terminal input or output.
+- Polls allow up to 10 seconds by default. Failed updates retry after 1 second, with backoff for repeated failures. A retained reading is marked `[stale]`; an initial failure displays `AI Battery unavailable`.
+- New and changed Codex session logs invalidate the parsing cache before its normal expiry. Account usage sharing between Windows and WSL, separate session stores, and existing runtime selection are preserved.
+- WSL reuses a brief Windows process scan cache. A known active Codex does not require another process scan just to fetch its usage.
+- The package no longer depends on an older copy of `ai-battery` itself.
 
-The final focused Windows regression uses separate Node 22 and 24.21 installations and compares the original npm launcher with the compositor launcher: Codex Node, unchanged PATH, npm selection, simulated update destination, and the next launch agree in both PATH orders. Removing both original Nodes fails on both paths rather than using the private display Node to rescue Codex. Updates in this test use temporary fixtures, not the production Codex installation or npm registry. A PATH that already mixes one installation's Codex with another installation's npm can still mismatch without AI Battery; the wrapper preserves that original selection.
+Values remain the latest usage reported by local Codex logs and Claude statusLine. They are not direct live server measurements; delayed source updates can delay the display.
 
-## Changes
+## Validation
 
-- Codex wrappers on Windows and POSIX resolve the original command from the caller's current PATH, skipping AI Battery wrappers. Node version changes do not pin Codex to an older installation.
-- Windows defaults to Fullscreen PTY composition with a terminal battery row. Rendering preserves Codex's footer, battery styles and ordered output without serial parser delays.
-- On Windows, a private verified Node 24.21.0 runtime is prepared on first interactive launch if the caller's Node lacks VT raw input. It does not replace system Node or change PATH. Runtime/dependency failures fall back to the existing native HUD.
-- Account rate-limit selection ignores model-specific empty buckets. Windows and WSL share the latest account usage while preserving separate Codex session stores. Both installations must be updated.
-- Windows Terminal padding is not modified by setup. The local padding adjustment is not a package dependency.
+The integrated candidate passed the following checks on 2026-10-15:
+
+| Check | Result |
+| --- | --- |
+| WSL `npm run check` | 133 passed, 15 platform skips, 0 failures |
+| Windows native Node 22.23.2 `node --test` | 117 passed, 31 platform skips, 0 failures |
+| Focused polling and freshness tests | Slow polls, failed/empty/partial/oversized output, automatic recovery, zero remaining, new sessions, and cache invalidation |
+
+Tarball installation results, package contents, and checksums are saved with the local release artifacts under `.cache/releases/0.1.21/`. Windows ARM64 still requires a device check; native verification here uses x64.
 
 ## Prepare
 
-```powershell
+```text
 npm run check
 npm pack --dry-run
-npm pack
+npm pack --pack-destination .cache/releases/0.1.21
 ```
 
-Inspect the package file list. Screenshots, logs, credentials, local runtime binaries and `.cache` must not be included. Test the tarball with a clean installation and test Windows runtime switching, POSIX PATH switching, and shared usage. Windows ARM64 runtime paths are supported but require a device check; the release's manual Windows verification used x64.
+Inspect the package file list. It must include `lib`, the bin entrypoints and required PowerShell modules. Screenshots, logs, credentials, local runtime binaries, tests and `.cache` must not be included. Test the exact tarball with a clean installation on Windows and POSIX. On Windows, also run `npm run smoke:composite` and `npm run smoke:codex-fullscreen-win` against the installed runner; the Codex fixture uses a local mock server and does not consume account quota.
 
 ## Publish manually
 
-```powershell
+```text
 npm login
 npm whoami
-npm publish ./ai-battery-0.1.20.tgz --access public --tag latest
+npm publish .cache/releases/0.1.21/ai-battery-0.1.21.tgz --access public --tag latest
 npm view ai-battery version dist-tags --json
 ```
 
-Use the exact tested tarball. Complete npm's authentication/2FA prompt when requested. This repository's preflight does not perform `npm login` or `npm publish` automatically. If 0.1.20 has already been published by the time you release, increment the package version and repeat the preparation.
+Use the exact tested tarball. Complete npm's authentication/2FA prompt when requested. Publishing the same name/version twice is not allowed. If 0.1.21 is already published when you release, increment the version and repeat preparation. Use `--tag next` instead of `--tag latest` for a preview release.
 
-For a preview instead of replacing `latest`:
-
-```powershell
-npm publish ./ai-battery-0.1.20.tgz --access public --tag next
-```
-
-After a successful publication, tag the tested commit (`v0.1.20`), push the release commit/tag, and remove merged remote feature branches. Do not delete the remote test branch before the integrated release commit reaches the remote main branch.
+After successful publication, tag the tested commit (`v0.1.21`) and push the release tag. Keep the remote release branch until the release commit is integrated into main.
 
 ## Update installed integrations
 
-Run this separately in Windows and WSL:
+Run separately in Windows and WSL:
 
 ```text
-npm install -g ai-battery@0.1.20
+npm install -g ai-battery@0.1.21
 ai-battery setup codex
 ai-battery doctor
 ```
 
-Restart the terminal session after updating. A running PTY wrapper retains its loaded code. Existing local custom wrappers must be regenerated by setup to adopt PATH lookup and private runtime selection.
+Restart the terminal session after updating. A running PTY wrapper retains its loaded code. Existing managed wrappers must be regenerated by setup to adopt the current integration.
 
-The private Windows runtime lives under `%LOCALAPPDATA%\ai-battery\runtimes` by default, or the selected AI Battery data directory. `AI_BATTERY_RUNTIME_DOWNLOAD=0` disables downloading. An interrupted preparation lock expires after five minutes; downloads and extracted staging files are cleaned after completion/failure.
+The private Windows runtime lives under `%LOCALAPPDATA%\ai-battery\runtimes` by default, or the selected AI Battery data directory. `AI_BATTERY_RUNTIME_DOWNLOAD=0` disables downloading. System Node, PATH and the original Codex installation are preserved.
 
 Official npm references: [publish](https://docs.npmjs.com/cli/v11/commands/npm-publish/), [login](https://docs.npmjs.com/cli/v11/commands/npm-login/).
