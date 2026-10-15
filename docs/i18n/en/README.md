@@ -1,6 +1,6 @@
 # AI Battery
 
-0.1.19 update: Codex wrappers follow the current PATH. Windows defaults to PTY composition, using a private verified Node 24.21.0 when VT input support is missing; failure falls back to the native HUD. Update both Windows and WSL installations to share the latest account usage. Terminal padding is a local setting and is not changed by the package.
+0.1.22: Default Codex setup leaves its command, PATH and configuration unchanged. `setup codex` removes legacy wrappers. Full `uninstall` restores integrations, then removes owned caches, runtimes and the current npm installation. Run `hash -r` in an existing Bash terminal if it cached a deleted wrapper (zsh: `rehash`).
 
 [한국어](../../../README.md) · [English](../en/) · [日本語](../ja/) · [中文](../zh/) · [Español](../es/)
 
@@ -55,7 +55,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | `ai-battery --watch` | Supported | Supported | Supported | Supported | Refreshes periodically inside the terminal. |
 | Claude statusLine | Supported | Supported | Supported | Supported | Saves a `node <script>` command to Claude Code `statusLine`. |
 | Codex fullscreen | Supported | Supported | Supported | Supported | Windows: fullscreen PTY composition; WSL/Linux/macOS: POSIX PTY and Python 3. |
-| `ai-battery setup codex` | Supported | Supported | Supported | Supported | Configures Codex `[tui].status_line` and installs a `codex.cmd` wrapper on Windows or a POSIX shell wrapper on WSL/Linux/macOS. |
+| `ai-battery setup codex` | Supported | Supported | Supported | Supported | Removes legacy AI Battery wrappers. New wrappers and Codex setting changes require explicit flags. |
 | `ai-battery hud` | Supported | Supported | Unsupported | Supported | Windows/WSL use a PowerShell/WinForms HUD; macOS uses a menu bar status item. |
 
 Runtime detection uses `/proc` on Linux/WSL, `ps` on macOS, and PowerShell process listings on Windows. Text output uses white/gray, while the macOS HUD highlights only running items with colored battery bars and shows inactive items in muted gray.
@@ -82,7 +82,7 @@ The previous command names, `claudex-battery`, `claudex-battery-run`, and `claud
    npm install -g ai-battery
    ```
 
-2. Set up automatic display for Claude and Codex.
+2. Configure the Claude statusLine and remove any legacy Codex wrapper.
 
    ```bash
    ai-battery setup
@@ -95,7 +95,7 @@ The previous command names, `claudex-battery`, `claudex-battery-run`, and `claud
    codex
    ```
 
-4. Start the desktop HUD or macOS menu bar display when you need it.
+4. View Codex usage with `ai-battery --watch 2` in another terminal, or start the Windows/WSL/macOS HUD.
 
    ```bash
    ai-battery hud
@@ -131,13 +131,13 @@ ai-battery on codex
 
 ## Uninstall
 
-`off` only hides the display. `uninstall` removes the integration points created by `setup` and HUD autostart.
+`off` only hides the display. Full `uninstall` restores integrations, removes verified AI Battery caches, private runtimes and aliases, then uninstalls its own npm package from the owning prefix. Development checkouts and temporary npx installations do not change an npm project.
 
 ```bash
 ai-battery uninstall
 ```
 
-You can remove only part of the integration as well.
+Use `ai-battery teardown` to remove integrations while keeping the npm package. You can also target one integration.
 
 ```bash
 ai-battery uninstall codex
@@ -149,18 +149,18 @@ This command cleans up the Codex wrapper managed by AI Battery, Codex `[tui].sta
 
 Recovery metadata is cleared only after the corresponding item was restored or safely removed. For Claude, AI Battery stores only the previous `statusLine`, file-existence state, and file mode; it does not duplicate the complete `settings.json` or secrets it may contain. Automation should treat only an uninstall exit status of 0 as complete cleanup.
 
-Modern npm does not run the package uninstall lifecycle, so `npm uninstall ai-battery` or `npm uninstall -g ai-battery` alone cannot automatically clean up external integration points. To remove everything, run this before deleting the npm package.
+Full uninstall proceeds to npm removal only after integration restoration succeeds. Edited managed blocks and unrecognized files are preserved and listed, together with recovery records. Other npm packages and user files in the same directories are preserved. Run separately for Windows and WSL installations.
 
 ```bash
 ai-battery uninstall
-npm uninstall -g ai-battery
+hash -r  # Existing Bash terminal; zsh: rehash
 ```
 
-If you already removed the npm package first, install it again and run `ai-battery uninstall`, or manually check and remove these items: the Codex wrapper created by AI Battery, the `# >>> ai-battery setup >>>` block in shell rc files, Codex `~/.codex/config.toml` `[tui].status_line`, Claude `statusLine`, and HUD/menu bar autostart.
+A child CLI cannot clear its parent shell's cached command paths. Opening a new terminal also resets them. Modern npm does not run an external-integration uninstall lifecycle. If an older installation was removed with only `npm uninstall -g ai-battery`, reinstall the package and run `ai-battery uninstall` to restore integrations first.
 
 ## Setup
 
-Run `setup` once. It installs a statusLine hook for Claude Code and sets up Codex with a default status line plus a platform wrapper, so you can keep launching the original commands afterward.
+`setup` configures the Claude statusLine hook. Codex runs independently by default: setup restores legacy AI Battery integrations without adding a new wrapper, PATH entry or Codex configuration change.
 
 ```bash
 ai-battery setup
@@ -173,11 +173,11 @@ ai-battery setup claude
 ai-battery setup codex
 ```
 
-Codex setup configures `model-with-reasoning`, `current-dir`, and `git-branch` status line entries under `[tui]` in `~/.codex/config.toml`. Existing values are backed up for uninstall recovery. The Codex wrapper does not directly overwrite the existing `codex` command. If `~/.local/bin` already appears before the original `codex` on PATH and `~/.local/bin/codex` is empty or managed by AI Battery, the wrapper is placed there so it is picked up immediately. Otherwise, a managed wrapper is created at `~/.local/share/ai-battery/bin/codex`, and this directory is prepended to PATH in shell configuration when needed. If a shared location such as `~/.local/bin/codex` already contains another file, it is not overwritten. New terminals will automatically run `codex` with the AI Battery bottom row. If you already ran `codex` in the same terminal, the shell command cache may require one `hash -r`; if PATH needs to be updated, run the `source ...` command printed by `setup`.
+Use `ai-battery --watch 2` or `ai-battery hud` to display usage independently. For one wrapped session, run `ai-battery-run -- codex` on POSIX or `ai-battery-run-win -- codex` on Windows.
 
-Windows defaults to `composite`: PATH-selected Codex runs in bundled ConPTY, and `@xterm/headless` composes its fullscreen display above one battery row. If Windows VT raw input is unavailable, a private SHA256-verified Node 24.21.0 is installed without changing system Node or PATH. Runtime/dependency failure falls back to the native HUD. `auto` selects composite; `fullscreen`/`hud` explicitly select the HUD. `plain` disables the display. Legacy rowpty modes remain opt-in.
+Only `ai-battery setup codex --wrap-codex` installs a PATH wrapper. Changing Codex `[tui].status_line` also requires `--configure-codex-statusline`. Both are explicit options because they change the execution path or user configuration. Recovery metadata is recorded before managed changes and restored during uninstall.
 
-Windows defaults to `composite`: PATH-selected Codex runs in bundled ConPTY, and `@xterm/headless` composes its fullscreen display above one battery row. If Windows VT raw input is unavailable, a private SHA256-verified Node 24.21.0 is installed without changing system Node or PATH. Runtime/dependency failure falls back to the native HUD. `auto` selects composite; `fullscreen`/`hud` explicitly select the HUD. `plain` disables the display. Legacy rowpty modes remain opt-in.
+Windows runners support the `composite` terminal row and native HUD layouts. These apply when explicitly launching `ai-battery-run-win` or opting into a wrapper. Default setup never installs a `codex.cmd` shim or changes Windows user PATH.
 
 In tmux, reserving a bottom row in every pane would duplicate the same global battery as many times as there are panes. Instead, you can show it once per session in the tmux status bar.
 
@@ -208,16 +208,11 @@ This setting applies to the CLI, Claude statusLine, Codex wrapper, and HUD toget
 
 ## Codex Terminal Row
 
-`ai-battery setup` configures Codex's own status line as `model/reasoning effort · workspace · git branch`. Usage display is handled by a separate `codex` wrapper, so users can type `codex` as usual and `ai-battery-run` runs Codex inside a PTY that is one line shorter.
+Plain `codex` runs independently of AI Battery. Use `ai-battery --watch 2` or a supported desktop HUD to view usage separately. Add a row for one session explicitly:
 
 ```bash
-codex
-```
-
-Advanced users who need to run the wrapper directly can use this command.
-
-```bash
-ai-battery-run --provider all codex
+ai-battery-run --provider all -- codex       # WSL/Linux/macOS
+ai-battery-run-win --provider all -- codex   # Windows cmd/PowerShell
 ```
 
 Use `--interval` to reduce the refresh interval.

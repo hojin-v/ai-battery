@@ -106,6 +106,16 @@ test("missing Codex never prompts or runs npm or brew, including in a terminal",
   }
 });
 
+test("a Python runner without Python on PATH falls through to the original Codex", terminalOnly, (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(f.oldRunner, "#!/usr/bin/env python3\nraise SystemExit('must not run')\n", { mode: 0o755 });
+  const result = runInTerminal(f, ["resume", "session id"]);
+  assert.equal(result.status, 23, result.stderr + result.stdout);
+  assert.match(result.stdout, /active\r?\n/);
+  assert.match(result.stdout, /wrapped:\r?\n/);
+  assert.match(result.stdout, /arg:session id/);
+});
+
 test("an earlier PATH install wins over Codex beside the active Node", posixOnly, (t) => {
   const f = fixture(t);
   installNodeCodex(f, f.activeBin);

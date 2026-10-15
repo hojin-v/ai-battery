@@ -1,6 +1,6 @@
 # AI Battery
 
-0.1.19 update: Codex wrappers follow the current PATH. Windows defaults to PTY composition, using a private verified Node 24.21.0 when VT input support is missing; failure falls back to the native HUD. Update both Windows and WSL installations to share the latest account usage. Terminal padding is a local setting and is not changed by the package.
+0.1.22：默认 Codex 设置不修改执行命令、PATH 或配置。`setup codex` 会解除旧 wrapper。完整 `uninstall` 恢复集成后删除自有缓存、专用运行时和当前 npm 安装。现有 Bash 终端请运行 `hash -r`。
 
 [한국어](../../../README.md) · [English](../en/) · [日本語](../ja/) · [中文](../zh/) · [Español](../es/)
 
@@ -58,7 +58,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | `ai-battery --watch` | 支持 | 支持 | 支持 | 支持 | 在终端内周期性刷新。 |
 | Claude statusLine | 支持 | 支持 | 支持 | 支持 | 将 `node <script>` 命令保存到 Claude Code `statusLine`。 |
 | Codex terminal row | 支持 | 支持 | 支持 | 支持 | Windows: fullscreen PTY composition; WSL/Linux/macOS: POSIX PTY and Python 3. |
-| `ai-battery setup codex` | 支持 | 支持 | 支持 | 支持 | 配置 Codex `[tui].status_line`，并在 Windows 上安装 `codex.cmd` wrapper，在 WSL/Linux/macOS 上安装 POSIX shell wrapper。 |
+| `ai-battery setup codex` | 支持 | 支持 | 支持 | 支持 | 解除旧 AI Battery wrapper。新 wrapper 和 Codex 配置修改需要显式选项。 |
 | `ai-battery hud` | 支持 | 支持 | 不支持 | 支持 | Windows/WSL 使用 PowerShell/WinForms HUD，macOS 使用 menu bar status item。 |
 
 运行中检测在 Linux/WSL 上使用 `/proc`，在 macOS 上使用 `ps`，在 Windows 上使用 PowerShell 进程列表。文本输出使用白色/灰色；macOS HUD 只用彩色电量条突出正在运行的项目，未运行项目则使用淡灰色显示。
@@ -87,7 +87,7 @@ npx ai-battery
    npm install -g ai-battery
    ```
 
-2. 设置 Claude 和 Codex 自动显示。
+2. 配置 Claude statusLine，并解除旧 Codex wrapper。
 
    ```bash
    ai-battery setup
@@ -100,7 +100,7 @@ npx ai-battery
    codex
    ```
 
-4. 如果需要桌面 HUD 或 macOS menu bar 显示，请启动它。
+4. 使用 `ai-battery --watch 2` 或支持平台上的 HUD 查看 Codex 用量。
 
    ```bash
    ai-battery hud
@@ -138,50 +138,26 @@ ai-battery on codex
 <a id="uninstall"></a>
 ## 卸载
 
-`off` 只是隐藏显示，`uninstall` 会移除 `setup` 和 HUD autostart 创建的集成点。
+`ai-battery uninstall` 恢复受管理的集成，然后删除属于 AI Battery 的缓存、专用运行时、别名和当前 npm 安装。开发 checkout 和 npx 不修改 npm 项目。已修改或无法确认归属的文件会保留并报告，同时保留恢复记录。其他 npm 包和用户配置会保留。Windows 与 WSL 请分别运行。
 
 ```bash
 ai-battery uninstall
+hash -r  # Bash; zsh: rehash
 ```
 
-也可以只移除其中一部分。
-
-```bash
-ai-battery uninstall codex
-ai-battery uninstall claude
-ai-battery uninstall hud
-```
-
-此命令会清理由 AI Battery 管理的 Codex wrapper、Codex `[tui].status_line`、Claude `statusLine`、HUD/menu bar autostart 以及正在运行的 HUD。它不会触碰其他工具创建的 `codex` 文件或 Claude `statusLine`。如果 Codex config 在 setup 后被用户修改过，会安全地保留原样。如果旧版本或 `--force` 备份过已有文件，会尽可能恢复原始文件或 symlink。当前已经在 AI Battery wrapper 中运行的 Codex 会话，其 terminal row 只有在该会话结束后才会消失。
-
-新版 npm 不会执行包的 uninstall lifecycle，因此仅运行 `npm uninstall ai-battery` 或 `npm uninstall -g ai-battery` 无法自动清理外部集成点。要完全移除，请先运行：
-
-```bash
-ai-battery uninstall
-npm uninstall -g ai-battery
-```
-
-如果已经先删除了 npm 包，请重新安装后运行 `ai-battery uninstall`，或手动检查并删除以下项目：AI Battery 创建的 Codex wrapper、shell rc 中的 `# >>> ai-battery setup >>>` block、Codex `~/.codex/config.toml` 中的 `[tui].status_line`、Claude `statusLine`、HUD/menu bar autostart。
+CLI 无法清除父 shell 的命令缓存，打开新终端也可解决。保留包时使用 `ai-battery teardown`；只解除部分集成时使用 `ai-battery uninstall codex` / `claude` / `hud` / `tmux`。旧版本若只通过 npm 删除，请重新安装后先恢复集成。
 
 <a id="setup"></a>
 ## 设置
 
-`setup` 只需要运行一次。它会为 Claude Code 安装 statusLine hook，并为 Codex 安装默认 status line 配置和平台 wrapper，因此之后可以继续像原来一样运行命令。
+`setup` 配置 Claude statusLine hook。Codex 默认独立运行，只恢复旧 AI Battery wrapper 和受管理配置。使用 `ai-battery --watch 2` 或支持平台上的 `ai-battery hud` 查看用量。
 
 ```bash
 ai-battery setup
-```
-
-也可以只设置其中一部分。
-
-```bash
-ai-battery setup claude
 ai-battery setup codex
 ```
 
-Codex setup 会在 `~/.codex/config.toml` 的 `[tui]` 中设置 `model-with-reasoning`、`current-dir`、`git-branch` status line。已有值会备份，以便 uninstall 时恢复。Codex wrapper 不会直接覆盖现有的 `codex` 命令。如果 `~/.local/bin` 已经在 PATH 中位于原始 `codex` 之前，并且 `~/.local/bin/codex` 为空或由 AI Battery 管理，则 wrapper 会放在该位置以便立即生效。否则会在 `~/.local/share/ai-battery/bin/codex` 创建受管理的 wrapper，并在需要时将该目录添加到 shell 配置中 PATH 的前部。如果 `~/.local/bin/codex` 这类公共位置已经存在其他文件，则不会覆盖。新的终端会自动以 AI Battery 下方状态行运行 `codex`。如果同一终端中已经运行过 `codex`，shell 缓存可能需要执行一次 `hash -r`；如果需要追加 PATH，请执行 `setup` 输出中显示的 `source ...` 命令。
-
-Windows defaults to `composite`: PATH-selected Codex runs in bundled ConPTY, and `@xterm/headless` composes its fullscreen display above one battery row. If Windows VT raw input is unavailable, a private SHA256-verified Node 24.21.0 is installed without changing system Node or PATH. Runtime/dependency failure falls back to the native HUD. `auto` selects composite; `fullscreen`/`hud` explicitly select the HUD. `plain` disables the display. Legacy rowpty modes remain opt-in.
+只有 `ai-battery setup codex --wrap-codex` 才安装 PATH wrapper。修改 Codex `[tui].status_line` 还需要 `--configure-codex-statusline`。Windows runner 的 composite/HUD 仅适用于直接运行 runner 或显式选择 wrapper 的情况。
 
 在 tmux 中，如果每个 pane 都预留下方一行，同一个全局电量状态会按 pane 数量重复显示。可以改为在 tmux status bar 中每个 session 只显示一次。
 
@@ -213,22 +189,11 @@ ai-battery on all
 <a id="codex-terminal-row"></a>
 ## Codex 终端行
 
-`ai-battery setup` 会将 Codex 自身的 status line 配置为 `模型/推理强度 · 工作区 · git branch`。使用量显示由单独的 `codex` wrapper 负责，因此用户只需像平常一样输入 `codex`，`ai-battery-run` 就会在内部以少一行的 PTY 运行 Codex。
+普通 `codex` 不经过 AI Battery。仅为一个会话添加下方状态行时运行：
 
 ```bash
-codex
-```
-
-需要直接运行 wrapper 的高级用户可以使用以下命令。
-
-```bash
-ai-battery-run --provider all codex
-```
-
-要缩短刷新周期，请使用 `--interval`。
-
-```bash
-ai-battery-run --interval 1 --provider all codex
+ai-battery-run --provider all -- codex       # WSL/Linux/macOS
+ai-battery-run-win --provider all -- codex   # Windows cmd/PowerShell
 ```
 
 <a id="claude-statusline"></a>

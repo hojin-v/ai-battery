@@ -77,6 +77,10 @@ ai_battery_find_command() {
 ai_battery_usable_runner() {
   [ -f "$1" ] && [ -x "$1" ] || return 1
   ai_battery_runner_target=$(ai_battery_realpath "$1") || return 1
+  ai_battery_runner_header=$("$ai_battery_head" -c 64 "$ai_battery_runner_target" 2>/dev/null) || return 1
+  case "$ai_battery_runner_header" in
+    '#!/usr/bin/env python3'*) command -v python3 >/dev/null 2>&1 || return 1 ;;
+  esac
   case "$ai_battery_runner_target" in
     */versions/node/*) ai_battery_nvm_node "$ai_battery_runner_target" >/dev/null ;;
     *) return 0 ;;

@@ -1,6 +1,6 @@
 # AI Battery
 
-0.1.19: Codex wrapper는 현재 PATH를 따릅니다. nvm 등의 전환 후 새 Codex를 고정된 이전 경로 대신 실행합니다. Windows·WSL 사용량 공유 수정도 포함하므로 양쪽 설치를 업데이트하세요. Windows Terminal padding 변경은 로컬 표시 조정이며, 패키지는 사용자 터미널 설정을 자동 변경하지 않습니다.
+0.1.22: 기본 Codex 설치는 실행 명령·PATH·설정을 변경하지 않습니다. 이전 wrapper는 `setup codex`로 해제할 수 있고, 전체 `uninstall`은 통합 복원 후 캐시·전용 런타임·현재 npm 설치도 제거합니다. 기존 Bash 터미널에 삭제된 wrapper 경로가 남았다면 `hash -r`을 실행하세요.
 
 [한국어](README.md) · [English](docs/i18n/en/) · [日本語](docs/i18n/ja/) · [中文](docs/i18n/zh/) · [Español](docs/i18n/es/)
 
@@ -55,7 +55,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | `ai-battery --watch` | 지원 | 지원 | 지원 | 지원 | 터미널 안에서 주기적으로 갱신합니다. |
 | Claude statusLine | 지원 | 지원 | 지원 | 지원 | Claude Code `statusLine`에 `node <script>` 명령을 저장합니다. |
 | Codex fullscreen | 지원 | 지원 | 지원 | 지원 | Windows 기본값은 Fullscreen PTY 화면과 터미널 배터리 행을 합성합니다. WSL/Linux/macOS는 POSIX PTY와 `python3`를 사용합니다. |
-| `ai-battery setup codex` | 지원 | 지원 | 지원 | 지원 | Codex `[tui].status_line`을 맞추고, Windows는 `codex.cmd` wrapper, WSL/Linux/macOS는 POSIX shell wrapper를 설치합니다. |
+| `ai-battery setup codex` | 지원 | 지원 | 지원 | 지원 | 기존 AI Battery wrapper를 해제합니다. 새 wrapper나 Codex 설정 변경은 명시적 옵션이 필요합니다. |
 | `ai-battery hud` | 지원 | 지원 | 미지원 | 지원 | Windows/WSL은 PowerShell/WinForms HUD, macOS는 menu bar status item입니다. |
 
 실행 중 감지는 Linux/WSL은 `/proc`, macOS는 `ps`, Windows는 PowerShell 프로세스 목록을 사용합니다. 텍스트 출력은 흰색/회색으로, macOS HUD는 실행 중인 항목만 색상 배터리바로 강조하고 비실행 항목은 흐린 회색 계열로 표시합니다.
@@ -82,7 +82,7 @@ npx ai-battery
    npm install -g ai-battery
    ```
 
-2. Claude와 Codex 자동 표시를 설정합니다.
+2. Claude statusLine을 설정하고, 기존 Codex wrapper가 있으면 해제합니다.
 
    ```bash
    ai-battery setup
@@ -95,7 +95,7 @@ npx ai-battery
    codex
    ```
 
-4. 데스크톱 HUD나 macOS menu bar 표시가 필요하면 실행합니다.
+4. Codex 사용량은 별도 터미널의 `ai-battery --watch 2`, 또는 Windows/WSL/macOS HUD로 확인합니다.
 
    ```bash
    ai-battery hud
@@ -131,13 +131,13 @@ ai-battery on codex
 
 ## Uninstall
 
-`off`는 표시만 숨기는 설정이고, `uninstall`은 `setup`과 HUD autostart가 만든 통합 지점을 제거합니다.
+`off`는 표시만 숨깁니다. 인자 없는 `uninstall`은 통합을 복원하고, 소유권을 확인한 AI Battery 캐시·전용 런타임·별칭과 현재 실행 중인 npm 설치까지 제거합니다. 개발 checkout이나 임시 npx 실행에서는 npm 프로젝트를 삭제하지 않습니다.
 
 ```bash
 ai-battery uninstall
 ```
 
-일부만 제거할 수도 있습니다.
+통합만 해제하고 패키지는 유지하려면 `ai-battery teardown`을 사용합니다. 아래처럼 특정 통합만 제거할 수도 있습니다.
 
 ```bash
 ai-battery uninstall codex
@@ -149,18 +149,18 @@ ai-battery uninstall hud
 
 복구 기록은 `ai-battery uninstall`이 해당 항목을 성공적으로 복원하거나 안전하게 제거한 뒤에만 지워집니다. Claude는 기존 `statusLine`과 파일 존재 여부·권한만 저장하며 `settings.json` 전체를 복제하지 않으므로 다른 설정이나 비밀값을 백업 파일에 중복 보관하지 않습니다. JSON 결과나 종료 코드를 확인하는 자동화에서는 0일 때만 완전한 정리로 간주하세요.
 
-최신 npm은 패키지의 uninstall lifecycle을 실행하지 않기 때문에 `npm uninstall ai-battery` 또는 `npm uninstall -g ai-battery`만으로는 외부 통합 지점을 자동 정리할 수 없습니다. 완전히 제거하려면 npm 패키지를 지우기 전에 먼저 실행하세요.
+전체 삭제는 통합 복원에 성공한 경우에만 npm 제거로 진행합니다. 수정된 관리 블록, 확인할 수 없는 파일과 복구 기록은 보존하고 결과에 경로를 표시합니다. 같은 폴더에 사용자가 추가한 파일이나 다른 npm 패키지는 삭제하지 않습니다. Windows와 WSL에 각각 설치했다면 각 설치에서 실행하세요.
 
 ```bash
 ai-battery uninstall
-npm uninstall -g ai-battery
+hash -r  # Bash: 기존 터미널의 삭제된 wrapper 경로 캐시 해제 (zsh: rehash)
 ```
 
-이미 npm 패키지를 먼저 지운 뒤라면, 다시 설치한 다음 `ai-battery uninstall`을 실행하거나 아래 항목을 직접 확인해 제거해야 합니다: AI Battery가 만든 Codex wrapper, shell rc의 `# >>> ai-battery setup >>>` block, Codex `~/.codex/config.toml`의 `[tui].status_line`, Claude `statusLine`, HUD/menu bar autostart.
+자식 프로세스인 CLI는 부모 셸의 명령 캐시를 지울 수 없습니다. 새 터미널을 열어도 캐시는 초기화됩니다. 현대 npm은 외부 통합을 정리하는 uninstall lifecycle을 실행하지 않으므로 `npm uninstall -g ai-battery`만 실행했던 구버전 사용자는 패키지를 다시 설치하고 `ai-battery uninstall`로 통합부터 정리하세요.
 
 ## Setup
 
-`setup`은 한 번만 실행합니다. Claude Code에는 statusLine hook을 설치하고, Codex에는 기본 status line 구성과 platform wrapper를 설치해서 이후에는 추가 명령 없이 원래처럼 실행하게 합니다.
+`setup`은 Claude Code의 statusLine hook을 설정합니다. Codex는 기본적으로 독립 실행을 유지하며, 이전 버전의 AI Battery wrapper와 변경된 설정만 복원합니다. 원래 `codex` 실행 파일·PATH·설정에 새 변경을 추가하지 않습니다.
 
 ```bash
 ai-battery setup
@@ -173,7 +173,11 @@ ai-battery setup claude
 ai-battery setup codex
 ```
 
-Codex setup은 `~/.codex/config.toml`의 `[tui]`에 `model-with-reasoning`, `current-dir`, `git-branch` status line을 설정합니다. 기존 값이 있으면 uninstall 복구용으로 백업합니다. Codex wrapper는 기존 `codex` 명령을 직접 덮어쓰지 않습니다. `~/.local/bin`이 이미 PATH에서 원본 `codex`보다 앞에 있고 `~/.local/bin/codex`가 비어 있거나 AI Battery 관리 파일이면 그 위치에 wrapper를 둬서 바로 잡히게 합니다. 그렇지 않으면 `~/.local/share/ai-battery/bin/codex`에 관리형 wrapper를 만들고, 필요한 경우 셸 설정에 이 디렉터리를 PATH 앞쪽으로 추가합니다. `~/.local/bin/codex` 같은 공용 위치에 이미 다른 파일이 있으면 덮어쓰지 않습니다. 새 터미널부터 `codex`가 자동으로 AI Battery 하단 행과 함께 실행됩니다. 같은 터미널에서 이미 `codex`를 실행한 적이 있으면 셸 캐시 때문에 `hash -r`이 한 번 필요할 수 있고, PATH 추가가 필요한 경우에는 `setup` 출력에 표시되는 `source ...` 명령을 실행하세요.
+Codex 실행 경로를 그대로 유지하려면 `ai-battery --watch 2` 또는 `ai-battery hud`를 사용하세요. 하단 행을 실행 세션 하나에만 추가하려면 POSIX에서는 `ai-battery-run -- codex`, Windows에서는 `ai-battery-run-win -- codex`를 직접 실행합니다.
+
+기존처럼 `codex` 명령에 wrapper를 연결하려는 경우에만 `ai-battery setup codex --wrap-codex`를 사용합니다. Codex `[tui].status_line` 변경도 별도 옵션인 `--configure-codex-statusline`이 필요합니다. 두 옵션은 실행 경로나 사용자 설정을 변경하므로 기본값에서 제외되어 있습니다. 관리형 변경은 복구 기록을 먼저 저장하고, uninstall 시 해당 변경만 복원합니다.
+
+다음 Windows runner 설명은 직접 runner를 실행하거나 wrapper를 명시적으로 선택한 경우에 적용됩니다.
 
 Windows native `cmd`/PowerShell에서는 `codex.cmd` wrapper가 현재 PATH에서 원본 Codex를 매번 찾고, 기본 `composite` runner로 실행합니다. Codex Fullscreen 화면은 `node-pty`의 bundled ConPTY와 `@xterm/headless` 안에서 해석한 뒤, 터미널 최하단의 AI Battery 1행과 합성합니다. Codex의 기본 상태·단축키 행은 본문 스크롤 이동에서 제외하며, 바뀐 화면만 다시 그립니다. 시스템 Node와 Codex 설치는 변경하지 않습니다.
 
@@ -214,16 +218,13 @@ ai-battery on all
 
 ## Codex Terminal Row
 
-`ai-battery setup`은 Codex 자체 status line을 `모델/추론강도 · 워크스페이스 · git branch` 구성으로 맞춥니다. 사용량 표시는 별도의 `codex` wrapper가 담당하므로, 사용자는 원래처럼 `codex`만 입력하면 `ai-battery-run`이 내부에서 Codex를 한 줄 짧은 PTY 안에서 실행합니다.
+기본 `codex`는 AI Battery를 거치지 않고 실행됩니다. 사용량을 독립적으로 보려면 `ai-battery --watch 2` 또는 지원 플랫폼에서 `ai-battery hud`를 실행하세요.
+
+세션 하나에 하단 행을 추가하려면 명시적으로 실행합니다.
 
 ```bash
-codex
-```
-
-직접 wrapper를 실행해야 하는 고급 사용자는 아래 명령을 사용할 수 있습니다.
-
-```bash
-ai-battery-run --provider all codex
+ai-battery-run --provider all -- codex       # WSL/Linux/macOS
+ai-battery-run-win --provider all -- codex   # Windows cmd/PowerShell
 ```
 
 갱신 주기를 줄이려면 `--interval`을 사용합니다.
