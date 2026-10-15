@@ -1,62 +1,66 @@
 # npm release
 
-The current release candidate is **0.1.20**. `latest` on npm was checked as **0.1.19** on 2026-10-09. Publishing the same name/version twice is not allowed.
+The current release candidate is **0.1.22**. It includes the 0.1.21 usage-refresh fixes and changes the default Codex integration to preserve independent execution. Preparing a tarball does not publish it to npm.
 
-0.1.20 configures the bundled node-pty ConPTY input pipe for blocking writes before forwarding terminal replies or keyboard input. Nonblocking pipe writes can otherwise return EAGAIN and destroy an unhandled Socket. If the installed transport cannot be configured, the compositor closes its child and falls back to native execution. The actual Codex fullscreen fixture passed all 13 checks after the change; the user's intermittent crash has not been independently reproduced.
+## Changes in 0.1.22
 
-Preflight on 2026-10-09 passed 105 Windows tests (24 platform skips) and 117 WSL tests (12 platform skips). The installed tarball passed all 13 actual Codex 0.161.0 fullscreen checks under system Node 22.15.1 with automatic private-runtime selection. A fresh official runtime download, SHA256 verification, extraction and launch also passed. Windows and WSL installed CLI readings were checked against the same shared account usage. npm publication and remote Git changes remain pending.
+- Default `setup codex` restores legacy AI Battery integrations without creating a Codex wrapper, adding PATH entries or configuring Codex's status line. Use an independent watcher/HUD, or explicitly launch a runner for one session. `--wrap-codex` and `--configure-codex-statusline` are separate opt-ins.
+- `ai-battery reset settings` restores integrations and selectively removes verified caches, private runtimes and generated files. `reset config` is an alias. The CLI never invokes npm uninstall; all npm packages, package commands and local project manifests/lockfiles are preserved. `teardown` and `uninstall` remain compatibility aliases. Targeted reset restores only the selected integration.
+- Shell and tmux recovery records preserve exact original content, permissions and file absence. User edits outside managed blocks survive repeated setup and reset. Edited blocks, retargeted symlinks and unresolved recovery records prevent unsafe removal.
+- Windows PATH cleanup preserves unrelated whitespace and separators and reports failed writes. HUD cleanup verifies its Run value and launcher ownership and preserves unknown files. macOS LaunchAgent cleanup refuses foreign files and symlinks.
+- Existing Bash terminals can cache a deleted legacy Codex wrapper. Run `hash -r` (zsh: `rehash`) or open a new terminal. A child CLI cannot clear its parent shell's command cache. A POSIX wrapper whose Python runner cannot start because Python is absent now runs the original Codex directly.
 
-The final focused Windows regression uses separate Node 22 and 24.21 installations and compares the original npm launcher with the compositor launcher: Codex Node, unchanged PATH, npm selection, simulated update destination, and the next launch agree in both PATH orders. Removing both original Nodes fails on both paths rather than using the private display Node to rescue Codex. Updates in this test use temporary fixtures, not the production Codex installation or npm registry. A PATH that already mixes one installation's Codex with another installation's npm can still mismatch without AI Battery; the wrapper preserves that original selection.
+## Validation
 
-## Changes
+Checked on 2026-10-15:
 
-- Codex wrappers on Windows and POSIX resolve the original command from the caller's current PATH, skipping AI Battery wrappers. Node version changes do not pin Codex to an older installation.
-- Windows defaults to Fullscreen PTY composition with a terminal battery row. Rendering preserves Codex's footer, battery styles and ordered output without serial parser delays.
-- On Windows, a private verified Node 24.21.0 runtime is prepared on first interactive launch if the caller's Node lacks VT raw input. It does not replace system Node or change PATH. Runtime/dependency failures fall back to the existing native HUD.
-- Account rate-limit selection ignores model-specific empty buckets. Windows and WSL share the latest account usage while preserving separate Codex session stores. Both installations must be updated.
-- Windows Terminal padding is not modified by setup. The local padding adjustment is not a package dependency.
+| Environment | Result |
+| --- | --- |
+| WSL `npm run check` | 156 passed, 16 platform skips, 0 failures |
+| Windows native Node 22.23.2 full suite | 135 passed, 37 platform skips, 0 failures |
+
+Validation results and tarball manifests are stored in `.cache/releases/0.1.22/`. The regression suite covers default command/config preservation, exact shell restoration, user edits, symlinks, custom integration paths, incomplete recovery, global/local package preservation, settings/config and compatibility aliases, HUD target parsing, invalid reset scopes, and Windows registry ownership. Desktop operations in the installed CLI fixture are stubbed; Windows autostart cleanup is separately exercised against a temporary registry key and profile.
+
+Reset behavior is tested in isolated global and local installations, with provider settings and original launchers compared byte for byte. npm removal is a separate explicit operation in the installed-tarball checks.
+
+Native Windows validation uses x64 Node 22.23.2. macOS LaunchAgent ownership and file handling are tested through an isolated fixture; native macOS and Windows ARM64 are not verified here.
 
 ## Prepare
 
-```powershell
+```text
 npm run check
 npm pack --dry-run
-npm pack
+npm pack --pack-destination .cache/releases/0.1.22
 ```
 
-Inspect the package file list. Screenshots, logs, credentials, local runtime binaries and `.cache` must not be included. Test the tarball with a clean installation and test Windows runtime switching, POSIX PATH switching, and shared usage. Windows ARM64 runtime paths are supported but require a device check; the release's manual Windows verification used x64.
+Inspect the package file list. Include the core cleanup/recovery modules, platform modules, bin entrypoints and required PowerShell files. Exclude screenshots, logs, credentials, local runtime binaries, tests and `.cache`. Verify the exact tarball using an isolated npm prefix and provider homes. Release 0.1.21 fullscreen/compositor reports remain under `.cache/releases/0.1.21/`; this release changes setup/removal rather than terminal composition.
 
 ## Publish manually
 
-```powershell
+```text
 npm login
 npm whoami
-npm publish ./ai-battery-0.1.20.tgz --access public --tag latest
+npm publish .cache/releases/0.1.22/ai-battery-0.1.22.tgz --access public --tag latest
 npm view ai-battery version dist-tags --json
 ```
 
-Use the exact tested tarball. Complete npm's authentication/2FA prompt when requested. This repository's preflight does not perform `npm login` or `npm publish` automatically. If 0.1.20 has already been published by the time you release, increment the package version and repeat the preparation.
+Publish the exact tested tarball. Complete npm authentication/2FA when requested. If the version is already published, increment it and repeat preparation. After publication, tag the tested commit (`v0.1.22`) and integrate the release branch into main.
 
-For a preview instead of replacing `latest`:
+## Update or remove an installation
 
-```powershell
-npm publish ./ai-battery-0.1.20.tgz --access public --tag next
-```
-
-After a successful publication, tag the tested commit (`v0.1.20`), push the release commit/tag, and remove merged remote feature branches. Do not delete the remote test branch before the integrated release commit reaches the remote main branch.
-
-## Update installed integrations
-
-Run this separately in Windows and WSL:
+Run separately for Windows and WSL:
 
 ```text
-npm install -g ai-battery@0.1.20
+npm install -g ai-battery@0.1.22
 ai-battery setup codex
-ai-battery doctor
 ```
 
-Restart the terminal session after updating. A running PTY wrapper retains its loaded code. Existing local custom wrappers must be regenerated by setup to adopt PATH lookup and private runtime selection.
+Default setup detaches a legacy wrapper. In an existing Bash terminal run `hash -r`; zsh uses `rehash`. Plain `codex` then runs independently. Display usage with `ai-battery --watch 2` or a supported desktop HUD. There is no built-in `ai-battery update` command.
 
-The private Windows runtime lives under `%LOCALAPPDATA%\ai-battery\runtimes` by default, or the selected AI Battery data directory. `AI_BATTERY_RUNTIME_DOWNLOAD=0` disables downloading. An interrupted preparation lock expires after five minutes; downloads and extracted staging files are cleaned after completion/failure.
+Restore AI Battery settings first, then remove the package with npm only if restoration succeeded:
 
-Official npm references: [publish](https://docs.npmjs.com/cli/v11/commands/npm-publish/), [login](https://docs.npmjs.com/cli/v11/commands/npm-login/).
+```text
+ai-battery reset settings && npm uninstall -g ai-battery
+```
+
+Modified or unrecognized files are preserved and listed. A running wrapped session retains its loaded code until it exits. `reset config` is an alias for `reset settings`. The CLI never removes any npm installation. Use `npm uninstall ai-battery` for local installs; Windows/WSL and Node-version installations are managed separately.

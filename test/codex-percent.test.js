@@ -274,6 +274,9 @@ test("Windows uninstall removes only PATH entries owned by AI Battery", () => {
       codexWrapper: { wrapperPath: path.join(sharedShim, CODEX_BIN_NAME) }
     }), []);
     assert.deepEqual(windowsOwnedShimDirsForUninstall({
+      codexWrapper: { wrapperPath: path.join(defaultShim, CODEX_BIN_NAME), pathAddedByAiBattery: null }
+    }), []);
+    assert.deepEqual(windowsOwnedShimDirsForUninstall({
       codexWrapper: {
         wrapperPath: path.join(sharedShim, CODEX_BIN_NAME),
         pathAddedByAiBattery: explicitShim
@@ -2444,7 +2447,7 @@ test("setup codex configures Codex built-in status_line and uninstall restores i
     PATH: `${originalDir}${path.delimiter}${process.env.PATH || ""}`
   };
 
-  const setup = spawnNode([CLI_PATH, "setup", "codex", "--json"], {
+  const setup = spawnNode([CLI_PATH, "setup", "codex", "--wrap-codex", "--configure-codex-statusline", "--json"], {
     encoding: "utf8",
     env,
     timeout: 5000
@@ -2453,7 +2456,7 @@ test("setup codex configures Codex built-in status_line and uninstall restores i
   assert.equal(setup.status, 0, setup.stderr);
   const setupJson = JSON.parse(setup.stdout);
   assert.equal(setupJson.codex.statusLine.changed, true);
-  const textSetup = spawnNode([CLI_PATH, "setup", "codex"], { encoding: "utf8", env, timeout: 5000 });
+  const textSetup = spawnNode([CLI_PATH, "setup", "codex", "--wrap-codex", "--configure-codex-statusline"], { encoding: "utf8", env, timeout: 5000 });
   assert.equal(textSetup.status, 0, textSetup.stderr);
   assert.match(textSetup.stdout, /status_line already configured/);
   const configuredToml = fs.readFileSync(configToml, "utf8");

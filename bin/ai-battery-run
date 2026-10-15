@@ -40,6 +40,8 @@ def battery_command_base():
     return [BATTERY_BIN]
 DEFAULT_COLUMN_GUARD = 4
 DEFAULT_LEFT_PADDING = 2
+STATUS_FETCH_TIMEOUT = 10.0
+STATUS_OUTPUT_LIMIT = 64 * 1024
 
 
 def usage():
@@ -54,7 +56,7 @@ def usage():
 
 
 def parse_args(argv):
-    interval = float(os.environ.get("AI_BATTERY_INTERVAL") or os.environ.get("CLAUDEX_BATTERY_INTERVAL", "10"))
+    interval = float(os.environ.get("AI_BATTERY_INTERVAL") or os.environ.get("CLAUDEX_BATTERY_INTERVAL", "2"))
     bar_width = os.environ.get("AI_BATTERY_BAR_WIDTH") or os.environ.get("CLAUDEX_BATTERY_BAR_WIDTH", "10")
     provider = os.environ.get("AI_BATTERY_PROVIDER") or os.environ.get("CLAUDEX_BATTERY_PROVIDER", "auto")
     layout = os.environ.get("AI_BATTERY_LAYOUT") or os.environ.get("CLAUDEX_BATTERY_LAYOUT", "auto")
@@ -181,6 +183,12 @@ class StatusLine:
         self.last_draw = 0.0
         self.text = "AI Battery starting..."
         self.last_line = None
+        self.fetch_process = None
+        self.fetch_deadline = 0.0
+        self.fetch_output = bytearray()
+        self.has_reading = False
+        self.last_reading = ""
+        self.fetch_failures = 0
         self.cols, self.rows = term_size()
 
     def resize(self):
@@ -188,10 +196,42 @@ class StatusLine:
 
     def refresh(self, force=False):
         now = time.monotonic()
+        previous = self.text
+        if self.fetch_process is not None:
+            process = self.fetch_process
+            try:
+                code = process.poll()
+                while True:
+                    try:
+                        chunk = os.read(process.stdout.fileno(), 8192)
+                    except BlockingIOError:
+                        break
+                    if not chunk:
+                        break
+                    self.fetch_output.extend(chunk)
+                    if len(self.fetch_output) > STATUS_OUTPUT_LIMIT:
+                        raise ValueError("status output exceeds limit")
+                if code is not None:
+                    text = self.fetch_output.decode("utf-8", errors="replace").rstrip("\r\n")
+                    self.close()
+                    if code == 0 and text:
+                        self.text = text
+                        self.last_reading = text
+                        self.has_reading = True
+                        self.fetch_failures = 0
+                    else:
+                        self.fetch_failed()
+                elif now >= self.fetch_deadline:
+                    self.close()
+                    self.fetch_failed()
+            except (OSError, ValueError):
+                self.close()
+                self.fetch_failed()
+            return self.text != previous
+
         if not force and now < self.next_fetch:
             return False
         self.next_fetch = now + self.interval
-        previous = self.text
         max_width = max(20, self.cols - column_guard())
         try:
             battery_command = battery_command_base() + [
@@ -207,22 +247,49 @@ class StatusLine:
                 battery_command.extend(["--active-provider", self.active_provider])
             if self.provider != "all":
                 battery_command.extend(["--provider", self.provider])
-            output = subprocess.check_output(
+            # Usage scans can include slow WSL/PowerShell process queries. Keep
+            # them off the terminal relay path so typing and output stay live.
+            self.fetch_process = subprocess.Popen(
                 battery_command,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
-                timeout=1.5,
             )
-            text = output.decode("utf-8", errors="replace").rstrip("\r\n")
-            if text:
-                self.text = text
-        except Exception:
-            self.text = "AI Battery unavailable"
+            os.set_blocking(self.fetch_process.stdout.fileno(), False)
+            self.fetch_deadline = now + STATUS_FETCH_TIMEOUT
+            self.fetch_output = bytearray()
+        except (OSError, ValueError):
+            self.close()
+            self.fetch_failed()
         return self.text != previous
 
+    def fetch_failed(self):
+        self.fetch_failures += 1
+        retry_delay = min(self.interval, 2 ** min(self.fetch_failures - 1, 4))
+        self.next_fetch = time.monotonic() + retry_delay
+        # Retain the reading, but make failed updates visible rather than
+        # presenting the old percentage as a successful current reading.
+        self.text = ("[stale] " + self.last_reading.lstrip()) if self.has_reading else "AI Battery unavailable"
+
+    def close(self):
+        process = self.fetch_process
+        if process is None:
+            return
+        self.fetch_process = None
+        if process.poll() is None:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+        process.wait()
+        process.stdout.close()
+
     def refresh_due(self):
-        return time.monotonic() >= self.next_fetch
+        return self.fetch_process is not None or time.monotonic() >= self.next_fetch
 
     def seconds_until_refresh(self):
+        if self.fetch_process is not None:
+            return 0.05
         return max(0.0, self.next_fetch - time.monotonic())
 
     def _write_row(self, line):
@@ -239,9 +306,7 @@ class StatusLine:
         os.write(sys.stdout.fileno(), payload.encode("utf-8", errors="replace"))
 
     def draw_cached(self):
-        """Repaint the cached text at the current terminal size without fetching new data.
-        Used on resize so the bar is repositioned instantly, avoiding the ~100ms
-        subprocess call that would otherwise delay the repaint."""
+        """Repaint cached text at the new terminal size without starting a poll."""
         paint_width = max(1, self.cols - 1)
         line = fit_ansi(self.text, paint_width, pad=True)
         self.last_draw = time.monotonic()
@@ -321,9 +386,7 @@ def main():
             os.kill(pid, signal.SIGWINCH)
         except ProcessLookupError:
             pass
-        # Repaint immediately at the new size using cached text (no subprocess call).
-        # A subprocess call here blocks signal delivery for ~100ms, causing color
-        # flicker and stutter during resize. Schedule a fresh fetch instead.
+        # Repaint immediately, then schedule a fresh poll at the new width.
         status.draw_cached()
         status.next_fetch = 0.0
 
@@ -384,6 +447,7 @@ def main():
             elif status.refresh_due():
                 status.draw(False)
     finally:
+        status.close()
         termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_term)
         status.clear()
 
