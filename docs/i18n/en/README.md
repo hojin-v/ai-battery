@@ -1,6 +1,6 @@
 # AI Battery
 
-0.1.22: Default Codex setup preserves its command, PATH and configuration. `reset settings` restores AI Battery integrations and cleans owned files while keeping npm packages installed. Remove the package separately with npm. Existing Bash terminals may need `hash -r` after a legacy wrapper is removed.
+0.1.24: `ai-battery setup` enables automatic Claude and Codex usage display. The original Codex launcher and existing configuration are preserved. Settings reset and npm package removal remain separate operations.
 
 [한국어](../../../README.md) · [English](../en/) · [日本語](../ja/) · [中文](../zh/) · [Español](../es/)
 
@@ -55,7 +55,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | `ai-battery --watch` | Supported | Supported | Supported | Supported | Refreshes periodically inside the terminal. |
 | Claude statusLine | Supported | Supported | Supported | Supported | Saves a `node <script>` command to Claude Code `statusLine`. |
 | Codex fullscreen | Supported | Supported | Supported | Supported | Windows: fullscreen PTY composition; WSL/Linux/macOS: POSIX PTY and Python 3. |
-| `ai-battery setup codex` | Supported | Supported | Supported | Supported | Removes legacy AI Battery wrappers. New wrappers and Codex setting changes require explicit flags. |
+| `ai-battery setup codex` | Supported | Supported | Supported | Supported | Enables a managed PATH wrapper while preserving the original Codex launcher and configuration. |
 | `ai-battery hud` | Supported | Supported | Unsupported | Supported | Windows/WSL use a PowerShell/WinForms HUD; macOS uses a menu bar status item. |
 
 Runtime detection uses `/proc` on Linux/WSL, `ps` on macOS, and PowerShell process listings on Windows. Text output uses white/gray, while the macOS HUD highlights only running items with colored battery bars and shows inactive items in muted gray.
@@ -82,20 +82,20 @@ The previous command names, `claudex-battery`, `claudex-battery-run`, and `claud
    npm install -g ai-battery
    ```
 
-2. Configure the Claude statusLine and remove any legacy Codex wrapper.
+2. Configure the Claude statusLine and automatic Codex display.
 
    ```bash
    ai-battery setup
    ```
 
-3. After that, keep using the original commands as usual.
+3. Open a new terminal or apply the shell refresh instructions printed by setup, then use the original commands as usual.
 
    ```bash
    claude
    codex
    ```
 
-4. View Codex usage with `ai-battery --watch 2` in another terminal, or start the Windows/WSL/macOS HUD.
+4. Optionally start a separate desktop HUD on Windows/WSL/macOS.
 
    ```bash
    ai-battery hud
@@ -162,24 +162,17 @@ A child CLI cannot clear its parent shell's cached command paths. Opening a new 
 
 ## Setup
 
-`setup` configures the Claude statusLine hook. Codex runs independently by default: setup restores legacy AI Battery integrations without adding a new wrapper, PATH entry or Codex configuration change.
+`setup` enables the Claude statusLine hook and automatic Codex usage display. Then launch `claude` and `codex` as usual. Codex uses a separate managed PATH wrapper; its original executable, existing configuration and session history are preserved.
 
 ```bash
 ai-battery setup
 ```
 
-You can configure only one side if needed.
+Select one tool with `ai-battery setup codex` or `ai-battery setup claude`. In an existing shell, apply the printed `source ...` instructions and run `hash -r`, or open a new terminal. Windows users open a new cmd/PowerShell. Windows and WSL each need setup in their own installation.
 
-```bash
-ai-battery setup claude
-ai-battery setup codex
-```
+Codex's built-in `[tui].status_line` is optional and is not changed by default. Add `--configure-codex-statusline` only to configure that separate model/directory/branch row. Previous values are recorded for restoration.
 
-Use `ai-battery --watch 2` or `ai-battery hud` to display usage independently. For one wrapped session, run `ai-battery-run -- codex` on POSIX or `ai-battery-run-win -- codex` on Windows.
-
-Only `ai-battery setup codex --wrap-codex` installs a PATH wrapper. Changing Codex `[tui].status_line` also requires `--configure-codex-statusline`. Both are explicit options because they change the execution path or user configuration. Recovery metadata is recorded before managed changes and restored by `reset settings`.
-
-Windows runners support the `composite` terminal row and native HUD layouts. These apply when explicitly launching `ai-battery-run-win` or opting into a wrapper. Default setup never installs a `codex.cmd` shim or changes Windows user PATH.
+Opt out of automatic Codex integration with `ai-battery setup codex --no-wrap-codex`. For a separate display use a watcher/HUD; for one wrapped session use `ai-battery-run -- codex` on POSIX or `ai-battery-run-win -- codex` on Windows. Windows composite/HUD runner behavior also applies to the default automatic integration.
 
 In tmux, reserving a bottom row in every pane would duplicate the same global battery as many times as there are panes. Instead, you can show it once per session in the tmux status bar.
 
@@ -210,7 +203,7 @@ This setting applies to the CLI, Claude statusLine, Codex wrapper, and HUD toget
 
 ## Codex Terminal Row
 
-Plain `codex` runs independently of AI Battery. Use `ai-battery --watch 2` or a supported desktop HUD to view usage separately. Add a row for one session explicitly:
+After `ai-battery setup`, plain `codex` displays the AI Battery row automatically. Refresh the existing shell as instructed by setup or open a new terminal. For one explicitly wrapped session:
 
 ```bash
 ai-battery-run --provider all -- codex       # WSL/Linux/macOS

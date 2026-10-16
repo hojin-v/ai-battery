@@ -9,6 +9,7 @@ import { cleanupBatteryArtifacts } from "../lib/core/uninstall.js";
 import { createIntegrationFiles } from "../lib/core/integration-files.js";
 import { createMacHudPlatform } from "../lib/platforms/macos/hud.js";
 import { windowsAutostartCleanupScript } from "../lib/platforms/windows/autostart-cleanup.js";
+import windowsLauncher from "../bin/codex-wrapper-win.cjs";
 
 const CLI = fileURLToPath(new URL("../bin/ai-battery.js", import.meta.url));
 const posix = { skip: process.platform === "win32" };
@@ -35,27 +36,100 @@ function fixture(t) {
   return { root, home, state, data, codex, claude, env, write, clean, run };
 }
 
-test("default Codex setup leaves commands, settings, sessions and shell files unchanged", (t) => {
+for (const targets of [[], ["codex"]]) {
+  test(`setup ${targets.join(" ")} enables automatic Codex display and reset restores the original environment`, (t) => {
+    const f = fixture(t);
+    const original = f.write(path.join(f.root, "original", process.platform === "win32" ? "codex.cmd" : "codex"), process.platform === "win32" ? "@echo off\r\necho original-codex\r\n" : "#!/bin/sh\nprintf 'original-codex\\n'\n");
+    f.env.PATH = path.dirname(original) + path.delimiter + f.env.PATH;
+    fs.chmodSync(original, 0o755);
+    const files = [
+      [path.join(f.codex, "config.toml"), '# user settings\nmodel = "custom-model"\n[tui]\nstatus_line = ["context-remaining"]\n'],
+      [path.join(f.codex, "sessions", "keep.jsonl"), 'resume history\n'],
+      [path.join(f.claude, "settings.json"), '{"statusLine":{"type":"command","command":"my-status"},"theme":"dark"}\n'],
+      [path.join(f.home, ".bashrc"), 'export MY_SETTING=keep\n'],
+      [path.join(f.home, ".profile"), '# user profile\n'],
+      [original, fs.readFileSync(original, "utf8")]
+    ];
+    for (const [file, content] of files) f.write(file, content);
+    const result = f.run(["setup", ...targets, "--json"]);
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.codex.ok, true);
+    assert.equal(report.codex.standalone, undefined);
+    assert.match(fs.readFileSync(report.codex.wrapperPath, "utf8"), /AI_BATTERY_MANAGED_CODEX_WRAPPER/);
+    assert.notEqual(report.codex.wrapperPath, original);
+    for (const [file, content] of files.filter(([file]) => file !== f.env.AI_BATTERY_RC)) assert.equal(fs.readFileSync(file, "utf8"), content, file);
+    const repeated = f.run(["setup", ...targets, "--json"]);
+    assert.equal(repeated.status, 0, repeated.stderr + repeated.stdout);
+    const invocation = process.platform === "win32"
+      ? windowsLauncher.windowsCommand([report.codex.wrapperPath, "--version"])
+      : { file: report.codex.wrapperPath, args: ["--version"] };
+    const launch = spawnSync(invocation.file, invocation.args, { encoding: "utf8", env: f.env, timeout: 10000 });
+    assert.equal(launch.status, 0, launch.stderr);
+    assert.equal(launch.stdout.trim(), "original-codex");
+    const reset = f.run(["reset", "settings", "codex", "--json"]);
+    assert.equal(reset.status, 0, reset.stderr + reset.stdout);
+    assert.equal(fs.existsSync(report.codex.wrapperPath), false);
+    for (const [file, content] of files) assert.equal(fs.readFileSync(file, "utf8"), content, file);
+  });
+}
+
+test("--no-wrap-codex explicitly keeps Codex standalone", (t) => {
   const f = fixture(t);
-  const original = f.write(path.join(f.root, "original", process.platform === "win32" ? "codex.cmd" : "codex"), "original Codex launcher\n");
-  f.env.PATH = path.dirname(original) + path.delimiter + f.env.PATH;
-  fs.chmodSync(original, 0o755);
-  const files = [
-    [path.join(f.codex, "config.toml"), '# user settings\nmodel = "custom-model"\n[tui]\nstatus_line = ["context-remaining"]\n'],
-    [path.join(f.codex, "sessions", "keep.jsonl"), 'resume history\n'],
-    [path.join(f.claude, "settings.json"), '{"statusLine":{"type":"command","command":"my-status"},"theme":"dark"}\n'],
-    [path.join(f.home, ".bashrc"), 'export MY_SETTING=keep\n'],
-    [path.join(f.home, ".profile"), '# user profile\n'],
-    [original, "original Codex launcher\n"]
-  ];
-  for (const [file, content] of files) f.write(file, content);
-  const result = f.run(["setup", "codex", "--json"]);
+  const before = f.write(path.join(f.codex, "config.toml"), 'model = "keep"\n');
+  const result = f.run(["setup", "codex", "--no-wrap-codex", "--json"]);
   assert.equal(result.status, 0, result.stderr + result.stdout);
   assert.equal(JSON.parse(result.stdout).codex.standalone, true);
-  for (const [file, content] of files) assert.equal(fs.readFileSync(file, "utf8"), content, file);
   assert.equal(fs.existsSync(path.join(f.data, "bin", process.platform === "win32" ? "codex.cmd" : "codex")), false);
-  assert.equal(fs.existsSync(path.join(f.home, ".local", "bin", "codex")), false);
-  assert.equal(fs.existsSync(path.join(f.state, "config.json")), false);
+  assert.equal(fs.readFileSync(before, "utf8"), 'model = "keep"\n');
+});
+
+test("default setup shows the meter in a terminal and usage failures leave Codex running", { skip: process.platform === "win32" }, (t) => {
+  const python = spawnSync("python3", ["--version"]);
+  if (python.status !== 0) return t.skip("python3 is required for the terminal fixture");
+  const f = fixture(t);
+  const original = f.write(path.join(f.root, "original", "codex"), "#!/bin/sh\nprintf 'ORIGINAL_CODEX_STARTED\\n'\nsleep 0.5\nexit 23\n");
+  fs.chmodSync(original, 0o755);
+  f.env.PATH = path.dirname(original) + path.delimiter + f.env.PATH;
+  const setup = f.run(["setup", "codex", "--json"]);
+  assert.equal(setup.status, 0, setup.stderr + setup.stdout);
+  const wrapper = JSON.parse(setup.stdout).codex.wrapperPath;
+  const nodeDir = path.join(f.root, "runtime");
+  fs.mkdirSync(nodeDir);
+  fs.symlinkSync(process.execPath, path.join(nodeDir, "node"));
+  const meter = path.join(f.root, "meter.js");
+  const driver = [
+    "import errno, fcntl, os, pty, select, struct, subprocess, sys, termios, time",
+    "master, slave = pty.openpty()",
+    "fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack('HHHH', 24, 100, 0, 0))",
+    "child = subprocess.Popen([sys.argv[1], '--version'], stdin=slave, stdout=slave, stderr=slave)",
+    "os.close(slave)",
+    "output = b''",
+    "deadline = time.monotonic() + 6",
+    "while True:",
+    "    if time.monotonic() > deadline: child.kill(); raise TimeoutError(output.decode(errors='replace'))",
+    "    if not select.select([master], [], [], 0.05)[0]: continue",
+    "    try:",
+    "        chunk = os.read(master, 65536)",
+    "        if not chunk: break",
+    "        output += chunk",
+    "    except OSError as error:",
+    "        if error.errno != errno.EIO: raise",
+    "        break",
+    "os.close(master)",
+    "sys.stdout.buffer.write(output)",
+    "sys.exit(child.wait(timeout=1))"
+  ].join("\n");
+  for (const failed of [false, true]) {
+    f.write(meter, failed ? "process.exit(1);\n" : "console.log('SETUP-METER');\n");
+    const result = spawnSync("python3", ["-c", driver, wrapper], {
+      encoding: "utf8", timeout: 10000,
+      env: { ...f.env, PATH: [path.dirname(wrapper), path.dirname(original), nodeDir, "/usr/bin", "/bin"].join(":"), AI_BATTERY_BIN: meter, TMUX: "" }
+    });
+    assert.equal(result.status, 23, result.stderr + result.stdout);
+    assert.equal(result.stdout.split("ORIGINAL_CODEX_STARTED").length - 1, 1);
+    assert.match(result.stdout, failed ? /AI Battery unavailable/ : /SETUP-METER/);
+  }
 });
 
 test("cleanup removes owned caches and runtimes while retaining unrelated files", (t) => {

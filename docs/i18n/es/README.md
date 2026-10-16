@@ -1,6 +1,6 @@
 # AI Battery
 
-0.1.22: La configuración predeterminada de Codex conserva su comando, PATH y ajustes. `reset settings` restaura las integraciones y limpia archivos generados. Conserva el paquete npm; su eliminación se hace por separado con npm.
+0.1.24: `ai-battery setup` activa la visualización automática de Claude y Codex. Conserva el ejecutable original y los ajustes existentes de Codex.
 
 [한국어](../../../README.md) · [English](../en/) · [日本語](../ja/) · [中文](../zh/) · [Español](../es/)
 
@@ -58,7 +58,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | `ai-battery --watch` | Compatible | Compatible | Compatible | Compatible | Se actualiza periódicamente dentro de la terminal. |
 | Claude statusLine | Compatible | Compatible | Compatible | Compatible | Guarda un comando `node <script>` en Claude Code `statusLine`. |
 | Codex terminal row | Compatible | Compatible | Compatible | Compatible | Windows: fullscreen PTY composition; WSL/Linux/macOS: POSIX PTY and Python 3. |
-| `ai-battery setup codex` | Compatible | Compatible | Compatible | Compatible | Retira wrappers anteriores de AI Battery. Los wrappers nuevos y los cambios de ajustes requieren opciones explícitas. |
+| `ai-battery setup codex` | Compatible | Compatible | Compatible | Compatible | Automatic Codex usage display; original executable and settings preserved. |
 | `ai-battery hud` | Compatible | Compatible | No compatible | Compatible | Windows/WSL usan un HUD PowerShell/WinForms; macOS usa un elemento de barra de menús. |
 
 La detección de procesos en ejecución usa `/proc` en Linux/WSL, `ps` en macOS y listados de procesos de PowerShell en Windows. La salida de texto usa blanco/gris; el HUD de macOS resalta solo los elementos en ejecución con barras de batería de color y muestra los elementos inactivos en gris tenue.
@@ -87,7 +87,7 @@ Los nombres anteriores, `claudex-battery`, `claudex-battery-run` y `claudex-batt
    npm install -g ai-battery
    ```
 
-2. Configura el statusLine de Claude y retira wrappers anteriores de Codex.
+2. Configura el statusLine de Claude y la visualización automática de Codex.
 
    ```bash
    ai-battery setup
@@ -100,7 +100,7 @@ Los nombres anteriores, `claudex-battery`, `claudex-battery-run` y `claudex-batt
    codex
    ```
 
-4. Consulta el uso de Codex con `ai-battery --watch 2` o el HUD en plataformas compatibles.
+4. Inicia el HUD si necesitas una visualización de escritorio separada.
 
    ```bash
    ai-battery hud
@@ -155,14 +155,14 @@ ai-battery reset settings && npm uninstall -g ai-battery
 <a id="setup"></a>
 ## Configuración
 
-`setup` configura el hook statusLine de Claude. Codex se ejecuta de forma independiente y solo se restauran wrappers y ajustes administrados de versiones anteriores. Consulta el uso con `ai-battery --watch 2` o `ai-battery hud` en plataformas compatibles.
+`setup` configura el statusLine de Claude y la visualización automática de Codex. Conserva su ejecutable original, ajustes e historial. Abre otra terminal o sigue las instrucciones de actualización del shell que imprime setup.
 
 ```bash
 ai-battery setup
 ai-battery setup codex
 ```
 
-Solo `ai-battery setup codex --wrap-codex` instala un wrapper en PATH. Cambiar `[tui].status_line` de Codex requiere además `--configure-codex-statusline`. Los modos composite/HUD de Windows se aplican al ejecutar el runner directamente o elegir el wrapper.
+La visualización no requiere opciones adicionales. Usa `--no-wrap-codex` para desactivar la integración automática. Solo `--configure-codex-statusline` modifica la fila interna de Codex. Windows y WSL necesitan setup por separado.
 
 En tmux, reservar una fila inferior en cada pane duplicaría la misma batería global tantas veces como panes haya. En su lugar, puedes mostrarla una sola vez por sesión en la status bar de tmux.
 
@@ -194,7 +194,7 @@ Esta configuración se aplica conjuntamente a la CLI, Claude statusLine, Codex w
 <a id="codex-terminal-row"></a>
 ## Fila de terminal de Codex
 
-El comando normal `codex` se ejecuta independientemente de AI Battery. Para añadir una fila a una sola sesión:
+Después de `ai-battery setup`, ejecuta `codex` normalmente para ver el uso. Para una sola sesión explícita:
 
 ```bash
 ai-battery-run --provider all -- codex       # WSL/Linux/macOS

@@ -376,7 +376,7 @@ def main():
 
     set_winsize(master_fd, child_rows, cols)
     old_term = termios.tcgetattr(sys.stdin.fileno())
-    child_exit = 0
+    child_exit = None
 
     def on_resize(_signum, _frame):
         status.resize()
@@ -451,6 +451,14 @@ def main():
         termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_term)
         status.clear()
 
+    # PTY EOF/EIO can arrive before waitpid(WNOHANG) observes the exit.
+    # Reap the child in that case so the wrapper preserves its actual status.
+    if child_exit is None:
+        _, wait_status = os.waitpid(pid, 0)
+        if os.WIFEXITED(wait_status):
+            child_exit = os.WEXITSTATUS(wait_status)
+        elif os.WIFSIGNALED(wait_status):
+            child_exit = 128 + os.WTERMSIG(wait_status)
     raise SystemExit(child_exit)
 
 

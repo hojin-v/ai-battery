@@ -1,6 +1,6 @@
 # AI Battery
 
-0.1.23: 기본 Codex 설치는 실행 명령·PATH·설정을 변경하지 않습니다. `reset settings`는 AI Battery의 설정 변경을 복원하고 생성 파일을 정리하며 npm 패키지는 유지합니다. 패키지 삭제는 `npm uninstall -g ai-battery`로 진행하세요. 기존 Bash 터미널에 삭제된 wrapper 경로가 남았다면 `hash -r`을 실행하세요.
+0.1.24: `ai-battery setup`만으로 Claude와 Codex의 사용량 표시를 자동 연결합니다. 원본 Codex 실행 파일과 기존 설정은 보존합니다. `reset settings`는 AI Battery의 변경을 복원하며 npm 패키지 삭제는 별도로 진행합니다.
 
 [한국어](README.md) · [English](docs/i18n/en/) · [日本語](docs/i18n/ja/) · [中文](docs/i18n/zh/) · [Español](docs/i18n/es/)
 
@@ -55,7 +55,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | `ai-battery --watch`     | 지원           | 지원 | 지원   | 지원  | 터미널 안에서 주기적으로 갱신합니다.                                                                                        |
 | Claude statusLine        | 지원           | 지원 | 지원   | 지원  | Claude Code `statusLine`에 `node <script>` 명령을 저장합니다.                                                               |
 | Codex fullscreen         | 지원           | 지원 | 지원   | 지원  | Windows 기본값은 Fullscreen PTY 화면과 터미널 배터리 행을 합성합니다. WSL/Linux/macOS는 POSIX PTY와 `python3`를 사용합니다. |
-| `ai-battery setup codex` | 지원           | 지원 | 지원   | 지원  | 기존 AI Battery wrapper를 해제합니다. 새 wrapper나 Codex 설정 변경은 명시적 옵션이 필요합니다.                              |
+| `ai-battery setup codex` | 지원 | 지원 | 지원 | 지원 | 원본 실행 파일을 보존하는 관리형 wrapper로 Codex 사용량을 자동 표시합니다. |
 | `ai-battery hud`         | 지원           | 지원 | 미지원 | 지원  | Windows/WSL은 PowerShell/WinForms HUD, macOS는 menu bar status item입니다.                                                  |
 
 실행 중 감지는 Linux/WSL은 `/proc`, macOS는 `ps`, Windows는 PowerShell 프로세스 목록을 사용합니다. 텍스트 출력은 흰색/회색으로, macOS HUD는 실행 중인 항목만 색상 배터리바로 강조하고 비실행 항목은 흐린 회색 계열로 표시합니다.
@@ -82,20 +82,20 @@ npx ai-battery
    npm install -g ai-battery
    ```
 
-2. Claude statusLine을 설정하고, 기존 Codex wrapper가 있으면 해제합니다.
+2. Claude statusLine과 Codex 자동 표시를 설정합니다.
 
    ```bash
    ai-battery setup
    ```
 
-3. 이후에는 원래 명령을 그대로 사용합니다.
+3. 새 터미널을 열거나 setup이 안내한 셸 갱신 명령을 실행한 뒤, 원래 명령을 그대로 사용합니다.
 
    ```bash
    claude
    codex
    ```
 
-4. Codex 사용량은 별도 터미널의 `ai-battery --watch 2`, 또는 Windows/WSL/macOS HUD로 확인합니다.
+4. 별도 데스크톱 표시가 필요하면 Windows/WSL/macOS HUD를 실행합니다.
 
    ```bash
    ai-battery hud
@@ -163,24 +163,19 @@ CLI는 npm 제거를 자동 실행하지 않습니다. `teardown`과 `uninstall`
 
 ## Setup
 
-`setup`은 Claude Code의 statusLine hook을 설정합니다. Codex는 기본적으로 독립 실행을 유지하며, 이전 버전의 AI Battery wrapper와 변경된 설정만 복원합니다. 원래 `codex` 실행 파일·PATH·설정에 새 변경을 추가하지 않습니다.
+`setup`은 Claude Code의 statusLine hook과 Codex 자동 표시를 한 번에 설정합니다. 이후에는 `claude`, `codex`를 평소처럼 실행하면 됩니다. Codex는 별도 경로의 관리형 wrapper를 사용하며 원본 실행 파일은 교체하지 않습니다. 기존 Codex 설정과 세션 기록도 유지합니다.
 
 ```bash
 ai-battery setup
 ```
 
-일부만 설정할 수도 있습니다.
+한 도구만 설정하려면 `ai-battery setup codex` 또는 `ai-battery setup claude`를 사용합니다. 기존 터미널에는 setup 출력의 `source ...` 안내를 적용하고 `hash -r`을 실행하거나, 새 터미널을 여세요. Windows에서는 새 cmd/PowerShell을 엽니다.
 
-```bash
-ai-battery setup claude
-ai-battery setup codex
-```
+AI Battery 사용량 표시에는 Codex `[tui].status_line` 변경이 필요하지 않습니다. Codex 자체의 모델·디렉터리·브랜치 행도 변경하고 싶을 때만 `--configure-codex-statusline`을 추가합니다. 기존 값은 복원용으로 먼저 기록합니다.
 
-Codex 실행 경로를 그대로 유지하려면 `ai-battery --watch 2` 또는 `ai-battery hud`를 사용하세요. 하단 행을 실행 세션 하나에만 추가하려면 POSIX에서는 `ai-battery-run -- codex`, Windows에서는 `ai-battery-run-win -- codex`를 직접 실행합니다.
+Codex 자동 연동을 사용하지 않으려면 `ai-battery setup codex --no-wrap-codex`로 해제합니다. 별도 표시에는 `ai-battery --watch 2`나 `ai-battery hud`를, 세션 하나에만 표시하려면 `ai-battery-run -- codex`(POSIX) 또는 `ai-battery-run-win -- codex`(Windows)를 사용합니다.
 
-기존처럼 `codex` 명령에 wrapper를 연결하려는 경우에만 `ai-battery setup codex --wrap-codex`를 사용합니다. Codex `[tui].status_line` 변경도 별도 옵션인 `--configure-codex-statusline`이 필요합니다. 두 옵션은 실행 경로나 사용자 설정을 변경하므로 기본값에서 제외되어 있습니다. 관리형 변경은 복구 기록을 먼저 저장하고, `reset settings`에서 해당 변경만 복원합니다.
-
-다음 Windows runner 설명은 직접 runner를 실행하거나 wrapper를 명시적으로 선택한 경우에 적용됩니다.
+Windows와 WSL은 각각 설치한 환경에서 setup을 실행합니다. 아래 Windows runner 설명은 기본 Codex 자동 연동에도 적용됩니다.
 
 Windows native `cmd`/PowerShell에서는 `codex.cmd` wrapper가 현재 PATH에서 원본 Codex를 매번 찾고, 기본 `composite` runner로 실행합니다. Codex Fullscreen 화면은 `node-pty`의 bundled ConPTY와 `@xterm/headless` 안에서 해석한 뒤, 터미널 최하단의 AI Battery 1행과 합성합니다. Codex의 기본 상태·단축키 행은 본문 스크롤 이동에서 제외하며, 바뀐 화면만 다시 그립니다. 시스템 Node와 Codex 설치는 변경하지 않습니다.
 
@@ -221,7 +216,7 @@ ai-battery on all
 
 ## Codex Terminal Row
 
-기본 `codex`는 AI Battery를 거치지 않고 실행됩니다. 사용량을 독립적으로 보려면 `ai-battery --watch 2` 또는 지원 플랫폼에서 `ai-battery hud`를 실행하세요.
+`ai-battery setup` 후에는 평소처럼 `codex`를 실행하면 하단에 AI Battery 사용량 행이 표시됩니다. 기존 셸은 setup의 안내에 따라 갱신하거나 새 터미널을 여세요.
 
 세션 하나에 하단 행을 추가하려면 명시적으로 실행합니다.
 

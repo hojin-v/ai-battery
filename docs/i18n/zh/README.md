@@ -1,6 +1,6 @@
 # AI Battery
 
-0.1.22：默认 Codex 设置不修改执行命令、PATH 或配置。`reset settings` 恢复 AI Battery 集成并清理生成文件，保留 npm 包。包删除由 npm 单独完成。
+0.1.24：`ai-battery setup` 自动配置 Claude 和 Codex 用量显示，保留原始 Codex 可执行文件及现有设置。
 
 [한국어](../../../README.md) · [English](../en/) · [日本語](../ja/) · [中文](../zh/) · [Español](../es/)
 
@@ -58,7 +58,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | `ai-battery --watch` | 支持 | 支持 | 支持 | 支持 | 在终端内周期性刷新。 |
 | Claude statusLine | 支持 | 支持 | 支持 | 支持 | 将 `node <script>` 命令保存到 Claude Code `statusLine`。 |
 | Codex terminal row | 支持 | 支持 | 支持 | 支持 | Windows: fullscreen PTY composition; WSL/Linux/macOS: POSIX PTY and Python 3. |
-| `ai-battery setup codex` | 支持 | 支持 | 支持 | 支持 | 解除旧 AI Battery wrapper。新 wrapper 和 Codex 配置修改需要显式选项。 |
+| `ai-battery setup codex` | 支持 | 支持 | 支持 | 支持 | Automatic Codex usage display; original executable and settings preserved. |
 | `ai-battery hud` | 支持 | 支持 | 不支持 | 支持 | Windows/WSL 使用 PowerShell/WinForms HUD，macOS 使用 menu bar status item。 |
 
 运行中检测在 Linux/WSL 上使用 `/proc`，在 macOS 上使用 `ps`，在 Windows 上使用 PowerShell 进程列表。文本输出使用白色/灰色；macOS HUD 只用彩色电量条突出正在运行的项目，未运行项目则使用淡灰色显示。
@@ -87,7 +87,7 @@ npx ai-battery
    npm install -g ai-battery
    ```
 
-2. 配置 Claude statusLine，并解除旧 Codex wrapper。
+2. 配置 Claude statusLine 和 Codex 自动显示。
 
    ```bash
    ai-battery setup
@@ -100,7 +100,7 @@ npx ai-battery
    codex
    ```
 
-4. 使用 `ai-battery --watch 2` 或支持平台上的 HUD 查看 Codex 用量。
+4. 如需单独的桌面显示，可启动 HUD。
 
    ```bash
    ai-battery hud
@@ -155,14 +155,14 @@ ai-battery reset settings && npm uninstall -g ai-battery
 <a id="setup"></a>
 ## 设置
 
-`setup` 配置 Claude statusLine hook。Codex 默认独立运行，只恢复旧 AI Battery wrapper 和受管理配置。使用 `ai-battery --watch 2` 或支持平台上的 `ai-battery hud` 查看用量。
+`setup` 自动配置 Claude statusLine 和 Codex 用量显示。原始 Codex 可执行文件、设置和会话历史会保留。打开新终端，或按照 setup 输出的说明刷新 shell。
 
 ```bash
 ai-battery setup
 ai-battery setup codex
 ```
 
-只有 `ai-battery setup codex --wrap-codex` 才安装 PATH wrapper。修改 Codex `[tui].status_line` 还需要 `--configure-codex-statusline`。Windows runner 的 composite/HUD 仅适用于直接运行 runner 或显式选择 wrapper 的情况。
+用量显示不需要额外选项。使用 `--no-wrap-codex` 关闭自动集成；仅在要修改 Codex 自身 `[tui].status_line` 时使用 `--configure-codex-statusline`。Windows 与 WSL 需要分别运行 setup。
 
 在 tmux 中，如果每个 pane 都预留下方一行，同一个全局电量状态会按 pane 数量重复显示。可以改为在 tmux status bar 中每个 session 只显示一次。
 
@@ -194,7 +194,7 @@ ai-battery on all
 <a id="codex-terminal-row"></a>
 ## Codex 终端行
 
-普通 `codex` 不经过 AI Battery。仅为一个会话添加下方状态行时运行：
+`ai-battery setup` 后正常运行 `codex` 即可显示用量行。仅为单个会话显式运行时：
 
 ```bash
 ai-battery-run --provider all -- codex       # WSL/Linux/macOS

@@ -1,6 +1,6 @@
 # AI Battery
 
-0.1.22: Codex の既定セットアップは実行コマンド・PATH・設定を変更しません。`reset settings` は AI Battery の統合を復元して生成ファイルを整理します。npm パッケージは保持し、削除は npm で別途行います。
+0.1.24: `ai-battery setup` で Claude と Codex の使用量表示を自動設定します。元の Codex 実行ファイルと既存設定は保持します。
 
 [한국어](../../../README.md) · [English](../en/) · [日本語](../ja/) · [中文](../zh/) · [Español](../es/)
 
@@ -58,7 +58,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | `ai-battery --watch` | 対応 | 対応 | 対応 | 対応 | ターミナル内で定期的に更新します。 |
 | Claude statusLine | 対応 | 対応 | 対応 | 対応 | Claude Code `statusLine` に `node <script>` コマンドを保存します。 |
 | Codex terminal row | 対応 | 対応 | 対応 | 対応 | Windows: fullscreen PTY composition; WSL/Linux/macOS: POSIX PTY and Python 3. |
-| `ai-battery setup codex` | 対応 | 対応 | 対応 | 対応 | 既存の AI Battery wrapper を解除します。新しい wrapper と Codex 設定変更は明示的なオプションが必要です。 |
+| `ai-battery setup codex` | 対応 | 対応 | 対応 | 対応 | Automatic Codex usage display; original executable and settings preserved. |
 | `ai-battery hud` | 対応 | 対応 | 未対応 | 対応 | Windows/WSL は PowerShell/WinForms HUD、macOS は menu bar status item です。 |
 
 実行中の検出には、Linux/WSL では `/proc`、macOS では `ps`、Windows では PowerShell のプロセス一覧を使います。テキスト出力は白/グレーで、macOS HUD では実行中の項目だけを色付きバッテリーバーで強調し、実行中でない項目は淡いグレー系で表示します。
@@ -87,7 +87,7 @@ npx ai-battery
    npm install -g ai-battery
    ```
 
-2. Claude statusLine を設定し、旧 Codex wrapper を解除します。
+2. Claude statusLine と Codex の自動表示を設定します。
 
    ```bash
    ai-battery setup
@@ -100,7 +100,7 @@ npx ai-battery
    codex
    ```
 
-4. Codex の使用量は `ai-battery --watch 2` または対応 OS の HUD で確認します。
+4. 別のデスクトップ表示が必要なら HUD を起動します。
 
    ```bash
    ai-battery hud
@@ -155,14 +155,14 @@ ai-battery reset settings && npm uninstall -g ai-battery
 <a id="setup"></a>
 ## セットアップ
 
-`setup` は Claude statusLine hook を設定します。Codex は独立して実行され、旧 AI Battery wrapper と管理設定だけを復元します。使用量は `ai-battery --watch 2` または対応 OS の `ai-battery hud` で確認できます。
+`setup` は Claude statusLine と Codex の自動表示を設定します。Codex の元の実行ファイル、設定とセッション履歴は保持します。新しいターミナルを開くか、setup が表示するシェル更新手順を実行してください。
 
 ```bash
 ai-battery setup
 ai-battery setup codex
 ```
 
-`ai-battery setup codex --wrap-codex` だけが PATH wrapper をインストールします。Codex `[tui].status_line` の変更には `--configure-codex-statusline` も必要です。Windows runner の composite/HUD は runner を直接実行するか wrapper を選んだ場合に適用されます。
+Codex の使用量表示には追加オプションは不要です。自動連携を無効にする場合は `--no-wrap-codex` を使います。Codex 自身の `[tui].status_line` を変更する場合だけ `--configure-codex-statusline` を指定します。Windows と WSL はそれぞれ setup が必要です。
 
 tmux では pane ごとに下部行を予約すると、同じグローバルバッテリーが pane の数だけ重複表示されます。代わりに tmux の status bar にセッションごと 1 回だけ表示できます。
 
@@ -194,7 +194,7 @@ ai-battery on all
 <a id="codex-terminal-row"></a>
 ## Codex ターミナル行
 
-通常の `codex` は AI Battery を経由しません。1 セッションだけ下部行を追加する場合は次を実行します。
+`ai-battery setup` 後は通常の `codex` で使用量行が表示されます。1 セッションだけ明示的に実行する場合：
 
 ```bash
 ai-battery-run --provider all -- codex       # WSL/Linux/macOS
