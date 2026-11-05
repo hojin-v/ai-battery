@@ -1,5 +1,7 @@
 # AI Battery
 
+0.1.28: `setup`만으로 Codex TUI가 연결되던 0.1.24의 기본 동작을 복원했습니다. 신규 설치·업데이트·reset 후 setup을 동일하게 처리합니다. `doctor`는 표시 설정(Visibility), TUI 연동 상태, 현재 세션을 구분하고 누락된 연동·PATH·의존성에 맞는 조치를 안내합니다. [회귀 원인과 검증](docs/SETUP-REGRESSION.md).
+
 0.1.27: 한글 오류 메시지가 포함된 하단 사용량 줄이 갱신될 때 Codex 화면에 여러 줄로 누적되던 문제를 수정했습니다. 화면 칸 수를 기준으로 너비를 제한하고 불필요한 공백 채우기를 제거했습니다. 하단 바의 데이터 없음 표시는 `Claude --%`처럼 간결하게 표시합니다.
 
 0.1.26: `setup`이 기존 Codex 연동을 해제하던 문제를 수정했습니다. 기존 wrapper·PATH·Codex 상태줄과 tmux 연동을 유지·갱신하며, 실행 중인 셸이 기억하는 경로를 제거하지 않습니다. tmux 미실행 상태를 구분하고 HUD 메뉴의 밝은 테두리를 제거했습니다. 기본 예시는 `ai-battery setup tmux`입니다.
@@ -108,7 +110,7 @@ npx ai-battery
    tmux
    ```
 
-일반 터미널에서 `codex`를 실행할 때도 사용량 행을 표시하려면 한 번 `ai-battery setup codex --wrap-codex`를 실행하고 안내된 `source` 명령을 현재 셸에 적용하세요. 이후 `setup`과 npm 업데이트에서도 이 선택을 유지합니다. 새로 열린 터미널에는 자동 적용됩니다. 데스크톱 표시는 `ai-battery hud`를 사용합니다.
+`ai-battery setup`은 일반 터미널의 `codex`에도 사용량 행을 연결합니다. 기존 셸에서는 안내된 `source` 명령을 적용하고, 새 터미널에서는 `codex`를 실행하세요. 업데이트 후 setup과 reset 후 setup도 같은 방식으로 연결합니다. 데스크톱 표시는 `ai-battery hud`를 사용합니다.
 
 ## CLI
 
@@ -172,7 +174,7 @@ CLI는 npm 제거를 자동 실행하지 않습니다. `teardown`과 `uninstall`
 
 ## Setup
 
-`setup`은 기존 Codex wrapper·PATH·상태줄과 tmux 연동을 유지·갱신하고 Claude statusLine을 설정합니다. 실행 중인 터미널의 경로와 복구용 백업을 제거하지 않습니다. 새 설치에는 Codex wrapper나 Codex 설정을 자동으로 추가하지 않습니다. 연동 해제는 `reset`으로 실행합니다.
+`setup`은 기존 Codex wrapper·PATH·상태줄과 tmux 연동을 유지·갱신하고 Claude statusLine을 설정합니다. 실행 중인 터미널의 경로와 복구용 백업을 제거하지 않습니다. 새 설치와 reset 후에도 Codex PATH wrapper를 연결합니다. 원본 Codex 실행 파일·설정·세션 기록은 유지합니다. 연동 해제는 `reset`으로 실행합니다.
 
 ```bash
 ai-battery setup
@@ -185,7 +187,7 @@ ai-battery setup tmux
 ai-battery setup codex
 ```
 
-기존처럼 `codex` 명령에 wrapper를 연결하려는 경우에만 `ai-battery setup codex --wrap-codex`를 사용합니다. Codex `[tui].status_line` 변경도 별도 옵션인 `--configure-codex-statusline`이 필요합니다. 두 옵션은 실행 경로나 사용자 설정을 변경하므로 기본값에서 제외되어 있습니다. 관리형 변경은 복구 기록을 먼저 저장하고, `reset`에서 해당 변경만 복원합니다.
+`setup`과 `setup codex`는 Codex wrapper를 기본으로 연결합니다. `--wrap-codex`는 호환 옵션이며, `--no-wrap-codex`는 wrapper 설정만 생략합니다. 기존 연동을 해제하려면 `reset codex`를 사용합니다. Codex `[tui].status_line` 변경은 별도 옵션인 `--configure-codex-statusline`을 지정한 경우에만 적용합니다. 관리형 변경은 복구 기록을 먼저 저장하고, `reset`에서 해당 변경만 복원합니다.
 
 tmux에서는 pane마다 하단 행을 예약하면 같은 전역 배터리가 pane 수만큼 중복 표시됩니다. 대신 tmux의 status bar에 세션당 한 번만 표시할 수 있습니다.
 
@@ -216,7 +218,7 @@ ai-battery on all
 
 ## Codex Terminal Row
 
-기본 `codex`는 AI Battery를 거치지 않고 실행됩니다. 사용량을 독립적으로 보려면 `ai-battery --watch 2` 또는 지원 플랫폼에서 `ai-battery hud`를 실행하세요.
+`ai-battery setup` 이후 새 터미널에서 `codex`를 실행하면 사용량 행이 표시됩니다. `doctor`의 `Visibility`는 표시 허용 설정이고, `TUI`는 다음 실행의 연동 준비 상태, `Session`은 현재 Codex의 연결 여부입니다. `on`만으로 연동을 설치하지는 않습니다. 사용량을 별도로 보려면 `ai-battery --watch 2` 또는 지원 플랫폼에서 `ai-battery hud`를 실행하세요.
 
 세션 하나에 하단 행을 추가하려면 명시적으로 실행합니다.
 

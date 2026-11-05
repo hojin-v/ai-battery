@@ -1,5 +1,7 @@
 # AI Battery
 
+0.1.28：通常の setup だけで Codex の使用量表示を設定する動作を復元しました。reset 後や更新後も同じ操作で再設定できます。doctor は表示設定・TUI 連携・現在のセッションを区別し、必要な対処を表示します。
+
 0.1.27：韓国語を含む使用量表示が端末の最下行で折り返され、Codex 画面に重複して蓄積する問題を修正しました。画面上の文字幅で切り詰め、空白による埋め合わせを削除しました。データがない場合は `Claude --%` などの短い表示になります。
 
 0.1.26：`setup` は既存の Codex wrapper・PATH・状態表示と tmux 設定を維持して更新します。実行中のシェルが使うパスやバックアップを削除しません。HUD メニューの明るい枠線を削除し、基本例を `ai-battery setup tmux` に変更しました。
@@ -158,14 +160,14 @@ ai-battery reset && npm uninstall -g ai-battery
 <a id="setup"></a>
 ## セットアップ
 
-`setup` は Claude statusLine hook を設定し、既存の Codex wrapper・PATH・設定と tmux 連携を維持して更新します。新規インストール時の wrapper は明示的なオプションで選びます。解除には `reset` を使用します。
+`setup` は Claude statusLine hook を設定し、既存の Codex wrapper・PATH・設定と tmux 連携を維持して更新します。新規インストール時や reset 後も Codex wrapper を自動設定し、元の実行ファイル・設定・履歴は維持します。解除には `reset` を使用します。
 
 ```bash
 ai-battery setup
 ai-battery setup codex
 ```
 
-`ai-battery setup codex --wrap-codex` だけが PATH wrapper をインストールします。Codex `[tui].status_line` の変更には `--configure-codex-statusline` も必要です。Windows runner の composite/HUD は runner を直接実行するか wrapper を選んだ場合に適用されます。
+`setup` と `setup codex` は PATH wrapper を標準で設定します。`--no-wrap-codex` は設定を省略し、既存の連携は削除しません。Codex `[tui].status_line` の変更には `--configure-codex-statusline` も必要です。Windows runner の composite/HUD は runner を直接実行するか wrapper を選んだ場合に適用されます。
 
 tmux では pane ごとに下部行を予約すると、同じグローバルバッテリーが pane の数だけ重複表示されます。代わりに tmux の status bar にセッションごと 1 回だけ表示できます。
 
@@ -197,7 +199,7 @@ ai-battery on all
 <a id="codex-terminal-row"></a>
 ## Codex ターミナル行
 
-通常の `codex` は AI Battery を経由しません。1 セッションだけ下部行を追加する場合は次を実行します。
+setup 後、新しい端末で `codex` を実行すると使用量が表示されます。doctor の Visibility は表示設定、TUI は連携の準備状態、Session は現在の接続状態です。1 セッションだけ下部行を追加する場合は次を実行します。
 
 ```bash
 ai-battery-run --provider all -- codex       # WSL/Linux/macOS

@@ -186,3 +186,33 @@ test("POSIX terminal relays input and output while a slow poll finishes", posixO
     "    os.close(master)"
   ].join("\n"));
 });
+
+test("POSIX EOF before waitpid preserves the wrapped command's failure exit status", posixOnly, (t) => {
+  runScenario(t, "print('Codex 40%')", [
+    "import errno, pty, select, subprocess",
+    "master, slave = pty.openpty()",
+    // Simulate the documented race: nonblocking wait has not observed exit
+    // yet, while the real PTY already delivers EOF/EIO. The final wait is real.
+    "driver = \"import os,runpy,sys; original=os.waitpid; os.waitpid=lambda pid, options: (0,0) if options==os.WNOHANG else original(pid,options); sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0],run_name='__main__')\"",
+    "child = subprocess.Popen([sys.executable, '-c', driver, sys.argv[1], '--', sys.executable, '-c', \"print('native-output', flush=True); raise SystemExit(23)\"], stdin=slave, stdout=slave, stderr=slave)",
+    "os.close(slave)",
+    "output = b''",
+    "deadline = time.monotonic() + 5",
+    "try:",
+    "    while time.monotonic() < deadline:",
+    "        if not select.select([master], [], [], 0.05)[0]: continue",
+    "        try:",
+    "            chunk = os.read(master, 65536)",
+    "        except OSError as error:",
+    "            if error.errno == errno.EIO: break",
+    "            raise",
+    "        if not chunk: break",
+    "        output += chunk",
+    "    assert child.wait(timeout=1) == 23, output",
+    "    assert b'native-output' in output, output",
+    "finally:",
+    "    if child.poll() is None: child.kill()",
+    "    child.wait()",
+    "    os.close(master)"
+  ].join("\n"));
+});

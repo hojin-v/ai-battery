@@ -1,5 +1,7 @@
 # AI Battery
 
+0.1.28: Se restaura la configuración automática de la fila de Codex con setup, también tras reset y las actualizaciones. Doctor distingue visibilidad, integración y sesión actual, y muestra acciones de recuperación específicas.
+
 0.1.27: Se corrigen las filas de uso duplicadas en Codex cuando un mensaje en coreano se desbordaba en la última fila del terminal. POSIX limita el ancho por celdas de pantalla sin rellenar con espacios. Los proveedores sin datos muestran etiquetas breves como `Claude --%`.
 
 0.1.26: `setup` conserva y actualiza los wrappers, PATH, estado de Codex e integración tmux existentes sin borrar rutas usadas por shells abiertos ni copias de recuperación. Se elimina el borde claro del menú HUD y el ejemplo principal pasa a `ai-battery setup tmux`.
@@ -158,14 +160,14 @@ ai-battery reset && npm uninstall -g ai-battery
 <a id="setup"></a>
 ## Configuración
 
-`setup` configura el statusLine de Claude y conserva y actualiza los wrappers, PATH, ajustes e integración tmux existentes. Los wrappers nuevos requieren una opción explícita; usa `reset` para retirar integraciones.
+`setup` configura el statusLine de Claude y conserva y actualiza los wrappers, PATH, ajustes e integración tmux existentes. También configura automáticamente el wrapper de Codex en instalaciones nuevas y después de reset, conservando el ejecutable, los ajustes y el historial originales; usa `reset` para retirar integraciones.
 
 ```bash
 ai-battery setup
 ai-battery setup codex
 ```
 
-Solo `ai-battery setup codex --wrap-codex` instala un wrapper en PATH. Cambiar `[tui].status_line` de Codex requiere además `--configure-codex-statusline`. Los modos composite/HUD de Windows se aplican al ejecutar el runner directamente o elegir el wrapper.
+`setup` y `setup codex` instalan el wrapper en PATH de forma predeterminada. `--no-wrap-codex` omite la configuración sin eliminar integraciones existentes. Cambiar `[tui].status_line` de Codex requiere además `--configure-codex-statusline`. Los modos composite/HUD de Windows se aplican al ejecutar el runner directamente o elegir el wrapper.
 
 En tmux, reservar una fila inferior en cada pane duplicaría la misma batería global tantas veces como panes haya. En su lugar, puedes mostrarla una sola vez por sesión en la status bar de tmux.
 
@@ -197,7 +199,7 @@ Esta configuración se aplica conjuntamente a la CLI, Claude statusLine, Codex w
 <a id="codex-terminal-row"></a>
 ## Fila de terminal de Codex
 
-El comando normal `codex` se ejecuta independientemente de AI Battery. Para añadir una fila a una sola sesión:
+Después de setup, ejecuta `codex` en un terminal nuevo para mostrar el uso. Doctor separa Visibility (preferencia), TUI (integración) y Session (conexión actual). Para añadir una fila a una sola sesión:
 
 ```bash
 ai-battery-run --provider all -- codex       # WSL/Linux/macOS

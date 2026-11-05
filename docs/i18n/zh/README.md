@@ -1,5 +1,7 @@
 # AI Battery
 
+0.1.28：恢复普通 setup 自动配置 Codex 用量显示的行为，首次安装、更新及 reset 后均可使用。doctor 分别报告显示偏好、TUI 集成和当前会话，并给出对应的修复操作。
+
 0.1.27：修复韩文状态文本在终端底行换行，导致 Codex 中重复累积使用量行的问题。POSIX 渲染按屏幕单元格宽度截断，不再填充空格。无可用数据时，在底栏显示 `Claude --%` 等简短标签。
 
 0.1.26：`setup` 保留并更新已有 Codex wrapper、PATH、状态栏和 tmux 集成，不删除运行中 shell 使用的路径或备份。移除 HUD 菜单亮色边框，默认示例改为 `ai-battery setup tmux`。
@@ -158,14 +160,14 @@ ai-battery reset && npm uninstall -g ai-battery
 <a id="setup"></a>
 ## 设置
 
-`setup` 配置 Claude statusLine hook，保留并更新已有 Codex wrapper、PATH、设置和 tmux 集成。新安装需要显式选项才能启用 wrapper；使用 `reset` 解除集成。
+`setup` 配置 Claude statusLine hook，保留并更新已有 Codex wrapper、PATH、设置和 tmux 集成。新安装及 reset 后也会自动配置 Codex wrapper，并保留原始命令、配置与会话记录；使用 `reset` 解除集成。
 
 ```bash
 ai-battery setup
 ai-battery setup codex
 ```
 
-只有 `ai-battery setup codex --wrap-codex` 才安装 PATH wrapper。修改 Codex `[tui].status_line` 还需要 `--configure-codex-statusline`。Windows runner 的 composite/HUD 仅适用于直接运行 runner 或显式选择 wrapper 的情况。
+`setup` 和 `setup codex` 默认安装 PATH wrapper。`--no-wrap-codex` 仅跳过配置，不删除已有集成。修改 Codex `[tui].status_line` 还需要 `--configure-codex-statusline`。Windows runner 的 composite/HUD 仅适用于直接运行 runner 或显式选择 wrapper 的情况。
 
 在 tmux 中，如果每个 pane 都预留下方一行，同一个全局电量状态会按 pane 数量重复显示。可以改为在 tmux status bar 中每个 session 只显示一次。
 
@@ -197,7 +199,7 @@ ai-battery on all
 <a id="codex-terminal-row"></a>
 ## Codex 终端行
 
-普通 `codex` 不经过 AI Battery。仅为一个会话添加下方状态行时运行：
+setup 后在新终端运行 `codex` 即可显示使用量。doctor 中 Visibility 表示显示偏好，TUI 表示集成准备状态，Session 表示当前会话连接状态。仅为一个会话添加下方状态行时运行：
 
 ```bash
 ai-battery-run --provider all -- codex       # WSL/Linux/macOS

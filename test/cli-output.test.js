@@ -15,6 +15,9 @@ function fixture(t, language = "en") {
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, "home");
   const state = path.join(root, "state");
+  const nativeDir = path.join(root, "bin");
+  fs.mkdirSync(nativeDir);
+  fs.writeFileSync(path.join(nativeDir, process.platform === "win32" ? "codex.cmd" : "codex"), process.platform === "win32" ? "@echo off\r\necho codex-fixture\r\n" : "#!/bin/sh\necho codex-fixture\n", { mode: 0o755 });
   const env = {
     ...process.env, LANGUAGE: language, LC_ALL: "", LC_MESSAGES: "", LANG: "en_US.UTF-8",
     HOME: home, USERPROFILE: home, CODEX_HOME: path.join(home, ".codex"),
@@ -23,7 +26,7 @@ function fixture(t, language = "en") {
     AI_BATTERY_SHIM_DIR: path.join(root, "data", "bin"), AI_BATTERY_RC: path.join(home, ".bashrc"),
     AI_BATTERY_SHARED_USAGE_STATE_DIR: path.join(root, "shared"), AI_BATTERY_NO_UPDATE_CHECK: "1",
     AI_BATTERY_SKIP_WINDOWS_PATH_WRITE: "1",
-    PATH: [path.dirname(process.execPath), ...(process.platform === "win32"
+    PATH: [nativeDir, path.dirname(process.execPath), ...(process.platform === "win32"
       ? [path.join(process.env.SystemRoot, "System32"), path.join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0")]
       : ["/usr/bin", "/bin"])].join(path.delimiter)
   };
@@ -54,7 +57,7 @@ for (const language of ["en", "ko"]) {
     const f = fixture(t, language);
     const setup = f.run(["setup", "codex"]);
     assert.equal(setup.status, 0, setup.stderr + setup.stdout);
-    assert.match(setup.stdout, /Codex: standalone/);
+    assert.match(setup.stdout, /Codex wrapper: ready/);
     assert.ok(setup.stdout.includes(language === "ko" ? "설정 완료." : "Setup complete."));
     assert.match(setup.stdout, /ai-battery reset/);
     const claude = f.run(["install-claude-statusline"]);
@@ -70,6 +73,11 @@ for (const language of ["en", "ko"]) {
     assert.ok(doctor.stdout.includes(language === "ko" ? "상세 진단:" : "Details:"));
     assert.doesNotMatch(doctor.stdout, /wrapper is not installed|status_line is not configured/);
     assert.equal(f.run(["off", "codex"]).stdout, "codex: off\n");
+    const hidden = f.run(["doctor"]);
+    assert.equal(hidden.status, 0, hidden.stderr);
+    assert.match(hidden.stdout, /Visibility: off/);
+    assert.match(hidden.stdout, /Show: ai-battery on codex/);
+    assert.match(hidden.stdout, /TUI: PATH mismatch/);
     assert.equal(f.run(["on", "codex"]).stdout, "codex: on\n");
 
     f.env.AI_BATTERY_WRAPPED_CODEX = "1";
@@ -90,6 +98,10 @@ for (const language of ["en", "ko"]) {
     assert.ok(result.stderr.includes(config));
     assert.ok(result.stderr.includes(language === "ko" ? "파일 유지:" : "File preserved:"));
     assert.equal(fs.readFileSync(config, "utf8"), "{invalid");
+    const doctor = f.run(["doctor"]);
+    assert.equal(doctor.status, 1, doctor.stdout + doctor.stderr);
+    assert.ok(doctor.stderr.includes(config));
+    assert.doesNotMatch(doctor.stdout, /Visibility: on|TUI: ready/);
   });
 
   test(`${language} invalid Claude settings are localized only in human output`, (t) => {
@@ -146,7 +158,9 @@ test("doctor preserves actionable failures while treating optional integrations 
   assert.match(text, /statusLine: external/);
   assert.match(text, /다른 도구의 Claude statusLine/);
   assert.match(text, /ai-battery setup claude --force/);
-  assert.doesNotMatch(text, /ai-battery setup codex/);
+  assert.match(text, /Visibility: on/);
+  assert.match(text, /TUI: not configured/);
+  assert.match(text, /ai-battery setup codex/);
   assert.deepEqual(data, before);
 });
 

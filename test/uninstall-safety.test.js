@@ -26,11 +26,13 @@ function fixture(t) {
   const temp = path.join(root, "tmp");
   for (const directory of [home, state, data, codex, claude, temp]) fs.mkdirSync(directory, { recursive: true });
   function write(file, text) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); return file; }
+  const native = write(path.join(root, "fixture-bin", process.platform === "win32" ? "codex.cmd" : "codex"), process.platform === "win32" ? "@echo off\r\necho fixture-codex\r\n" : "#!/bin/sh\necho fixture-codex\n");
+  fs.chmodSync(native, 0o755);
   const env = { ...process.env, HOME: home, USERPROFILE: home, CODEX_HOME: codex,
     TMUX: "", AI_BATTERY_TMUX_STATUS: "",
     XDG_CONFIG_HOME: path.join(root, "xdg-config"), XDG_DATA_HOME: path.join(root, "xdg-data"),
     LOCALAPPDATA: path.join(root, "localappdata"), APPDATA: path.join(root, "appdata"), TEMP: temp, TMP: temp, TMPDIR: temp,
-    PATH: [path.dirname(process.execPath), ...(process.platform === "win32" ? [path.join(process.env.SystemRoot, "System32"), path.join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0")] : ["/usr/bin", "/bin"])].join(path.delimiter),
+    PATH: [path.dirname(native), path.dirname(process.execPath), ...(process.platform === "win32" ? [path.join(process.env.SystemRoot, "System32"), path.join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0")] : ["/usr/bin", "/bin"])].join(path.delimiter),
     AI_BATTERY_STATE_DIR: state, AI_BATTERY_DATA_DIR: data, AI_BATTERY_SHARED_USAGE_STATE_DIR: path.join(root, "shared"),
     AI_BATTERY_RC: path.join(home, ".bashrc"), AI_BATTERY_SKIP_WINDOWS_PATH_WRITE: "1" };
   const clean = roots => cleanupBatteryArtifacts({ roots, home, protectedRoots: [codex, claude] });
@@ -38,7 +40,7 @@ function fixture(t) {
   return { root, home, state, data, codex, claude, env, write, clean, run };
 }
 
-test("default Codex setup leaves commands, settings, sessions and shell files unchanged", (t) => {
+test("explicit --no-wrap-codex leaves commands, settings, sessions and shell files unchanged", (t) => {
   const f = fixture(t);
   const original = f.write(path.join(f.root, "original", process.platform === "win32" ? "codex.cmd" : "codex"), "original Codex launcher\n");
   f.env.PATH = path.dirname(original) + path.delimiter + f.env.PATH;
@@ -52,13 +54,97 @@ test("default Codex setup leaves commands, settings, sessions and shell files un
     [original, "original Codex launcher\n"]
   ];
   for (const [file, content] of files) f.write(file, content);
-  const result = f.run(["setup", "codex", "--json"]);
+  const result = f.run(["setup", "codex", "--no-wrap-codex", "--json"]);
   assert.equal(result.status, 0, result.stderr + result.stdout);
-  assert.equal(JSON.parse(result.stdout).codex.standalone, true);
+  assert.equal(JSON.parse(result.stdout).codex.wrapperSetupSkipped, true);
   for (const [file, content] of files) assert.equal(fs.readFileSync(file, "utf8"), content, file);
   assert.equal(fs.existsSync(path.join(f.data, "bin", process.platform === "win32" ? "codex.cmd" : "codex")), false);
   assert.equal(fs.existsSync(path.join(f.home, ".local", "bin", "codex")), false);
   assert.equal(fs.existsSync(path.join(f.state, "config.json")), false);
+});
+
+for (const targets of [[], ["codex"]]) {
+  test(`default setup ${targets.join(" ")} installs display and reset/setup restores it without changing Codex`, posix, (t) => {
+    const f = fixture(t);
+    const original = f.write(path.join(f.root, "original/codex"), "#!/bin/sh\nprintf 'native-codex\\n'\n");
+    fs.chmodSync(original, 0o755);
+    f.env.PATH = path.dirname(original) + path.delimiter + f.env.PATH;
+    f.env.AI_BATTERY_NO_UPDATE_CHECK = "1";
+    f.env.CODEX_THREAD_ID = "test-session";
+    delete f.env.AI_BATTERY_WRAPPED_CODEX;
+    const preserved = [
+      [original, fs.readFileSync(original, "utf8")],
+      [path.join(f.codex, "config.toml"), 'model = "keep"\n[tui]\nstatus_line = ["context-remaining"]\n'],
+      [path.join(f.codex, "sessions/keep.jsonl"), "resume history\n"],
+      [path.join(f.claude, "settings.json"), '{"statusLine":{"type":"command","command":"external-tool"}}\n']
+    ];
+    for (const [file, text] of preserved) f.write(file, text);
+    const shell = f.write(f.env.AI_BATTERY_RC, "export USER_SETTING=keep\n");
+    for (let cycle = 0; cycle < 2; cycle++) {
+      const result = f.run(["setup", ...targets, "--json"]);
+      assert.equal(result.status, 0, result.stderr + result.stdout);
+      const wrapper = JSON.parse(result.stdout).codex.wrapperPath;
+      assert.match(fs.readFileSync(wrapper, "utf8"), /AI_BATTERY_MANAGED_CODEX_WRAPPER/);
+      f.env.PATH = path.dirname(wrapper) + path.delimiter + f.env.PATH;
+      const doctor = JSON.parse(f.run(["doctor", "--json"]).stdout);
+      assert.equal(doctor.codex.providerEnabled, true);
+      assert.equal(doctor.codex.terminalDisplay.status, "ready");
+      assert.equal(doctor.codex.terminalDisplay.currentSession, "unwrapped");
+      assert.match(f.run(["doctor"]).stdout, /TUI: ready/);
+      const reset = f.run(["reset", "codex", "--json"]);
+      assert.equal(reset.status, 0, reset.stderr + reset.stdout);
+      assert.equal(fs.existsSync(wrapper), false);
+      assert.equal(fs.readFileSync(shell, "utf8"), "export USER_SETTING=keep\n");
+      const after = JSON.parse(f.run(["doctor", "--json"]).stdout);
+      assert.equal(after.codex.providerEnabled, true);
+      assert.equal(after.codex.terminalDisplay.ready, false);
+      assert.equal(after.codex.terminalDisplay.status, "not configured");
+      assert.equal(after.codex.terminalDisplay.action, "ai-battery setup codex");
+      for (const [file, text] of preserved) assert.equal(fs.readFileSync(file, "utf8"), text, file);
+    }
+  });
+}
+
+test("--no-wrap-codex skips setup without removing an existing integration", posix, (t) => {
+  const f = fixture(t);
+  const native = f.write(path.join(f.root, "original/codex"), "#!/bin/sh\nexit 0\n");
+  fs.chmodSync(native, 0o755);
+  f.env.PATH = path.dirname(native) + path.delimiter + f.env.PATH;
+  const first = f.run(["setup", "codex", "--json"]);
+  assert.equal(first.status, 0, first.stderr + first.stdout);
+  const wrapper = JSON.parse(first.stdout).codex.wrapperPath;
+  const before = fs.readFileSync(wrapper, "utf8");
+  const shell = fs.readFileSync(f.env.AI_BATTERY_RC, "utf8");
+  const skipped = f.run(["setup", "codex", "--no-wrap-codex", "--json"]);
+  assert.equal(skipped.status, 0, skipped.stderr);
+  assert.equal(JSON.parse(skipped.stdout).codex.wrapperSetupSkipped, true);
+  assert.equal(fs.readFileSync(wrapper, "utf8"), before);
+  assert.equal(fs.readFileSync(f.env.AI_BATTERY_RC, "utf8"), shell);
+});
+
+test("setup reports incomplete when Python is unavailable instead of promising a working TUI", posix, (t) => {
+  const f = fixture(t);
+  const native = f.write(path.join(f.root, "original/codex"), "#!/bin/sh\nexit 0\n");
+  fs.chmodSync(native, 0o755);
+  f.env.PATH = path.dirname(native);
+  f.env.LANGUAGE = "en";
+  const result = f.run(["setup", "codex"]);
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout, /Python 3/);
+  assert.match(result.stdout, /Setup incomplete/);
+  assert.doesNotMatch(result.stdout, /wrapper: ready|Setup complete\./);
+});
+
+test("setup reports a missing Codex command as incomplete", posix, (t) => {
+  const f = fixture(t);
+  const python = f.write(path.join(f.root, "python-only/python3"), "#!/bin/sh\nexit 0\n");
+  fs.chmodSync(python, 0o755);
+  f.env.PATH = path.dirname(python);
+  f.env.LANGUAGE = "en";
+  const result = f.run(["setup", "codex"]);
+  assert.equal(result.status, 1, result.stdout + result.stderr);
+  assert.match(result.stdout, /codex not found on PATH/);
+  assert.match(result.stdout, /Setup incomplete/);
 });
 
 test("setup refreshes existing Codex integration without consuming backups or deleting cached paths", posix, (t) => {

@@ -1,6 +1,6 @@
 {
   "name": "ai-battery",
-  "version": "0.1.27",
+  "version": "0.1.28",
   "description": "Tiny terminal battery meter for local Codex and Claude Code usage.",
   "type": "module",
   "keywords": [
@@ -43,6 +43,7 @@
     "vendor/rowpty/RowPty.cs",
     "docs/*.svg",
     "docs/RELEASING.md",
+    "docs/SETUP-REGRESSION.md",
     "README.md"
   ],
   "scripts": {

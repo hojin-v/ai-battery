@@ -1,5 +1,7 @@
 # AI Battery
 
+0.1.28: Restored automatic Codex terminal display with plain setup, including after reset and upgrades. Doctor separates visibility, integration readiness and the current session, with specific recovery actions. The original executable, settings and sessions remain preserved.
+
 0.1.27: Fixed duplicate usage rows accumulating in Codex when Korean status text wrapped at the bottom of the terminal. POSIX rendering now clips by screen cells without space padding. Unavailable providers use compact labels such as `Claude --%` in bounded rows.
 
 0.1.26: Setup now preserves and refreshes existing Codex wrappers, PATH, status lines and tmux integration without deleting paths cached by running shells. tmux setup distinguishes configured from active. The HUD popup has no bright border, and the main example is `ai-battery setup tmux`.
@@ -167,7 +169,7 @@ A child CLI cannot clear its parent shell's cached command paths. Opening a new 
 
 ## Setup
 
-`setup` preserves and refreshes existing Codex wrappers, PATH, status lines and tmux integration, and configures the Claude statusLine hook. It never removes cached command paths or recovery backups. Fresh installs keep Codex independent until a wrapper or built-in status line is explicitly requested. Use `reset` to remove integrations.
+`setup` preserves and refreshes existing Codex wrappers, PATH, status lines and tmux integration, and configures the Claude statusLine hook. It never removes cached command paths or recovery backups. Fresh installs and setup after reset enable the managed PATH wrapper while preserving the original Codex executable, configuration and session history. Use `reset` to remove integrations.
 
 ```bash
 ai-battery setup
@@ -180,7 +182,7 @@ ai-battery setup tmux
 ai-battery setup codex
 ```
 
-Only `ai-battery setup codex --wrap-codex` installs a PATH wrapper. Changing Codex `[tui].status_line` also requires `--configure-codex-statusline`. Both are explicit options because they change the execution path or user configuration. Recovery metadata is recorded before managed changes and restored by `reset`.
+`setup` and `setup codex` enable the PATH wrapper by default. `--wrap-codex` remains supported; `--no-wrap-codex` skips wrapper setup without removing existing integrations. Use `reset codex` to detach. Changing Codex `[tui].status_line` still requires `--configure-codex-statusline`. Recovery metadata is recorded before managed changes and restored by `reset`.
 
 In tmux, reserving a bottom row in every pane would duplicate the same global battery as many times as there are panes. Instead, you can show it once per session in the tmux status bar.
 
@@ -211,7 +213,7 @@ This setting applies to the CLI, Claude statusLine, Codex wrapper, and HUD toget
 
 ## Codex Terminal Row
 
-Plain `codex` runs independently of AI Battery. Use `ai-battery --watch 2` or a supported desktop HUD to view usage separately. Add a row for one session explicitly:
+After setup, plain `codex` in a new terminal displays the usage row. Doctor separates `Visibility` (on/off preference), `TUI` (readiness for the next launch) and `Session` (current attachment). The on command changes visibility without installing an integration. Use `ai-battery --watch 2` or a supported desktop HUD to view usage separately. Add a row for one session explicitly:
 
 ```bash
 ai-battery-run --provider all -- codex       # WSL/Linux/macOS

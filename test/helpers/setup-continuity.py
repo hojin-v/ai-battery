@@ -88,7 +88,12 @@ class Terminal:
 socket = str(root / 'tmux.sock')
 checks = []
 try:
-    first = setup('codex', '--wrap-codex', '--configure-codex-statusline')
+    initial_args = ['codex', '--configure-codex-statusline']
+    # 0.1.25–0.1.27 regressed to opt-in; create the old live session explicitly
+    # when exercising an npm upgrade. New-source tests use the default path.
+    if os.environ.get('AI_BATTERY_TEST_UPGRADE_TARBALL'):
+        initial_args.append('--wrap-codex')
+    first = setup(*initial_args)
     wrapper = Path(first['codex']['wrapperPath'])
     setup('tmux')
     command([node, cli, 'off', 'claude'])
@@ -151,6 +156,20 @@ try:
         assert 'bin/ai-battery.js' in command([tmux, '-S', socket, 'show-option', '-gv', 'status-right'])
         client.until('69%')
         checks.append('An already-attached tmux client redraws the usage bar without reconnecting')
+    # Reset changes future launches; it must not stop an attached command.
+    command([node, cli, 'reset', 'codex', '--json'])
+    assert not wrapper.exists()
+    running.send('after-reset\n')
+    running.until('CODEX_ECHO:after-reset')
+    repaired = setup()
+    assert repaired['codex']['ok'] and Path(repaired['codex']['wrapperPath']).exists()
+    running.send('after-repair\n')
+    running.until('CODEX_ECHO:after-repair')
+    recovered = Terminal(['/bin/bash', '--noprofile', '-i'], env)
+    recovered.send('codex\n')
+    recovered.until('CODEX_READY wrapped=1')
+    recovered.until('69%')
+    checks.append('Reset followed by plain setup restores a new terminal usage row while the original command stays interactive')
     print(json.dumps({'result': 'passed', 'checks': checks}, indent=2))
 finally:
     if shutil.which('tmux'):
