@@ -409,9 +409,9 @@ test("Windows HUD friendly aliases translate to PowerShell options", () => {
   ]);
 
   assert.deepEqual(parseWindowsHudArgs(["-Mode", "tray"]).filteredArgs, ["-Mode", "tray"]);
-  assert.throws(() => parseWindowsHudArgs(["wat"]), /unknown HUD option: wat/);
-  assert.match(windowsHudUsage(), /ai-battery hud light\s+light taskbar -> black text/);
-  assert.match(windowsHudUsage(), /ai-battery hud black\s+black text/);
+  assert.throws(() => parseWindowsHudArgs(["wat"]), /wat.*ai-battery hud --help/);
+  assert.match(windowsHudUsage(), /light\|dark/);
+  assert.match(windowsHudUsage(), /black\|white/);
   assert.equal(describeWindowsHudOptions(parseWindowsHudArgs(["black"]).filteredArgs), "black text");
   assert.equal(describeWindowsHudOptions(parseWindowsHudArgs(["--backdrop"]).filteredArgs), "backdrop on, white text");
 });
@@ -1198,7 +1198,7 @@ test("tmux status block installs, updates in place, and uninstalls cleanly", { s
   const confPath = path.join(tmpDir, "tmux.conf");
   fs.writeFileSync(confPath, "set -g mouse on\n");
 
-  withEnv({ AI_BATTERY_TMUX_CONF: confPath }, () => {
+  withEnv({ AI_BATTERY_TMUX_CONF: confPath, AI_BATTERY_STATE_DIR: path.join(tmpDir, "state") }, () => {
     const first = installTmuxStatus();
     assert.equal(first.ok, true);
     assert.equal(first.changed, true);
@@ -1227,7 +1227,7 @@ test("tmux install preserves existing status-right and restores on uninstall", {
   const confPath = path.join(tmpDir, "tmux.conf");
   fs.writeFileSync(confPath, 'set -g mouse on\nset -g status-right " %H:%M "\n');
 
-  withEnv({ AI_BATTERY_TMUX_CONF: confPath }, () => {
+  withEnv({ AI_BATTERY_TMUX_CONF: confPath, AI_BATTERY_STATE_DIR: path.join(tmpDir, "state") }, () => {
     installTmuxStatus();
     const text = fs.readFileSync(confPath, "utf8");
     // Existing status-right must be preserved with battery appended to the right
@@ -1575,7 +1575,7 @@ test("HUD launcher parses dock options", () => {
   assert.equal(parseWindowsHudArgs(["--dock-position", "tabs"]).dockPosition, "tabs");
   assert.equal(parseWindowsHudArgs(["--dock-position=top"]).dockPosition, "tabs");
   assert.equal(parseWindowsHudArgs(["--dock-bottom"]).dockPosition, "bottom");
-  assert.throws(() => parseWindowsHudArgs(["--dock-position", "side"]), /bottom or tabs/);
+  assert.throws(() => parseWindowsHudArgs(["--dock-position", "side"]), /bottom, tabs/);
 });
 
 test("Windows dock reserves space only on its terminal window", () => {
@@ -2458,7 +2458,7 @@ test("setup codex configures Codex built-in status_line and uninstall restores i
   assert.equal(setupJson.codex.statusLine.changed, true);
   const textSetup = spawnNode([CLI_PATH, "setup", "codex", "--wrap-codex", "--configure-codex-statusline"], { encoding: "utf8", env, timeout: 5000 });
   assert.equal(textSetup.status, 0, textSetup.stderr);
-  assert.match(textSetup.stdout, /status_line already configured/);
+  assert.match(textSetup.stdout, /status_line: already configured/);
   const configuredToml = fs.readFileSync(configToml, "utf8");
   assert.equal(codexStatusLineMatches(configuredToml), true);
   assert.doesNotMatch(configuredToml, /context-remaining/);
@@ -3116,7 +3116,7 @@ test("setup does not touch Codex or Claude when AI Battery's own config is inval
   });
 
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /AI Battery config is invalid/);
+  assert.match(result.stderr, /AI Battery config/);
   assert.equal(fs.readFileSync(codexConfig, "utf8"), originalCodexConfig);
   assert.equal(fs.readFileSync(claudeSettings, "utf8"), originalClaudeSettings);
   assert.equal(fs.existsSync(path.join(shimDir, CODEX_BIN_NAME)), false);

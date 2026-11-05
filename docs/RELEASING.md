@@ -1,66 +1,68 @@
 # npm release
 
-The current release candidate is **0.1.22**. It includes the 0.1.21 usage-refresh fixes and changes the default Codex integration to preserve independent execution. Preparing a tarball does not publish it to npm.
+The prepared version is **0.1.25**. The npm `latest` version was 0.1.24 when checked on 2026-11-05. Preparing or pushing this release does not publish it to npm.
 
-## Changes in 0.1.22
+## Changes in 0.1.25
 
-- Default `setup codex` restores legacy AI Battery integrations without creating a Codex wrapper, adding PATH entries or configuring Codex's status line. Use an independent watcher/HUD, or explicitly launch a runner for one session. `--wrap-codex` and `--configure-codex-statusline` are separate opt-ins.
-- `ai-battery reset settings` restores integrations and selectively removes verified caches, private runtimes and generated files. `reset config` is an alias. The CLI never invokes npm uninstall; all npm packages, package commands and local project manifests/lockfiles are preserved. `teardown` and `uninstall` remain compatibility aliases. Targeted reset restores only the selected integration.
-- Shell and tmux recovery records preserve exact original content, permissions and file absence. User edits outside managed blocks survive repeated setup and reset. Edited blocks, retargeted symlinks and unresolved recovery records prevent unsafe removal.
-- Windows PATH cleanup preserves unrelated whitespace and separators and reports failed writes. HUD cleanup verifies its Run value and launcher ownership and preserves unknown files. macOS LaunchAgent cleanup refuses foreign files and symlinks.
-- Existing Bash terminals can cache a deleted legacy Codex wrapper. Run `hash -r` (zsh: `rehash`) or open a new terminal. A child CLI cannot clear its parent shell's command cache. A POSIX wrapper whose Python runner cannot start because Python is absent now runs the original Codex directly.
+- Ubuntu/Linux HUD uses the same SVG logos, meters and percentages as the macOS menu bar. Its native panel menu includes usage/reset details, Refresh and Quit. GJS and libdbusmenu connect to a StatusNotifier host, including Ubuntu AppIndicators. Snapshots run asynchronously, failures keep the last artwork with a retry message, and the service reconnects after unlock. XDG autostart, stop/status/reset and isolated state roots are supported; WSL continues to use the Windows HUD.
+- Help, diagnostics, setup/reset results and errors use concise Korean or English messages. Locale selection follows `LANGUAGE`, `LC_ALL`, `LC_MESSAGES`, `LANG`, then Node's default locale. Unsupported languages fall back to English. Technical terms, paths, commands and external errors remain intact.
+- Main help lists `setup`, `hud` and `on / off` first, with command and option headings. Detailed help only advertises relevant options and examples; native Windows HUD options are shown on Windows.
+- **CLI behavior change:** running `ai-battery` without arguments opens help, and the `show` command is removed. Use an integrated status line, HUD or `--watch` for continuous usage display. Existing flag-based JSON, tmux, runner and macOS menu outputs remain available to integrations.
+- `ai-battery reset` restores integrations and cleans owned files; targets can follow directly, for example `ai-battery reset claude`. `reset settings`, `reset config`, `teardown` and `uninstall` remain compatibility forms. Reset preserves npm packages and unrelated provider settings.
+- `doctor` summarizes status without treating optional Codex wrappers/status lines as missing requirements. `doctor --json` retains full diagnostic data. JSON report keys and message values remain independent of the display locale.
 
 ## Validation
 
-Checked on 2026-10-15:
-
-| Environment | Result |
-| --- | --- |
-| WSL `npm run check` | 156 passed, 16 platform skips, 0 failures |
-| Windows native Node 22.23.2 full suite | 135 passed, 37 platform skips, 0 failures |
-
-Validation results and tarball manifests are stored in `.cache/releases/0.1.22/`. The regression suite covers default command/config preservation, exact shell restoration, user edits, symlinks, custom integration paths, incomplete recovery, global/local package preservation, settings/config and compatibility aliases, HUD target parsing, invalid reset scopes, and Windows registry ownership. Desktop operations in the installed CLI fixture are stubbed; Windows autostart cleanup is separately exercised against a temporary registry key and profile.
-
-Reset behavior is tested in isolated global and local installations, with provider settings and original launchers compared byte for byte. npm removal is a separate explicit operation in the installed-tarball checks.
-
-Native Windows validation uses x64 Node 22.23.2. macOS LaunchAgent ownership and file handling are tested through an isolated fixture; native macOS and Windows ARM64 are not verified here.
-
-## Prepare
+Run checks from this checkout and save release artifacts under `.cache/releases/0.1.25/`:
 
 ```text
 npm run check
-npm pack --dry-run
-npm pack --pack-destination .cache/releases/0.1.22
+npm pack --dry-run --json
+npm pack --pack-destination .cache/releases/0.1.25 --json
 ```
 
-Inspect the package file list. Include the core cleanup/recovery modules, platform modules, bin entrypoints and required PowerShell files. Exclude screenshots, logs, credentials, local runtime binaries, tests and `.cache`. Verify the exact tarball using an isolated npm prefix and provider homes. Release 0.1.21 fullscreen/compositor reports remain under `.cache/releases/0.1.21/`; this release changes setup/removal rather than terminal composition.
+The regression suite covers locale precedence, command help, no-argument help, removed commands, bare and targeted reset, compatibility forms, localized runtime messages, file preservation and locale-independent JSON reports. Linux HUD tests cover real GJS registration/menu export on a private session bus, snapshot refresh, provider visibility, stale-data recovery, reconnect, restart, stop/reset and literal desktop-entry argument handling. Native Linux tests require GJS and libdbusmenu; other platform tests are skipped where their runtime is unavailable. Native Windows, macOS and Windows ARM64 require their own runtime validation.
+
+On Ubuntu GNOME 50.1 / Wayland, the Linux HUD registered with the real AppIndicators host. While the desktop was locked, its waiting/reconnect state was verified; a private bus also verified host disappearance and return without changing the user's desktop.
+
+Inspect the package manifest for the core CLI help/message/output modules, platform modules, stable bin entrypoints and required PowerShell files. Exclude tests, logs, credentials, node_modules and `.cache`. Install the exact tarball into an isolated npm prefix, with lifecycle scripts disabled for the smoke check, and verify:
+
+- npm bin links and `--version` report 0.1.25;
+- Korean and English main/command help show the intended commands and headings;
+- setup, doctor, on/off and targeted reset work with temporary provider homes;
+- invalid commands/configuration produce localized errors without changing the source file;
+- JSON reports retain the same schema and values across locales.
+
+Keep the tarball, manifest, checksum, test log, installed-package smoke report and publish dry-run output together. Publish that tested tarball rather than rebuilding it after validation.
 
 ## Publish manually
+
+Publishing is a separate step. The current npm authentication check returned HTTP 401; authenticate before publishing:
 
 ```text
 npm login
 npm whoami
-npm publish .cache/releases/0.1.22/ai-battery-0.1.22.tgz --access public --tag latest
+npm publish .cache/releases/0.1.25/ai-battery-0.1.25.tgz --access public --tag latest
 npm view ai-battery version dist-tags --json
 ```
 
-Publish the exact tested tarball. Complete npm authentication/2FA when requested. If the version is already published, increment it and repeat preparation. After publication, tag the tested commit (`v0.1.22`) and integrate the release branch into main.
+Complete npm authentication/2FA when requested. If 0.1.25 is already published by then, increment the version and rebuild and verify the package. After successful publication, tag the tested commit `v0.1.25`.
 
 ## Update or remove an installation
 
-Run separately for Windows and WSL:
+Run separately for Windows, WSL and each Node installation:
 
 ```text
-npm install -g ai-battery@0.1.22
-ai-battery setup codex
+npm install -g ai-battery@0.1.25
+ai-battery setup
 ```
 
-Default setup detaches a legacy wrapper. In an existing Bash terminal run `hash -r`; zsh uses `rehash`. Plain `codex` then runs independently. Display usage with `ai-battery --watch 2` or a supported desktop HUD. There is no built-in `ai-battery update` command.
+Default Codex setup preserves independent execution. It does not install a wrapper or modify Codex settings unless explicitly requested with `--wrap-codex` or `--configure-codex-statusline`. Use a supported desktop HUD or `--watch` for usage display. There is no built-in `ai-battery update` command.
 
-Restore AI Battery settings first, then remove the package with npm only if restoration succeeded:
+Restore integrations before removing the package:
 
 ```text
-ai-battery reset settings && npm uninstall -g ai-battery
+ai-battery reset && npm uninstall -g ai-battery
 ```
 
-Modified or unrecognized files are preserved and listed. A running wrapped session retains its loaded code until it exits. `reset config` is an alias for `reset settings`. The CLI never removes any npm installation. Use `npm uninstall ai-battery` for local installs; Windows/WSL and Node-version installations are managed separately.
+For local installs use `npm uninstall ai-battery`. Reset keeps edited/unrecognized files and incomplete recovery records, and never invokes npm uninstall. Existing Bash terminals may need `hash -r` (zsh: `rehash`) after a legacy wrapper is removed; sessions already using a wrapper keep their terminal row until they exit.

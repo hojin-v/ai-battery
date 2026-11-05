@@ -1,6 +1,6 @@
 # AI Battery
 
-0.1.22: La configuración predeterminada de Codex conserva su comando, PATH y ajustes. `reset settings` restaura las integraciones y limpia archivos generados. Conserva el paquete npm; su eliminación se hace por separado con npm.
+0.1.25: Nuevo HUD de panel en Ubuntu/Linux con el mismo diseño que macOS. La ayuda, los diagnósticos, los resultados y los errores usan mensajes concisos en coreano/inglés. Ejecutar sin argumentos muestra la ayuda; se ha eliminado `show`. Restaura las integraciones con `ai-battery reset`; las formas anteriores `reset settings` y `reset config` siguen disponibles.
 
 [한국어](../../../README.md) · [English](../en/) · [日本語](../ja/) · [中文](../zh/) · [Español](../es/)
 
@@ -20,7 +20,7 @@ Una herramienta de estado para terminal que muestra el uso restante de Codex y C
 
 `ai-battery` es una pequeña herramienta de estado para comprobar continuamente el uso restante y las horas de reinicio mientras usas Codex y Claude Code.
 
-Para Codex, lee eventos `rate_limits` desde los registros de sesiones locales. Para Claude Code, almacena en caché el payload de rate-limit que entrega el hook `statusLine`. Si Claude registra un 429 rate-limit hit real, ese límite se refleja como 0% hasta su reset correspondiente. La salida predeterminada se mantiene compacta en una sola línea: las herramientas en ejecución se muestran en blanco, las inactivas en gris, y solo la barra de batería cambia de color según el uso restante: verde, naranja o rojo.
+Para Codex, lee eventos `rate_limits` desde los registros de sesiones locales. Para Claude Code, almacena en caché el payload de rate-limit que entrega el hook `statusLine`. Si Claude registra un 429 rate-limit hit real, ese límite se refleja como 0% hasta su reset correspondiente. La visualización del uso se mantiene compacta en una sola línea: las herramientas en ejecución se muestran en blanco, las inactivas en gris, y solo la barra de batería cambia de color según el uso restante: verde, naranja o rojo.
 
 <img src="../../terminal-preview.svg" alt="AI Battery terminal preview showing green and red battery bars" width="940">
 
@@ -46,7 +46,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | Criterios de color | Resalta solo la batería: verde sobre 40%, naranja entre 21-40% y rojo en 20% o menos. |
 | Codex terminal row | Proporciona un PTY wrapper que fija una fila de uso dedicada debajo de Codex. |
 | Claude statusLine | Lee el estado de rate limit de Claude desde el hook statusLine integrado de Claude Code y los registros reales de 429 hit. |
-| HUD / menu bar | Proporciona un HUD flotante en Windows nativo/WSL y un elemento de barra de menús en macOS. |
+| HUD / menu bar | HUD flotante en Windows/WSL y vistas de panel con el mismo diseño en macOS y Ubuntu/Linux. |
 | Ejecución con npm | Puede ejecutarse con `npm install -g` o `npx`. |
 
 <a id="platform-support"></a>
@@ -59,7 +59,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | Claude statusLine | Compatible | Compatible | Compatible | Compatible | Guarda un comando `node <script>` en Claude Code `statusLine`. |
 | Codex terminal row | Compatible | Compatible | Compatible | Compatible | Windows: fullscreen PTY composition; WSL/Linux/macOS: POSIX PTY and Python 3. |
 | `ai-battery setup codex` | Compatible | Compatible | Compatible | Compatible | Retira wrappers anteriores de AI Battery. Los wrappers nuevos y los cambios de ajustes requieren opciones explícitas. |
-| `ai-battery hud` | Compatible | Compatible | No compatible | Compatible | Windows/WSL usan un HUD PowerShell/WinForms; macOS usa un elemento de barra de menús. |
+| `ai-battery hud` | Compatible | Compatible | Compatible | Compatible | Linux requiere un host StatusNotifier; verificado con Ubuntu GNOME AppIndicators. |
 
 La detección de procesos en ejecución usa `/proc` en Linux/WSL, `ps` en macOS y listados de procesos de PowerShell en Windows. La salida de texto usa blanco/gris; el HUD de macOS resalta solo los elementos en ejecución con barras de batería de color y muestra los elementos inactivos en gris tenue.
 
@@ -109,19 +109,18 @@ Los nombres anteriores, `claudex-battery`, `claudex-battery-run` y `claudex-batt
 <a id="cli"></a>
 ## CLI
 
+Ejecutar `ai-battery` sin argumentos muestra la ayuda. Consulta el uso continuamente con la línea de estado integrada, el HUD o `--watch`.
+
 ```bash
-ai-battery
-ai-battery --watch 10
-ai-battery --json
-ai-battery --version
-ai-battery --provider codex
-ai-battery --provider claude
 ai-battery setup
-ai-battery reset settings
-ai-battery doctor
 ai-battery hud
-ai-battery off codex
 ai-battery on codex
+ai-battery off codex
+ai-battery reset
+ai-battery doctor
+ai-battery --watch 10
+ai-battery --help
+ai-battery --version
 ```
 
 | Opción | Descripción |
@@ -138,18 +137,18 @@ ai-battery on codex
 <a id="uninstall"></a>
 ## Reset Settings
 
-`ai-battery reset settings` restaura los ajustes modificados por AI Battery y limpia sus cachés, runtimes privados y archivos generados verificados. Conserva otros ajustes de Codex/Claude y los paquetes npm. No restablece todos los ajustes de Codex/Claude. `reset config` es un alias.
+`ai-battery reset` restaura los ajustes modificados por AI Battery y limpia sus cachés, runtimes privados y archivos generados verificados. Conserva otros ajustes de Codex/Claude y los paquetes npm. No restablece todos los ajustes de Codex/Claude. Los comandos anteriores `reset settings` y `reset config` siguen disponibles.
 
 ```bash
-ai-battery reset settings
+ai-battery reset
 ```
 
-Para una sola integración usa `ai-battery reset settings codex` / `claude` / `hud` / `tmux`. Conserva archivos modificados o de propiedad desconocida y registros de recuperación pendientes.
+Para una sola integración usa `ai-battery reset codex` / `claude` / `hud` / `tmux`. Conserva archivos modificados o de propiedad desconocida y registros de recuperación pendientes.
 
 Elimina el paquete con npm después de restaurar los ajustes correctamente. Las instalaciones locales usan `npm uninstall ai-battery`. `uninstall` y `teardown` son alias de compatibilidad para restaurar ajustes y nunca ejecutan npm. Ejecuta cada instalación de Windows y WSL por separado. Limpia la caché de Bash con `hash -r` o la de zsh con `rehash`.
 
 ```bash
-ai-battery reset settings && npm uninstall -g ai-battery
+ai-battery reset && npm uninstall -g ai-battery
 ```
 
 <a id="setup"></a>
@@ -170,7 +169,7 @@ En tmux, reservar una fila inferior en cada pane duplicaría la misma batería g
 ai-battery setup tmux
 ```
 
-Esto agrega un bloque administrado a `~/.tmux.conf`, muestra la batería en `status-right` con actualización cada 10 segundos, y hace que `codex` dentro de tmux use todo el pane en lugar de añadir una fila de batería por pane. Claude statusLine también colapsa la fila de batería en el mismo entorno y muestra solo la fila de encabezado (modelo, directorio, rama), porque la batería ya está en la barra de tmux. Para aplicarlo, ejecuta `tmux source-file ~/.tmux.conf` y abre un nuevo pane. Este bloque sobrescribe la configuración existente de `status-right`, por lo que es opt-in y no se incluye en `setup all`. Se elimina con `ai-battery reset settings tmux`; si quieres mantener filas por pane dentro de tmux, configura `AI_BATTERY_TMUX=row`. Claude statusLine forma parte de la UI interna de Claude Code, así que se muestra independientemente de tmux.
+Esto agrega un bloque administrado a `~/.tmux.conf`, muestra la batería en `status-right` con actualización cada 10 segundos, y hace que `codex` dentro de tmux use todo el pane en lugar de añadir una fila de batería por pane. Claude statusLine también colapsa la fila de batería en el mismo entorno y muestra solo la fila de encabezado (modelo, directorio, rama), porque la batería ya está en la barra de tmux. Para aplicarlo, ejecuta `tmux source-file ~/.tmux.conf` y abre un nuevo pane. Este bloque sobrescribe la configuración existente de `status-right`, por lo que es opt-in y no se incluye en `setup all`. Se elimina con `ai-battery reset tmux`; si quieres mantener filas por pane dentro de tmux, configura `AI_BATTERY_TMUX=row`. Claude statusLine forma parte de la UI interna de Claude Code, así que se muestra independientemente de tmux.
 
 Si la fila inferior de Codex no aparece, ejecuta el diagnóstico.
 
@@ -224,7 +223,7 @@ ai-battery setup claude
 Eliminar:
 
 ```bash
-ai-battery reset settings claude
+ai-battery reset claude
 ```
 
 Claude debe entregar al menos una vez un payload de statusLine para que se cree la caché de uso de Claude. Hasta entonces se muestra el fallback basado en registros locales de Claude.
@@ -247,10 +246,10 @@ Claude [battery:76] │ 5h 00:47 │ 7d 59%
 
 | Comando | Rol |
 | --- | --- |
-| `ai-battery hud` / `ai-battery hud start` | Inicia el HUD flotante de Windows o el elemento de barra de menús de macOS. |
+| `ai-battery hud` / `ai-battery hud start` | Inicia el HUD de Windows o la vista de panel de macOS/Linux. |
 | `ai-battery hud stop` | Detiene el HUD/menu bar item en ejecución. (`--stop` es equivalente.) |
 | `ai-battery hud status` | Muestra si el HUD/menu bar item está en ejecución y si autostart está registrado. |
-| `ai-battery hud autostart on` | Registra el inicio automático al iniciar sesión en Windows o macOS. |
+| `ai-battery hud autostart on` | Registra el inicio automático al iniciar sesión en el escritorio. |
 | `ai-battery hud autostart off` | Elimina el registro de inicio automático. |
 | `ai-battery hud autostart status` | Muestra solo el estado de registro de autostart. |
 | `ai-battery hud -Foreground` | Ejecuta adjunto a la terminal para depuración. |
@@ -264,6 +263,17 @@ Claude [battery:76] │ 5h 00:47 │ 7d 59%
 El HUD flotante de Windows usa por defecto texto claro sobre fondo transparente. En una barra de tareas clara usa `ai-battery hud light`; en una oscura usa `ai-battery hud dark`. Para elegir el color de texto directamente, usa `ai-battery hud black` o `ai-battery hud white`. Para guardar el mismo modo en el inicio automático, añade el modo como en `ai-battery hud autostart on light`.
 
 El autostart de Windows se registra por usuario en `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`. En Windows nativo se ejecuta directamente sin WSL; si se registra desde WSL, se coloca una copia del script HUD en `%LOCALAPPDATA%\ai-battery`. El autostart de macOS se registra como `~/Library/LaunchAgents/com.ai-battery.hud.plist`. Después de actualizar ai-battery, ejecuta de nuevo `ai-battery hud autostart on` para refrescar la ruta registrada.
+
+### Ubuntu / Linux
+
+`ai-battery hud` muestra los mismos logos SVG, barras y porcentajes de macOS en el panel superior. Al hacer clic aparecen la hora de reset 5h, el uso restante 7d y las acciones de actualizar y salir. Se reconecta al desbloquear la pantalla. Requiere GJS, libdbusmenu y un host StatusNotifier, como Ubuntu AppIndicators.
+
+```bash
+sudo apt install gjs gir1.2-dbusmenu-glib-0.4
+ai-battery hud
+```
+
+Linux admite `hud start/stop/status` y `hud autostart on/off/status`. El inicio automático usa `~/.config/autostart/ai-battery-hud.desktop` y respeta `XDG_CONFIG_HOME`. `ai-battery reset hud` detiene el HUD y elimina su registro de inicio automático.
 
 <a id="shell-prompt"></a>
 ## Prompt de shell
@@ -312,7 +322,7 @@ Node.js 18+ supports the CLI. Windows defaults to `composite`: PATH-selected Cod
 Los datos se leen del directorio `sessions` del `CODEX_HOME` que usa realmente Codex (`~/.codex` por defecto). AI Battery nunca configura ni cambia `HOME`, `USERPROFILE` o `CODEX_HOME`. Cambiar `CODEX_HOME` también cambia el almacén `/resume` de Codex, por lo que no debe usarse para combinar rutas de Windows y WSL. No se admiten varios homes separados por comas.
 
 ```bash
-CODEX_HOME=/path/to/codex-home ai-battery --provider codex
+CODEX_HOME=/path/to/codex-home ai-battery --watch --provider codex
 ```
 
 Al usar Windows nativo y WSL juntos, cada entorno conserva sus propias sesiones y su historial `/resume`. Solo se comparte el uso global 5h/7d de la cuenta mediante el archivo `codex-account-usage.json` de AI Battery; no se comparten rutas de sesión, workspaces ni modos de aprobación/sandbox.

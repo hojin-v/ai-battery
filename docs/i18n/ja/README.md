@@ -1,6 +1,6 @@
 # AI Battery
 
-0.1.22: Codex の既定セットアップは実行コマンド・PATH・設定を変更しません。`reset settings` は AI Battery の統合を復元して生成ファイルを整理します。npm パッケージは保持し、削除は npm で別途行います。
+0.1.25: Ubuntu/Linux に macOS と同じデザインのパネル HUD を追加しました。 ヘルプ・診断・設定結果・エラー表示を簡潔な韓国語/英語に整理しました。引数なしの実行はヘルプを表示し、`show` は削除しました。設定の復元は `ai-battery reset` を使います。以前の `reset settings` と `reset config` も引き続き使えます。
 
 [한국어](../../../README.md) · [English](../en/) · [日本語](../ja/) · [中文](../zh/) · [Español](../es/)
 
@@ -20,7 +20,7 @@ Codex と Claude Code の残り使用量を、バッテリーのように確認�
 
 `ai-battery` は、Codex と Claude Code を使いながら残り使用量とリセット時刻を継続的に確認するための小さなステータス表示ツールです。
 
-Codex については、ローカルセッションログの `rate_limits` イベントを読み取ります。Claude Code については、`statusLine` hook が渡す rate-limit payload をキャッシュして使います。Claude が実際の 429 rate-limit hit を記録した場合は、該当する reset までその制限を 0% として反映します。デフォルト出力は小さな 1 行に保たれ、実行中のツールは白、実行中でないツールはグレーで表示されます。バッテリーバーだけが残量に応じて緑、オレンジ、赤に変わります。
+Codex については、ローカルセッションログの `rate_limits` イベントを読み取ります。Claude Code については、`statusLine` hook が渡す rate-limit payload をキャッシュして使います。Claude が実際の 429 rate-limit hit を記録した場合は、該当する reset までその制限を 0% として反映します。使用量表示は小さな 1 行に保たれ、実行中のツールは白、実行中でないツールはグレーで表示されます。バッテリーバーだけが残量に応じて緑、オレンジ、赤に変わります。
 
 <img src="../../terminal-preview.svg" alt="AI Battery terminal preview showing green and red battery bars" width="940">
 
@@ -46,7 +46,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | 色の基準 | 40% 超は緑、21-40% はオレンジ、20% 以下は赤で、バッテリーだけを強調します。 |
 | Codex terminal row | Codex の下に専用の使用量行を固定する PTY wrapper を提供します。 |
 | Claude statusLine | Claude Code 内蔵の statusLine hook と実際の 429 hit ログから Claude の rate limit 状態を読み取ります。 |
-| HUD / menu bar | Windows native/WSL では floating HUD、macOS では menu bar status item を提供します。 |
+| HUD / menu bar | Windows native/WSL は floating HUD、macOS と Ubuntu/Linux は同じデザインのパネル表示です。 |
 | npm 実行 | `npm install -g` または `npx` で実行できます。 |
 
 <a id="platform-support"></a>
@@ -59,7 +59,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | Claude statusLine | 対応 | 対応 | 対応 | 対応 | Claude Code `statusLine` に `node <script>` コマンドを保存します。 |
 | Codex terminal row | 対応 | 対応 | 対応 | 対応 | Windows: fullscreen PTY composition; WSL/Linux/macOS: POSIX PTY and Python 3. |
 | `ai-battery setup codex` | 対応 | 対応 | 対応 | 対応 | 既存の AI Battery wrapper を解除します。新しい wrapper と Codex 設定変更は明示的なオプションが必要です。 |
-| `ai-battery hud` | 対応 | 対応 | 未対応 | 対応 | Windows/WSL は PowerShell/WinForms HUD、macOS は menu bar status item です。 |
+| `ai-battery hud` | 対応 | 対応 | 対応 | 対応 | Linux は StatusNotifier ホストが必要です。Ubuntu GNOME AppIndicators で確認しました。 |
 
 実行中の検出には、Linux/WSL では `/proc`、macOS では `ps`、Windows では PowerShell のプロセス一覧を使います。テキスト出力は白/グレーで、macOS HUD では実行中の項目だけを色付きバッテリーバーで強調し、実行中でない項目は淡いグレー系で表示します。
 
@@ -109,19 +109,18 @@ npx ai-battery
 <a id="cli"></a>
 ## CLI
 
+引数なしで `ai-battery` を実行するとヘルプを表示します。使用量は連携したステータス行、HUD、または `--watch` で継続的に確認します。
+
 ```bash
-ai-battery
-ai-battery --watch 10
-ai-battery --json
-ai-battery --version
-ai-battery --provider codex
-ai-battery --provider claude
 ai-battery setup
-ai-battery reset settings
-ai-battery doctor
 ai-battery hud
-ai-battery off codex
 ai-battery on codex
+ai-battery off codex
+ai-battery reset
+ai-battery doctor
+ai-battery --watch 10
+ai-battery --help
+ai-battery --version
 ```
 
 | オプション | 説明 |
@@ -138,18 +137,18 @@ ai-battery on codex
 <a id="uninstall"></a>
 ## Reset Settings
 
-`ai-battery reset settings` は AI Battery が変更した設定を元に戻し、所有権を確認したキャッシュ・専用ランタイム・生成ファイルを整理します。他の Codex/Claude 設定と npm パッケージは保持します。Codex/Claude の設定全体を初期化するコマンドではありません。`reset config` も同じ動作です。
+`ai-battery reset` は AI Battery が変更した設定を元に戻し、所有権を確認したキャッシュ・専用ランタイム・生成ファイルを整理します。他の Codex/Claude 設定と npm パッケージは保持します。Codex/Claude の設定全体を初期化するコマンドではありません。以前の `reset settings` と `reset config` も引き続き使えます。
 
 ```bash
-ai-battery reset settings
+ai-battery reset
 ```
 
-一部だけを復元する場合は `ai-battery reset settings codex` / `claude` / `hud` / `tmux` を使います。編集済み・所有権不明のファイルと未解決の復旧記録は保持します。
+一部だけを復元する場合は `ai-battery reset codex` / `claude` / `hud` / `tmux` を使います。編集済み・所有権不明のファイルと未解決の復旧記録は保持します。
 
 パッケージの削除は設定復元に成功してから npm で行います。ローカルインストールは `npm uninstall ai-battery` を使います。`uninstall` と `teardown` は設定復元の互換別名で、npm は実行しません。Windows と WSL はそれぞれ実行してください。Bash のキャッシュは `hash -r`、zsh は `rehash` で消去できます。
 
 ```bash
-ai-battery reset settings && npm uninstall -g ai-battery
+ai-battery reset && npm uninstall -g ai-battery
 ```
 
 <a id="setup"></a>
@@ -170,7 +169,7 @@ tmux では pane ごとに下部行を予約すると、同じグローバルバ
 ai-battery setup tmux
 ```
 
-`~/.tmux.conf` に管理ブロックを追加し、status-right にバッテリーを表示します（10 秒間隔で更新）。この tmux 内で実行される `codex` は pane ごとのバッテリー行を省略し、pane 全体を使います。Claude statusLine も同じ環境ではバッテリー行を折りたたみ、ヘッダー（モデル、ディレクトリ、ブランチ）1 行だけを表示します。バッテリーはすでに tmux bar にあるためです。適用するには `tmux source-file ~/.tmux.conf` を実行し、新しい pane を開いてください。このブロックは既存の `status-right` 設定を上書きするため、`setup all` には含まれない opt-in です。解除は `ai-battery reset settings tmux`、tmux 内でも pane ごとの行を維持したい場合は `AI_BATTERY_TMUX=row` を設定します。Claude statusLine は Claude Code 内部 UI なので、tmux かどうかに関係なく表示されます。
+`~/.tmux.conf` に管理ブロックを追加し、status-right にバッテリーを表示します（10 秒間隔で更新）。この tmux 内で実行される `codex` は pane ごとのバッテリー行を省略し、pane 全体を使います。Claude statusLine も同じ環境ではバッテリー行を折りたたみ、ヘッダー（モデル、ディレクトリ、ブランチ）1 行だけを表示します。バッテリーはすでに tmux bar にあるためです。適用するには `tmux source-file ~/.tmux.conf` を実行し、新しい pane を開いてください。このブロックは既存の `status-right` 設定を上書きするため、`setup all` には含まれない opt-in です。解除は `ai-battery reset tmux`、tmux 内でも pane ごとの行を維持したい場合は `AI_BATTERY_TMUX=row` を設定します。Claude statusLine は Claude Code 内部 UI なので、tmux かどうかに関係なく表示されます。
 
 Codex の下部行が表示されない場合は診断を実行します。
 
@@ -224,7 +223,7 @@ ai-battery setup claude
 削除:
 
 ```bash
-ai-battery reset settings claude
+ai-battery reset claude
 ```
 
 Claude が少なくとも一度 statusLine payload を渡すまで、Claude の使用量キャッシュは作成されません。それまでは Claude ローカルログベースの fallback が表示されます。
@@ -247,10 +246,10 @@ Claude [battery:76] │ 5h 00:47 │ 7d 59%
 
 | コマンド | 役割 |
 | --- | --- |
-| `ai-battery hud` / `ai-battery hud start` | Windows floating HUD または macOS menu bar item を開始します。 |
+| `ai-battery hud` / `ai-battery hud start` | Windows HUD または macOS/Linux パネル表示を開始します。 |
 | `ai-battery hud stop` | 実行中の HUD/menu bar item を終了します。(`--stop` も同じです。) |
 | `ai-battery hud status` | HUD/menu bar の実行状態と autostart 登録状態を表示します。 |
-| `ai-battery hud autostart on` | Windows ログインまたは macOS ログイン時の自動実行を登録します。 |
+| `ai-battery hud autostart on` | デスクトップへのログイン時の自動実行を登録します。 |
 | `ai-battery hud autostart off` | 自動実行登録を解除します。 |
 | `ai-battery hud autostart status` | 自動実行登録状態だけを表示します。 |
 | `ai-battery hud -Foreground` | デバッグ用にターミナルに接続して実行します。 |
@@ -264,6 +263,17 @@ Claude [battery:76] │ 5h 00:47 │ 7d 59%
 Windows floating HUD はデフォルトで透明背景に明るい文字で表示します。明るいタスクバーでは `ai-battery hud light`、暗いタスクバーでは `ai-battery hud dark` を使ってください。文字色を直接選ぶ場合は `ai-battery hud black` または `ai-battery hud white` を使います。ログイン自動実行にも同じモードを保存するには、`ai-battery hud autostart on light` のように指定します。
 
 Windows autostart は `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` にユーザー単位で登録されます。Windows native では WSL なしで直接実行され、WSL から登録した場合は HUD スクリプトのコピーを `%LOCALAPPDATA%\ai-battery` に置きます。macOS autostart は `~/Library/LaunchAgents/com.ai-battery.hud.plist` として登録されます。ai-battery を更新した後は、`ai-battery hud autostart on` を再実行して登録パスを更新してください。
+
+### Ubuntu / Linux
+
+`ai-battery hud` は上部パネルに macOS と同じ SVG ロゴ、バー、割合を表示します。クリックすると 5h リセット時刻、7d 残量、更新・終了メニューを表示します。画面ロック解除後は自動で再接続します。GJS、libdbusmenu、StatusNotifier ホスト（Ubuntu AppIndicators など）が必要です。
+
+```bash
+sudo apt install gjs gir1.2-dbusmenu-glib-0.4
+ai-battery hud
+```
+
+Linux の `hud start/stop/status` と `hud autostart on/off/status` に対応しています。自動起動は `~/.config/autostart/ai-battery-hud.desktop`（`XDG_CONFIG_HOME` 対応）に登録します。`ai-battery reset hud` で停止し、所有する自動起動設定を削除します。
 
 <a id="shell-prompt"></a>
 ## シェルプロンプト
@@ -312,7 +322,7 @@ Node.js 18+ supports the CLI. Windows defaults to `composite`: PATH-selected Cod
 Codex データは、Codex が実際に使用する `CODEX_HOME`（既定値 `~/.codex`）内の `sessions` を読みます。AI Battery は `HOME`、`USERPROFILE`、`CODEX_HOME` を設定・変更しません。`CODEX_HOME` を変更すると Codex 自身の `/resume` 保存先も変わるため、Windows と WSL のパス統合には使用しないでください。カンマ区切りの複数 home はサポートされません。
 
 ```bash
-CODEX_HOME=/path/to/codex-home ai-battery --provider codex
+CODEX_HOME=/path/to/codex-home ai-battery --watch --provider codex
 ```
 
 Windows native と WSL を併用する場合も、各環境の session と `/resume` 履歴は独立して維持されます。共有されるのは AI Battery 専用 `codex-account-usage.json` に保存されるアカウント共通の Codex 5h/7d 使用量だけで、session path、workspace、approval/sandbox mode は共有されません。

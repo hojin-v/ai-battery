@@ -1,6 +1,6 @@
 # AI Battery
 
-0.1.22：默认 Codex 设置不修改执行命令、PATH 或配置。`reset settings` 恢复 AI Battery 集成并清理生成文件，保留 npm 包。包删除由 npm 单独完成。
+0.1.25：新增 Ubuntu/Linux 面板 HUD，使用与 macOS 相同的设计。 帮助、诊断、设置结果和错误提示改为简洁的韩语/英语。不带参数运行会显示帮助，`show` 命令已移除。使用 `ai-battery reset` 恢复集成；旧命令 `reset settings` 和 `reset config` 仍受支持。
 
 [한국어](../../../README.md) · [English](../en/) · [日本語](../ja/) · [中文](../zh/) · [Español](../es/)
 
@@ -20,7 +20,7 @@ Codex 和 Claude 使用量电量计
 
 `ai-battery` 是一个小型状态显示工具，用于在使用 Codex 和 Claude Code 时持续查看剩余使用量和重置时间。
 
-Codex 会读取本地会话日志中的 `rate_limits` 事件；Claude Code 会缓存 `statusLine` hook 传入的 rate-limit payload。如果 Claude 记录了真实的 429 rate-limit hit，则在对应 reset 之前将该限制显示为 0%。默认输出保持为紧凑的一行：正在运行的工具显示为白色，未运行的工具显示为灰色，只有电量条会根据余量变为绿色、橙色或红色。
+Codex 会读取本地会话日志中的 `rate_limits` 事件；Claude Code 会缓存 `statusLine` hook 传入的 rate-limit payload。如果 Claude 记录了真实的 429 rate-limit hit，则在对应 reset 之前将该限制显示为 0%。用量显示保持为紧凑的一行：正在运行的工具显示为白色，未运行的工具显示为灰色，只有电量条会根据余量变为绿色、橙色或红色。
 
 <img src="../../terminal-preview.svg" alt="AI Battery terminal preview showing green and red battery bars" width="940">
 
@@ -46,7 +46,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | 颜色规则 | 仅突出电量条：40% 以上为绿色，21-40% 为橙色，20% 以下为红色。 |
 | Codex terminal row | 提供 PTY wrapper，在 Codex 下方固定一行专用使用量显示。 |
 | Claude statusLine | 通过 Claude Code 内置 statusLine hook 和真实 429 hit 日志读取 Claude rate limit 状态。 |
-| HUD / menu bar | Windows 原生/WSL 提供 floating HUD，macOS 提供 menu bar status item。 |
+| HUD / menu bar | Windows 原生/WSL 使用 floating HUD；macOS 和 Ubuntu/Linux 使用相同设计的面板显示。 |
 | npm 运行 | 可以通过 `npm install -g` 或 `npx` 运行。 |
 
 <a id="platform-support"></a>
@@ -59,7 +59,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | Claude statusLine | 支持 | 支持 | 支持 | 支持 | 将 `node <script>` 命令保存到 Claude Code `statusLine`。 |
 | Codex terminal row | 支持 | 支持 | 支持 | 支持 | Windows: fullscreen PTY composition; WSL/Linux/macOS: POSIX PTY and Python 3. |
 | `ai-battery setup codex` | 支持 | 支持 | 支持 | 支持 | 解除旧 AI Battery wrapper。新 wrapper 和 Codex 配置修改需要显式选项。 |
-| `ai-battery hud` | 支持 | 支持 | 不支持 | 支持 | Windows/WSL 使用 PowerShell/WinForms HUD，macOS 使用 menu bar status item。 |
+| `ai-battery hud` | 支持 | 支持 | 支持 | 支持 | Linux 需要 StatusNotifier 面板主机，已在 Ubuntu GNOME AppIndicators 上验证。 |
 
 运行中检测在 Linux/WSL 上使用 `/proc`，在 macOS 上使用 `ps`，在 Windows 上使用 PowerShell 进程列表。文本输出使用白色/灰色；macOS HUD 只用彩色电量条突出正在运行的项目，未运行项目则使用淡灰色显示。
 
@@ -109,19 +109,18 @@ npx ai-battery
 <a id="cli"></a>
 ## CLI
 
+不带参数运行 `ai-battery` 会显示帮助。通过集成状态栏、HUD 或 `--watch` 持续查看用量。
+
 ```bash
-ai-battery
-ai-battery --watch 10
-ai-battery --json
-ai-battery --version
-ai-battery --provider codex
-ai-battery --provider claude
 ai-battery setup
-ai-battery reset settings
-ai-battery doctor
 ai-battery hud
-ai-battery off codex
 ai-battery on codex
+ai-battery off codex
+ai-battery reset
+ai-battery doctor
+ai-battery --watch 10
+ai-battery --help
+ai-battery --version
 ```
 
 | 选项 | 说明 |
@@ -138,18 +137,18 @@ ai-battery on codex
 <a id="uninstall"></a>
 ## Reset Settings
 
-`ai-battery reset settings` 恢复 AI Battery 修改的设置，并清理归属明确的缓存、专用运行时和生成文件。其他 Codex/Claude 设置与 npm 包会保留。它不会将 Codex/Claude 全部设置重置为默认值。`reset config` 为同义命令。
+`ai-battery reset` 恢复 AI Battery 修改的设置，并清理归属明确的缓存、专用运行时和生成文件。其他 Codex/Claude 设置与 npm 包会保留。它不会将 Codex/Claude 全部设置重置为默认值。旧命令 `reset settings` 和 `reset config` 仍可使用。
 
 ```bash
-ai-battery reset settings
+ai-battery reset
 ```
 
-只恢复部分集成时使用 `ai-battery reset settings codex` / `claude` / `hud` / `tmux`。已修改或归属未知的文件和未完成的恢复记录会保留。
+只恢复部分集成时使用 `ai-battery reset codex` / `claude` / `hud` / `tmux`。已修改或归属未知的文件和未完成的恢复记录会保留。
 
 设置恢复成功后再通过 npm 删除包。本地安装使用 `npm uninstall ai-battery`。`uninstall` 与 `teardown` 是设置恢复的兼容别名，不调用 npm。Windows 与 WSL 请分别运行。Bash 命令缓存用 `hash -r` 清除，zsh 用 `rehash`。
 
 ```bash
-ai-battery reset settings && npm uninstall -g ai-battery
+ai-battery reset && npm uninstall -g ai-battery
 ```
 
 <a id="setup"></a>
@@ -170,7 +169,7 @@ ai-battery setup codex
 ai-battery setup tmux
 ```
 
-这会向 `~/.tmux.conf` 添加受管理 block，在 status-right 中显示电量状态（每 10 秒刷新一次）；在该 tmux 内运行的 `codex` 会省略每个 pane 的电量行，使用完整 pane。Claude statusLine 在同一环境中也会折叠电量行，只显示 header（模型、目录、分支）一行，因为电量已经显示在 tmux bar 中。要应用配置，请运行 `tmux source-file ~/.tmux.conf` 后打开新的 pane。此 block 会覆盖现有 `status-right` 设置，因此它是 opt-in，不包含在 `setup all` 中。用 `ai-battery reset settings tmux` 可解除；如果希望在 tmux 内仍保留每个 pane 的状态行，请设置 `AI_BATTERY_TMUX=row`。Claude statusLine 属于 Claude Code 内部 UI，因此无论是否使用 tmux 都会显示。
+这会向 `~/.tmux.conf` 添加受管理 block，在 status-right 中显示电量状态（每 10 秒刷新一次）；在该 tmux 内运行的 `codex` 会省略每个 pane 的电量行，使用完整 pane。Claude statusLine 在同一环境中也会折叠电量行，只显示 header（模型、目录、分支）一行，因为电量已经显示在 tmux bar 中。要应用配置，请运行 `tmux source-file ~/.tmux.conf` 后打开新的 pane。此 block 会覆盖现有 `status-right` 设置，因此它是 opt-in，不包含在 `setup all` 中。用 `ai-battery reset tmux` 可解除；如果希望在 tmux 内仍保留每个 pane 的状态行，请设置 `AI_BATTERY_TMUX=row`。Claude statusLine 属于 Claude Code 内部 UI，因此无论是否使用 tmux 都会显示。
 
 如果看不到 Codex 下方状态行，请运行诊断。
 
@@ -224,7 +223,7 @@ ai-battery setup claude
 移除：
 
 ```bash
-ai-battery reset settings claude
+ai-battery reset claude
 ```
 
 Claude 至少传递一次 statusLine payload 后，Claude 使用量缓存才会生成。在此之前，会显示基于 Claude 本地日志的 fallback。
@@ -247,10 +246,10 @@ Claude [battery:76] │ 5h 00:47 │ 7d 59%
 
 | 命令 | 作用 |
 | --- | --- |
-| `ai-battery hud` / `ai-battery hud start` | 启动 Windows floating HUD 或 macOS menu bar item。 |
+| `ai-battery hud` / `ai-battery hud start` | 启动 Windows HUD 或 macOS/Linux 面板显示。 |
 | `ai-battery hud stop` | 停止正在运行的 HUD/menu bar item。（`--stop` 相同。） |
 | `ai-battery hud status` | 显示 HUD/menu bar 运行状态和 autostart 注册状态。 |
-| `ai-battery hud autostart on` | 注册 Windows 登录或 macOS 登录时自动运行。 |
+| `ai-battery hud autostart on` | 注册桌面登录时自动运行。 |
 | `ai-battery hud autostart off` | 取消自动运行注册。 |
 | `ai-battery hud autostart status` | 仅显示自动运行注册状态。 |
 | `ai-battery hud -Foreground` | 以调试方式附着在终端中运行。 |
@@ -264,6 +263,17 @@ Claude [battery:76] │ 5h 00:47 │ 7d 59%
 Windows floating HUD 默认以透明背景上的亮色文字显示。亮色任务栏可用 `ai-battery hud light`，暗色任务栏可用 `ai-battery hud dark`。如果要直接选择文字颜色，请使用 `ai-battery hud black` 或 `ai-battery hud white`。要把同样模式保存到登录自动运行中，可以写成 `ai-battery hud autostart on light`。
 
 Windows autostart 会按用户注册到 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`。Windows 原生环境无需 WSL 即可直接运行；从 WSL 注册时，会把 HUD 脚本副本放到 `%LOCALAPPDATA%\ai-battery`。macOS autostart 注册为 `~/Library/LaunchAgents/com.ai-battery.hud.plist`。更新 ai-battery 后，请重新运行 `ai-battery hud autostart on` 来刷新注册路径。
+
+### Ubuntu / Linux
+
+`ai-battery hud` 在顶部面板使用与 macOS 相同的 SVG 标志、电量条和百分比。点击可查看 5h 重置时间、7d 剩余量，以及刷新和退出菜单。解锁屏幕后会自动重新连接。需要 GJS、libdbusmenu 和 StatusNotifier 主机（如 Ubuntu AppIndicators）。
+
+```bash
+sudo apt install gjs gir1.2-dbusmenu-glib-0.4
+ai-battery hud
+```
+
+Linux 支持 `hud start/stop/status` 和 `hud autostart on/off/status`。自动启动注册在 `~/.config/autostart/ai-battery-hud.desktop`，遵循 `XDG_CONFIG_HOME`。`ai-battery reset hud` 会停止 HUD 并删除其拥有的自动启动项。
 
 <a id="shell-prompt"></a>
 ## Shell Prompt
@@ -312,7 +322,7 @@ Node.js 18+ supports the CLI. Windows defaults to `composite`: PATH-selected Cod
 Codex 数据从 Codex 实际使用的 `CODEX_HOME`（默认 `~/.codex`）中的 `sessions` 读取。AI Battery 不会设置或修改 `HOME`、`USERPROFILE` 或 `CODEX_HOME`。修改 `CODEX_HOME` 也会改变 Codex 自身的 `/resume` 存储位置，因此不要用它合并 Windows 与 WSL 路径。不支持以逗号分隔多个 home。
 
 ```bash
-CODEX_HOME=/path/to/codex-home ai-battery --provider codex
+CODEX_HOME=/path/to/codex-home ai-battery --watch --provider codex
 ```
 
 同时使用 Windows native 与 WSL 时，两边的 session 和 `/resume` 历史仍各自独立。仅通过 AI Battery 专用的 `codex-account-usage.json` 共享账号级 Codex 5h/7d 使用量；session 路径、workspace 以及 approval/sandbox mode 不会共享。

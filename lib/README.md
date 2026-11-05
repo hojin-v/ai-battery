@@ -8,6 +8,8 @@ implementation belongs under lib:
 - platforms/runtime.js: cross-platform environment detection helpers.
 - platforms/process-scanner.js: Windows, WSL, macOS, and Linux process scans.
 - platforms/macos: macOS menu bar integration.
+- platforms/linux: GJS StatusNotifierItem and native detail menu, sharing the
+  macOS panel artwork; Node snapshot worker and XDG login startup.
 - platforms/windows: Windows Codex runner, compositor, PATH integration, and
   HUD launcher.
 - platforms/windows/hud: WinForms modules. dock.ps1 owns terminal attachment

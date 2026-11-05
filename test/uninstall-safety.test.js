@@ -143,7 +143,7 @@ function installedFixture(t, local = false) {
   return { ...f, root, prefix, keep, hudLog, run };
 }
 
-for (const args of [["reset", "settings"], ["reset", "config"], ["uninstall"], ["teardown"]]) {
+for (const args of [["reset"], ["reset", "all"], ["reset", "settings"], ["reset", "config"], ["uninstall"], ["teardown"]]) {
   test(`${args.join(" ")} restores settings and cleans owned state while retaining npm packages`, (t) => {
     const f = installedFixture(t);
     const retained = f.write(path.join(f.home, "custom-integration"), "keep custom file");
@@ -174,16 +174,18 @@ for (const args of [["reset", "settings"], ["reset", "config"], ["uninstall"], [
   });
 }
 
-test("reset settings never changes a local npm project or its lockfile", (t) => {
+test("reset never changes a local npm project or its lockfile", (t) => {
   const f = installedFixture(t, true);
-  const result = f.run(["reset", "settings", "--json"]);
+  const result = f.run(["reset", "--json"]);
   assert.equal(result.status, 0, result.stderr + result.stdout);
   for (const [file, text] of f.keep) assert.equal(fs.readFileSync(file, "utf8"), text, file);
 });
 
 test("HUD targets are parsed as reset targets rather than the HUD start command", (t) => {
-  for (const args of [["reset", "settings", "hud"], ["reset", "config", "hud"], ["uninstall", "hud"], ["teardown", "hud"]]) {
+  for (const args of [["reset", "hud"], ["reset", "settings", "hud"], ["reset", "config", "hud"], ["uninstall", "hud"], ["teardown", "hud"]]) {
     const f = installedFixture(t);
+    // Exercise the stub HUD on Linux without requiring a Windows desktop.
+    if (process.platform === "linux") f.env.WSL_DISTRO_NAME = "ai-battery-test";
     const result = f.run([...args, "--json"]);
     assert.equal(result.status, 0, result.stderr + result.stdout);
     const report = JSON.parse(result.stdout);
@@ -194,18 +196,33 @@ test("HUD targets are parsed as reset targets rather than the HUD start command"
   }
 });
 
-test("reset requires an explicit settings/config scope and rejects command-like targets without side effects", (t) => {
+test("reset rejects invalid or misplaced targets without side effects", (t) => {
   const f = fixture(t);
   const file = f.write(path.join(f.state, "config.json"), JSON.stringify(config));
   const before = fs.readFileSync(file, "utf8");
-  for (const args of [["reset"], ["reset", "everything"], ["reset", "settings", "on"], ["reset", "settings", "show"]]) {
+  for (const args of [["reset", "everything"], ["reset", "on"], ["reset", "show"], ["reset", "codex", "settings"], ["reset", "settings", "config"], ["reset", "settings", "on"], ["reset", "settings", "show"]]) {
     const result = f.run(args);
     assert.equal(result.status, 1, result.stderr + result.stdout);
     assert.equal(fs.readFileSync(file, "utf8"), before);
   }
   const help = f.run(["reset", "--help"]);
   assert.equal(help.status, 0, help.stderr);
-  assert.match(help.stdout, /ai-battery reset settings/);
+  assert.match(help.stdout, /ai-battery reset \[codex\|claude\|hud\|tmux\|all\]/);
+});
+
+test("reset accepts direct integration targets and preserves shared caches", (t) => {
+  for (const targets of [["codex"], ["claude"], ["tmux"], ["codex", "claude"]]) {
+    const f = fixture(t);
+    f.write(path.join(f.state, "config.json"), JSON.stringify(config));
+    const cache = f.write(path.join(f.state, "codex-status-scan-cache.json"), "{}");
+    const result = f.run(["reset", ...targets, "--json"]);
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    const report = JSON.parse(result.stdout);
+    assert.deepEqual(report.targets, targets);
+    assert.equal(report.fullReset, false);
+    assert.equal(fs.readFileSync(cache, "utf8"), "{}");
+    assert.equal(fs.existsSync(path.join(f.state, "config.json")), true);
+  }
 });
 
 test("Bash reproduces a cached deleted shim and hash -r restores the original command", posix, (t) => {

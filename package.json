@@ -1,6 +1,6 @@
 {
   "name": "ai-battery",
-  "version": "0.1.23",
+  "version": "0.1.25",
   "description": "Tiny terminal battery meter for local Codex and Claude Code usage.",
   "type": "module",
   "keywords": [
@@ -51,7 +51,7 @@
     "smoke:fullscreen": "node ./scripts/windows-fullscreen-smoke.mjs --native",
     "smoke:codex-fullscreen-win": "node ./scripts/windows-codex-fullscreen-check.mjs",
     "smoke:wsl-win": "bash ./scripts/wsl-windows-rowpty-smoke.sh",
-    "check": "node --check ./bin/ai-battery.js && node --check ./bin/ai-battery-hud.js && node --check ./bin/ai-battery-run-win.js && node --check ./lib/hud/launcher.js && node --check ./lib/platforms/windows/codex-runner.js && node --test",
+    "check": "node --check ./bin/ai-battery.js && node --check ./bin/ai-battery-hud.js && node --check ./bin/ai-battery-run-win.js && node --check ./lib/hud/launcher.js && node --check ./lib/platforms/windows/codex-runner.js && node --check ./lib/platforms/linux/hud.js && node --check ./lib/platforms/linux/panel.js && node --check ./lib/platforms/linux/panel-snapshot.js && node --test",
     "test": "node --test"
   },
   "engines": {
