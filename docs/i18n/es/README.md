@@ -1,5 +1,7 @@
 # AI Battery
 
+0.1.27: Se corrigen las filas de uso duplicadas en Codex cuando un mensaje en coreano se desbordaba en la última fila del terminal. POSIX limita el ancho por celdas de pantalla sin rellenar con espacios. Los proveedores sin datos muestran etiquetas breves como `Claude --%`.
+
 0.1.26: `setup` conserva y actualiza los wrappers, PATH, estado de Codex e integración tmux existentes sin borrar rutas usadas por shells abiertos ni copias de recuperación. Se elimina el borde claro del menú HUD y el ejemplo principal pasa a `ai-battery setup tmux`.
 
 0.1.25: Nuevo HUD de panel en Ubuntu/Linux con el mismo diseño que macOS. La ayuda, los diagnósticos, los resultados y los errores usan mensajes concisos en coreano/inglés. Ejecutar sin argumentos muestra la ayuda; se ha eliminado `show`. Restaura las integraciones con `ai-battery reset`; las formas anteriores `reset settings` y `reset config` siguen disponibles.

@@ -1,5 +1,7 @@
 # AI Battery
 
+0.1.27：修复韩文状态文本在终端底行换行，导致 Codex 中重复累积使用量行的问题。POSIX 渲染按屏幕单元格宽度截断，不再填充空格。无可用数据时，在底栏显示 `Claude --%` 等简短标签。
+
 0.1.26：`setup` 保留并更新已有 Codex wrapper、PATH、状态栏和 tmux 集成，不删除运行中 shell 使用的路径或备份。移除 HUD 菜单亮色边框，默认示例改为 `ai-battery setup tmux`。
 
 0.1.25：新增 Ubuntu/Linux 面板 HUD，使用与 macOS 相同的设计。 帮助、诊断、设置结果和错误提示改为简洁的韩语/英语。不带参数运行会显示帮助，`show` 命令已移除。使用 `ai-battery reset` 恢复集成；旧命令 `reset settings` 和 `reset config` 仍受支持。

@@ -6,6 +6,7 @@ import signal
 import subprocess
 import sys
 import time
+import unicodedata
 
 if os.name == "nt":
     print(
@@ -25,7 +26,12 @@ import tty
 
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 BATTERY_BIN = os.environ.get("AI_BATTERY_BIN") or os.environ.get("CLAUDEX_BATTERY_BIN", os.path.join(SCRIPT_DIR, "ai-battery.js"))
-ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+ANSI_RE = re.compile(
+    r"(\x1b(?:\[[0-?]*[ -/]*[@-~]"
+    r"|\][^\x07\x1b]*(?:\x07|\x1b\\|$)"
+    r"|[PX^_][\s\S]*?(?:\x1b\\|$)|[ -/]*[@-~]))"
+)
+SGR_RE = re.compile(r"\x1b\[[0-9:;]*m")
 
 
 def battery_command_base():
@@ -164,12 +170,31 @@ def column_guard():
         return DEFAULT_COLUMN_GUARD
 
 
-def fit_ansi(text, width, pad=True):
-    plain = strip_ansi(text)
-    if len(plain) <= width:
-        return text + (" " * (width - len(plain)) if pad else "")
-    suffix = " " if pad else ""
-    return plain[: max(0, width - len(suffix))] + suffix
+def fit_ansi(text, width):
+    # Python len() counts code points, not terminal cells. Padding a Korean
+    # line using len() can wrap at the bottom and scroll a copy into the TUI
+    # on every refresh. EL clears the tail, so no padding is necessary.
+    output = []
+    cells = 0
+    for token in ANSI_RE.split(text):
+        if token.startswith("\x1b"):
+            # Status output may style text, but must never move the cursor,
+            # erase the child's screen or introduce another physical row.
+            if SGR_RE.fullmatch(token):
+                output.append(token)
+            continue
+        for char in token:
+            category = unicodedata.category(char)
+            if category in ("Cc", "Cs"):
+                continue
+            char_width = 0 if category in ("Mn", "Me", "Cf") else (
+                2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
+            )
+            if cells + char_width > width:
+                return "".join(output)
+            output.append(char)
+            cells += char_width
+    return "".join(output)
 
 
 class StatusLine:
@@ -308,7 +333,7 @@ class StatusLine:
     def draw_cached(self):
         """Repaint cached text at the new terminal size without starting a poll."""
         paint_width = max(1, self.cols - 1)
-        line = fit_ansi(self.text, paint_width, pad=True)
+        line = fit_ansi(self.text, paint_width)
         self.last_draw = time.monotonic()
         self.last_line = line
         self._write_row(line)
@@ -319,7 +344,7 @@ class StatusLine:
             return
         self.refresh(force)
         paint_width = max(1, self.cols - 1)
-        line = fit_ansi(self.text, paint_width, pad=True)
+        line = fit_ansi(self.text, paint_width)
         if not force and not dirty and line == self.last_line:
             return
         self.last_draw = now

@@ -33,6 +33,23 @@ function fixture(t, language = "en") {
 }
 
 for (const language of ["en", "ko"]) {
+  test(`${language} bounded status rows keep missing-provider errors short; diagnostics retain detail`, (t) => {
+    const f = fixture(t, language);
+    const compact = f.run(["--provider", "all", "--no-color", "--max-width", "100"]);
+    assert.equal(compact.status, 0, compact.stderr);
+    assert.match(compact.stdout, /Codex --%/);
+    assert.match(compact.stdout, /Claude --%/);
+    assert.doesNotMatch(compact.stdout, /\(|[가-힣]/);
+    const detailed = f.run(["--provider", "claude", "--no-color"]);
+    assert.equal(detailed.status, 0, detailed.stderr);
+    assert.match(detailed.stdout, /Claude \? \(.+\)/);
+    assert.equal(/[가-힣]/.test(detailed.stdout), language === "ko");
+    const machine = f.run(["--provider", "claude", "--json"]);
+    assert.equal(machine.status, 0, machine.stderr);
+    assert.equal(JSON.parse(machine.stdout).results[0].ok, false);
+    assert.ok(JSON.parse(machine.stdout).results[0].error);
+  });
+
   test(`${language} setup, doctor, visibility and reset use concise runtime messages`, (t) => {
     const f = fixture(t, language);
     const setup = f.run(["setup", "codex"]);
