@@ -9,6 +9,7 @@ import { cleanupBatteryArtifacts } from "../lib/core/uninstall.js";
 import { createIntegrationFiles } from "../lib/core/integration-files.js";
 import { createMacHudPlatform } from "../lib/platforms/macos/hud.js";
 import { windowsAutostartCleanupScript } from "../lib/platforms/windows/autostart-cleanup.js";
+import { codexWrapperScript } from "../bin/ai-battery.js";
 
 const CLI = fileURLToPath(new URL("../bin/ai-battery.js", import.meta.url));
 const posix = { skip: process.platform === "win32" };
@@ -26,6 +27,7 @@ function fixture(t) {
   for (const directory of [home, state, data, codex, claude, temp]) fs.mkdirSync(directory, { recursive: true });
   function write(file, text) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); return file; }
   const env = { ...process.env, HOME: home, USERPROFILE: home, CODEX_HOME: codex,
+    TMUX: "", AI_BATTERY_TMUX_STATUS: "",
     XDG_CONFIG_HOME: path.join(root, "xdg-config"), XDG_DATA_HOME: path.join(root, "xdg-data"),
     LOCALAPPDATA: path.join(root, "localappdata"), APPDATA: path.join(root, "appdata"), TEMP: temp, TMP: temp, TMPDIR: temp,
     PATH: [path.dirname(process.execPath), ...(process.platform === "win32" ? [path.join(process.env.SystemRoot, "System32"), path.join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0")] : ["/usr/bin", "/bin"])].join(path.delimiter),
@@ -57,6 +59,69 @@ test("default Codex setup leaves commands, settings, sessions and shell files un
   assert.equal(fs.existsSync(path.join(f.data, "bin", process.platform === "win32" ? "codex.cmd" : "codex")), false);
   assert.equal(fs.existsSync(path.join(f.home, ".local", "bin", "codex")), false);
   assert.equal(fs.existsSync(path.join(f.state, "config.json")), false);
+});
+
+test("setup refreshes existing Codex integration without consuming backups or deleting cached paths", posix, (t) => {
+  const f = fixture(t);
+  const native = f.write(path.join(f.root, "original/codex"), "#!/bin/sh\nprintf 'native-codex\\n'\n");
+  fs.chmodSync(native, 0o755);
+  f.env.PATH = path.dirname(native) + path.delimiter + f.env.PATH;
+  const first = f.run(["setup", "codex", "--wrap-codex", "--configure-codex-statusline", "--json"]);
+  assert.equal(first.status, 0, first.stderr);
+  const wrapper = JSON.parse(first.stdout).codex.wrapperPath;
+  const legacy = f.write(path.join(f.home, ".local/bin/codex"), codexWrapperScript());
+  fs.chmodSync(legacy, 0o755);
+  const backup = f.write(`${legacy}.ai-battery-original-link`, "original command backup\n");
+  const oldScript = fs.readFileSync(legacy, "utf8");
+  const openReader = fs.openSync(legacy, "r");
+  t.after(() => fs.closeSync(openReader));
+  f.env.PATH = [path.dirname(legacy), path.dirname(wrapper), f.env.PATH].join(path.delimiter);
+  const shell = fs.readFileSync(path.join(f.home, ".bashrc"), "utf8");
+  const codex = fs.readFileSync(path.join(f.codex, "config.toml"), "utf8");
+  const update = f.run(["setup", "--json"]);
+  assert.equal(update.status, 0, update.stderr);
+  assert.equal(JSON.parse(update.stdout).codex.wrapperPath, wrapper);
+  assert.equal(fs.readFileSync(openReader, "utf8"), oldScript, "An already-open script must retain its original bytes");
+  assert.equal(fs.readFileSync(backup, "utf8"), "original command backup\n");
+  assert.equal(fs.readFileSync(path.join(f.home, ".bashrc"), "utf8"), shell);
+  assert.equal(fs.readFileSync(path.join(f.codex, "config.toml"), "utf8"), codex);
+  const launch = spawnSync("bash", ["--noprofile", "--norc", "-c", 'hash -p "$1" codex; "$2" "$3" setup codex >/dev/null && codex', "fixture", legacy, process.execPath, CLI], { env: f.env, encoding: "utf8" });
+  assert.equal(launch.status, 0, launch.stderr);
+  assert.equal(launch.stdout, "native-codex\n");
+  assert.ok(fs.existsSync(legacy));
+});
+
+test("setup persists a PATH entry that was present only in the current POSIX shell", posix, (t) => {
+  const f = fixture(t);
+  const native = f.write(path.join(f.root, "original/codex"), "#!/bin/sh\nexit 0\n");
+  fs.chmodSync(native, 0o755);
+  const shim = path.join(f.data, "bin");
+  f.env.SHELL = "/bin/bash";
+  const freshPath = [path.dirname(native), f.env.PATH].join(path.delimiter);
+  f.env.PATH = [shim, freshPath].join(path.delimiter);
+  const installed = f.run(["setup", "codex", "--wrap-codex", "--json"]);
+  assert.equal(installed.status, 0, installed.stderr);
+  const wrapper = JSON.parse(installed.stdout).codex;
+  assert.equal(wrapper.path.persisted, true);
+  const fresh = spawnSync("bash", ["--noprofile", "-ic", "command -v codex"], { env: { ...f.env, PATH: freshPath }, encoding: "utf8" });
+  assert.equal(fresh.status, 0, fresh.stderr);
+  assert.equal(fresh.stdout.trim(), wrapper.wrapperPath);
+});
+
+test("setup reinstalls a fully removed tmux block while preserving the current user configuration", posix, (t) => {
+  const f = fixture(t);
+  const file = f.write(path.join(f.home, ".tmux.conf"), "set -g mouse on\n");
+  assert.equal(f.run(["setup", "tmux", "--json"]).status, 0);
+  const original = 'set -g mouse off\nset -g status-right "USER_CLOCK"\n';
+  fs.writeFileSync(file, original);
+  const installed = f.run(["setup", "--json"]);
+  assert.equal(installed.status, 0, installed.stderr);
+  assert.equal(JSON.parse(installed.stdout).tmux.active, false);
+  assert.ok(fs.readFileSync(file, "utf8").startsWith(original));
+  assert.equal((fs.readFileSync(file, "utf8").match(/# >>> ai-battery tmux >>>/g) || []).length, 1);
+  const reset = f.run(["reset", "tmux", "--json"]);
+  assert.equal(reset.status, 0, reset.stderr);
+  assert.equal(fs.readFileSync(file, "utf8"), original);
 });
 
 test("cleanup removes owned caches and runtimes while retaining unrelated files", (t) => {

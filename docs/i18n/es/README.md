@@ -1,5 +1,7 @@
 # AI Battery
 
+0.1.26: `setup` conserva y actualiza los wrappers, PATH, estado de Codex e integración tmux existentes sin borrar rutas usadas por shells abiertos ni copias de recuperación. Se elimina el borde claro del menú HUD y el ejemplo principal pasa a `ai-battery setup tmux`.
+
 0.1.25: Nuevo HUD de panel en Ubuntu/Linux con el mismo diseño que macOS. La ayuda, los diagnósticos, los resultados y los errores usan mensajes concisos en coreano/inglés. Ejecutar sin argumentos muestra la ayuda; se ha eliminado `show`. Restaura las integraciones con `ai-battery reset`; las formas anteriores `reset settings` y `reset config` siguen disponibles.
 
 [한국어](../../../README.md) · [English](../en/) · [日本語](../ja/) · [中文](../zh/) · [Español](../es/)
@@ -58,7 +60,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | `ai-battery --watch` | Compatible | Compatible | Compatible | Compatible | Se actualiza periódicamente dentro de la terminal. |
 | Claude statusLine | Compatible | Compatible | Compatible | Compatible | Guarda un comando `node <script>` en Claude Code `statusLine`. |
 | Codex terminal row | Compatible | Compatible | Compatible | Compatible | Windows: fullscreen PTY composition; WSL/Linux/macOS: POSIX PTY and Python 3. |
-| `ai-battery setup codex` | Compatible | Compatible | Compatible | Compatible | Retira wrappers anteriores de AI Battery. Los wrappers nuevos y los cambios de ajustes requieren opciones explícitas. |
+| `ai-battery setup codex` | Compatible | Compatible | Compatible | Compatible | Conserva y actualiza los wrappers existentes de AI Battery. Los wrappers nuevos y los cambios de ajustes requieren opciones explícitas. |
 | `ai-battery hud` | Compatible | Compatible | Compatible | Compatible | Linux requiere un host StatusNotifier; verificado con Ubuntu GNOME AppIndicators. |
 
 La detección de procesos en ejecución usa `/proc` en Linux/WSL, `ps` en macOS y listados de procesos de PowerShell en Windows. La salida de texto usa blanco/gris; el HUD de macOS resalta solo los elementos en ejecución con barras de batería de color y muestra los elementos inactivos en gris tenue.
@@ -87,7 +89,7 @@ Los nombres anteriores, `claudex-battery`, `claudex-battery-run` y `claudex-batt
    npm install -g ai-battery
    ```
 
-2. Configura el statusLine de Claude y retira wrappers anteriores de Codex.
+2. Configura el statusLine de Claude y conserva las integraciones existentes de Codex y tmux.
 
    ```bash
    ai-battery setup
@@ -154,7 +156,7 @@ ai-battery reset && npm uninstall -g ai-battery
 <a id="setup"></a>
 ## Configuración
 
-`setup` configura el hook statusLine de Claude. Codex se ejecuta de forma independiente y solo se restauran wrappers y ajustes administrados de versiones anteriores. Consulta el uso con `ai-battery --watch 2` o `ai-battery hud` en plataformas compatibles.
+`setup` configura el statusLine de Claude y conserva y actualiza los wrappers, PATH, ajustes e integración tmux existentes. Los wrappers nuevos requieren una opción explícita; usa `reset` para retirar integraciones.
 
 ```bash
 ai-battery setup

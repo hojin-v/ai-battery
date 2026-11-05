@@ -18,6 +18,7 @@ function fixture(t, language = "en") {
   const env = {
     ...process.env, LANGUAGE: language, LC_ALL: "", LC_MESSAGES: "", LANG: "en_US.UTF-8",
     HOME: home, USERPROFILE: home, CODEX_HOME: path.join(home, ".codex"),
+    TMUX: "", AI_BATTERY_TMUX_STATUS: "",
     AI_BATTERY_STATE_DIR: state, AI_BATTERY_DATA_DIR: path.join(root, "data"),
     AI_BATTERY_SHIM_DIR: path.join(root, "data", "bin"), AI_BATTERY_RC: path.join(home, ".bashrc"),
     AI_BATTERY_SHARED_USAGE_STATE_DIR: path.join(root, "shared"), AI_BATTERY_NO_UPDATE_CHECK: "1",

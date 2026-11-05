@@ -1198,7 +1198,7 @@ test("tmux status block installs, updates in place, and uninstalls cleanly", { s
   const confPath = path.join(tmpDir, "tmux.conf");
   fs.writeFileSync(confPath, "set -g mouse on\n");
 
-  withEnv({ AI_BATTERY_TMUX_CONF: confPath, AI_BATTERY_STATE_DIR: path.join(tmpDir, "state") }, () => {
+  withEnv({ AI_BATTERY_TMUX_CONF: confPath, AI_BATTERY_STATE_DIR: path.join(tmpDir, "state"), TMUX: undefined }, () => {
     const first = installTmuxStatus();
     assert.equal(first.ok, true);
     assert.equal(first.changed, true);
@@ -1227,7 +1227,7 @@ test("tmux install preserves existing status-right and restores on uninstall", {
   const confPath = path.join(tmpDir, "tmux.conf");
   fs.writeFileSync(confPath, 'set -g mouse on\nset -g status-right " %H:%M "\n');
 
-  withEnv({ AI_BATTERY_TMUX_CONF: confPath, AI_BATTERY_STATE_DIR: path.join(tmpDir, "state") }, () => {
+  withEnv({ AI_BATTERY_TMUX_CONF: confPath, AI_BATTERY_STATE_DIR: path.join(tmpDir, "state"), TMUX: undefined }, () => {
     installTmuxStatus();
     const text = fs.readFileSync(confPath, "utf8");
     // Existing status-right must be preserved with battery appended to the right
@@ -2305,8 +2305,14 @@ test("setup prefers empty ~/.local/bin when it is already before codex on PATH",
 
   assert.equal(result.ok, true);
   assert.equal(result.wrapperPath, localCodex);
-  assert.equal(result.path.changed, false);
-  assert.match(result.path.note, process.platform === "win32" ? /Skipped Windows user PATH update/ : /already before the original codex/);
+  if (process.platform === "win32") {
+    assert.equal(result.path.changed, false);
+    assert.match(result.path.note, /Skipped Windows user PATH update/);
+  } else {
+    assert.equal(result.path.changed, true);
+    assert.equal(result.path.persisted, true);
+    assert.ok(fs.readFileSync(result.path.rcPath, "utf8").includes(localBin));
+  }
   assert.match(fs.readFileSync(localCodex, "utf8"), /AI_BATTERY_MANAGED_CODEX_WRAPPER/);
   if (process.platform === "win32") {
     assert.match(fs.readFileSync(result.bridgePath, "utf8"), /"--left-padding", "2", "--"/);

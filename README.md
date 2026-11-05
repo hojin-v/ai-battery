@@ -1,5 +1,7 @@
 # AI Battery
 
+0.1.26: `setup`이 기존 Codex 연동을 해제하던 문제를 수정했습니다. 기존 wrapper·PATH·Codex 상태줄과 tmux 연동을 유지·갱신하며, 실행 중인 셸이 기억하는 경로를 제거하지 않습니다. tmux 미실행 상태를 구분하고 HUD 메뉴의 밝은 테두리를 제거했습니다. 기본 예시는 `ai-battery setup tmux`입니다.
+
 0.1.25: Ubuntu/Linux 패널 HUD를 추가했습니다. macOS와 같은 로고·배터리 바·퍼센트를 표시합니다. 도움말·진단·설정 결과·오류 안내는 간결한 한국어/영어로 표시합니다. 명령 없이 실행하면 도움말을 표시하며 `show` 명령은 제거했습니다. 설정 복원은 `ai-battery reset`으로 실행하고, 이전 `reset settings`·`reset config`도 계속 지원합니다.
 
 [한국어](README.md) · [English](docs/i18n/en/) · [日本語](docs/i18n/ja/) · [中文](docs/i18n/zh/) · [Español](docs/i18n/es/)
@@ -55,7 +57,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | `ai-battery --watch`     | 지원           | 지원 | 지원   | 지원  | 터미널 안에서 주기적으로 갱신합니다.                                                                                        |
 | Claude statusLine        | 지원           | 지원 | 지원   | 지원  | Claude Code `statusLine`에 `node <script>` 명령을 저장합니다.                                                               |
 | Codex fullscreen         | 지원           | 지원 | 지원   | 지원  | Windows 기본값은 Fullscreen PTY 화면과 터미널 배터리 행을 합성합니다. WSL/Linux/macOS는 POSIX PTY와 `python3`를 사용합니다. |
-| `ai-battery setup codex` | 지원           | 지원 | 지원   | 지원  | 기존 AI Battery wrapper를 해제합니다. 새 wrapper나 Codex 설정 변경은 명시적 옵션이 필요합니다.                              |
+| `ai-battery setup codex` | 지원           | 지원 | 지원   | 지원  | 기존 연동을 유지·갱신합니다. 새 wrapper나 Codex 설정 변경은 명시적 옵션이 필요합니다.                                       |
 | `ai-battery hud`         | 지원           | 지원 | 지원   | 지원  | Ubuntu GNOME는 전용 패널 표시, 다른 Linux 데스크톱은 StatusNotifier 호스트를 사용합니다.                                    |
 
 실행 중 감지는 Linux/WSL은 `/proc`, macOS는 `ps`, Windows는 PowerShell 프로세스 목록을 사용합니다. 텍스트 출력은 흰색/회색으로, macOS와 Linux HUD는 실행 중인 항목만 색상 배터리바로 강조하고 비실행 항목은 흐린 회색 계열로 표시합니다.
@@ -84,7 +86,7 @@ npx ai-battery
    npm install -g ai-battery
    ```
 
-2. Claude statusLine을 설정하고, 기존 Codex wrapper가 있으면 해제합니다.
+2. 기존 연동을 갱신하고 Claude statusLine을 설정합니다. Codex wrapper와 tmux를 이미 쓰고 있다면 유지합니다.
 
    ```bash
    ai-battery setup
@@ -97,11 +99,14 @@ npx ai-battery
    codex
    ```
 
-4. Codex 사용량은 별도 터미널의 `ai-battery --watch 2`, 또는 Windows/WSL/macOS HUD로 확인합니다.
+4. 터미널 공통 사용량 줄은 tmux에 연결한 뒤 tmux 세션에서 확인합니다. 기존 셸을 종료할 필요는 없습니다.
 
    ```bash
-   ai-battery hud
+   ai-battery setup tmux
+   tmux
    ```
+
+일반 터미널에서 `codex`를 실행할 때도 사용량 행을 표시하려면 한 번 `ai-battery setup codex --wrap-codex`를 실행하고 안내된 `source` 명령을 현재 셸에 적용하세요. 이후 `setup`과 npm 업데이트에서도 이 선택을 유지합니다. 새로 열린 터미널에는 자동 적용됩니다. 데스크톱 표시는 `ai-battery hud`를 사용합니다.
 
 ## CLI
 
@@ -109,6 +114,7 @@ npx ai-battery
 
 ```bash
 ai-battery setup
+ai-battery setup tmux
 ai-battery hud
 ai-battery on codex
 ai-battery off codex
@@ -128,7 +134,7 @@ ai-battery --version
 | `--show-paths`                  | 로그 파일 경로와 데이터 관측 시각을 함께 표시합니다. |
 | `-v`, `--version`               | 설치된 `ai-battery` 버전을 출력합니다.               |
 
-`doctor`는 설치·연동 상태와 npm latest 버전을 간단히 표시합니다. 기본 설치에 필요 없는 Codex wrapper와 status_line은 오류로 안내하지 않습니다. 전체 경로·복구 기록 등 상세 정보는 `ai-battery doctor --json`으로 확인합니다. 네트워크가 막혀 있으면 버전 확인만 건너뛰고 나머지 진단은 계속 표시합니다.
+`doctor`는 설치·연동 상태와 npm latest 버전을 간단히 표시합니다. tmux 설정 여부와 현재 세션 안/밖을 구분합니다. 기본 설치에 필요 없는 Codex wrapper와 status_line은 오류로 안내하지 않습니다. 전체 경로·복구 기록 등 상세 정보는 `ai-battery doctor --json`으로 확인합니다. 네트워크가 막혀 있으면 버전 확인만 건너뛰고 나머지 진단은 계속 표시합니다.
 
 <a id="uninstall"></a>
 
@@ -164,7 +170,7 @@ CLI는 npm 제거를 자동 실행하지 않습니다. `teardown`과 `uninstall`
 
 ## Setup
 
-`setup`은 Claude Code의 statusLine hook을 설정합니다. Codex는 기본적으로 독립 실행을 유지하며, 이전 버전의 AI Battery wrapper와 변경된 설정만 복원합니다. 원래 `codex` 실행 파일·PATH·설정에 새 변경을 추가하지 않습니다.
+`setup`은 기존 Codex wrapper·PATH·상태줄과 tmux 연동을 유지·갱신하고 Claude statusLine을 설정합니다. 실행 중인 터미널의 경로와 복구용 백업을 제거하지 않습니다. 새 설치에는 Codex wrapper나 Codex 설정을 자동으로 추가하지 않습니다. 연동 해제는 `reset`으로 실행합니다.
 
 ```bash
 ai-battery setup
@@ -173,7 +179,7 @@ ai-battery setup
 일부만 설정할 수도 있습니다.
 
 ```bash
-ai-battery setup claude
+ai-battery setup tmux
 ai-battery setup codex
 ```
 
@@ -185,7 +191,7 @@ tmux에서는 pane마다 하단 행을 예약하면 같은 전역 배터리가 p
 ai-battery setup tmux
 ```
 
-`~/.tmux.conf`에 관리 블록을 추가해 status-right에 배터리를 표시하고(10초 간격 갱신), 이 tmux 안에서 실행되는 `codex`는 pane별 배터리 행을 생략하고 pane 전체를 사용합니다. Claude statusLine도 같은 환경에서는 배터리 행을 접고 header(모델·디렉터리·브랜치) 1행만 표시합니다 — 배터리는 tmux bar에 이미 있기 때문입니다. 적용하려면 `tmux source-file ~/.tmux.conf` 후 새 pane을 여세요. 이 블록은 기존 `status-right` 설정을 덮어쓰므로 `setup all`에 포함되지 않는 opt-in입니다. 해제는 `ai-battery reset tmux`, tmux 안에서도 pane별 행을 유지하려면 `AI_BATTERY_TMUX=row`를 설정합니다.
+`~/.tmux.conf`에 관리 블록을 추가해 status-right에 배터리를 표시하고(10초 간격 갱신), 이 tmux 안에서 실행되는 `codex`는 pane별 배터리 행을 생략하고 pane 전체를 사용합니다. Claude statusLine도 같은 환경에서는 배터리 행을 접고 header(모델·디렉터리·브랜치) 1행만 표시합니다 — 배터리는 tmux bar에 이미 있기 때문입니다. tmux 안에서 설정하면 실행 중인 서버에도 즉시 적용합니다. tmux 밖에서는 `실행: tmux`를 안내하며, tmux에 들어가야 줄이 표시됩니다. 기존 `status-right` 내용은 함께 표시합니다. 새 tmux 연동은 opt-in이며 이미 설정한 연동은 이후 `setup`과 `setup all`에서 갱신합니다. 해제는 `ai-battery reset tmux`, tmux 안에서도 pane별 행을 유지하려면 `AI_BATTERY_TMUX=row`를 설정합니다.
 
 Codex 하단 행이 보이지 않으면 진단을 실행합니다.
 

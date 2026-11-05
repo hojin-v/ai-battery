@@ -1,5 +1,7 @@
 # AI Battery
 
+0.1.26：`setup` は既存の Codex wrapper・PATH・状態表示と tmux 設定を維持して更新します。実行中のシェルが使うパスやバックアップを削除しません。HUD メニューの明るい枠線を削除し、基本例を `ai-battery setup tmux` に変更しました。
+
 0.1.25: Ubuntu/Linux に macOS と同じデザインのパネル HUD を追加しました。 ヘルプ・診断・設定結果・エラー表示を簡潔な韓国語/英語に整理しました。引数なしの実行はヘルプを表示し、`show` は削除しました。設定の復元は `ai-battery reset` を使います。以前の `reset settings` と `reset config` も引き続き使えます。
 
 [한국어](../../../README.md) · [English](../en/) · [日本語](../ja/) · [中文](../zh/) · [Español](../es/)
@@ -58,7 +60,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | `ai-battery --watch` | 対応 | 対応 | 対応 | 対応 | ターミナル内で定期的に更新します。 |
 | Claude statusLine | 対応 | 対応 | 対応 | 対応 | Claude Code `statusLine` に `node <script>` コマンドを保存します。 |
 | Codex terminal row | 対応 | 対応 | 対応 | 対応 | Windows: fullscreen PTY composition; WSL/Linux/macOS: POSIX PTY and Python 3. |
-| `ai-battery setup codex` | 対応 | 対応 | 対応 | 対応 | 既存の AI Battery wrapper を解除します。新しい wrapper と Codex 設定変更は明示的なオプションが必要です。 |
+| `ai-battery setup codex` | 対応 | 対応 | 対応 | 対応 | 既存の AI Battery wrapper を維持して更新します。新しい wrapper と Codex 設定変更は明示的なオプションが必要です。 |
 | `ai-battery hud` | 対応 | 対応 | 対応 | 対応 | Linux は StatusNotifier ホストが必要です。Ubuntu GNOME AppIndicators で確認しました。 |
 
 実行中の検出には、Linux/WSL では `/proc`、macOS では `ps`、Windows では PowerShell のプロセス一覧を使います。テキスト出力は白/グレーで、macOS HUD では実行中の項目だけを色付きバッテリーバーで強調し、実行中でない項目は淡いグレー系で表示します。
@@ -87,7 +89,7 @@ npx ai-battery
    npm install -g ai-battery
    ```
 
-2. Claude statusLine を設定し、旧 Codex wrapper を解除します。
+2. Claude statusLine を設定し、既存の Codex wrapper と tmux 連携を維持して更新します。
 
    ```bash
    ai-battery setup
@@ -154,7 +156,7 @@ ai-battery reset && npm uninstall -g ai-battery
 <a id="setup"></a>
 ## セットアップ
 
-`setup` は Claude statusLine hook を設定します。Codex は独立して実行され、旧 AI Battery wrapper と管理設定だけを復元します。使用量は `ai-battery --watch 2` または対応 OS の `ai-battery hud` で確認できます。
+`setup` は Claude statusLine hook を設定し、既存の Codex wrapper・PATH・設定と tmux 連携を維持して更新します。新規インストール時の wrapper は明示的なオプションで選びます。解除には `reset` を使用します。
 
 ```bash
 ai-battery setup
@@ -169,7 +171,7 @@ tmux では pane ごとに下部行を予約すると、同じグローバルバ
 ai-battery setup tmux
 ```
 
-`~/.tmux.conf` に管理ブロックを追加し、status-right にバッテリーを表示します（10 秒間隔で更新）。この tmux 内で実行される `codex` は pane ごとのバッテリー行を省略し、pane 全体を使います。Claude statusLine も同じ環境ではバッテリー行を折りたたみ、ヘッダー（モデル、ディレクトリ、ブランチ）1 行だけを表示します。バッテリーはすでに tmux bar にあるためです。適用するには `tmux source-file ~/.tmux.conf` を実行し、新しい pane を開いてください。このブロックは既存の `status-right` 設定を上書きするため、`setup all` には含まれない opt-in です。解除は `ai-battery reset tmux`、tmux 内でも pane ごとの行を維持したい場合は `AI_BATTERY_TMUX=row` を設定します。Claude statusLine は Claude Code 内部 UI なので、tmux かどうかに関係なく表示されます。
+`~/.tmux.conf` に管理ブロックを追加し、status-right にバッテリーを表示します（10 秒間隔で更新）。この tmux 内で実行される `codex` は pane ごとのバッテリー行を省略し、pane 全体を使います。Claude statusLine も同じ環境ではバッテリー行を折りたたみ、ヘッダー（モデル、ディレクトリ、ブランチ）1 行だけを表示します。バッテリーはすでに tmux bar にあるためです。tmux 内で setup すると実行中のサーバーにも適用します。tmux 外では `tmux` を起動してください。新規連携は opt-in で、既存の連携は以後の `setup` でも更新します。解除は `ai-battery reset tmux`、tmux 内でも pane ごとの行を維持したい場合は `AI_BATTERY_TMUX=row` を設定します。Claude statusLine は Claude Code 内部 UI なので、tmux かどうかに関係なく表示されます。
 
 Codex の下部行が表示されない場合は診断を実行します。
 

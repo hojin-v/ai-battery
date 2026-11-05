@@ -52,6 +52,8 @@ export async function run() {
   panel.button.menu.open();
   await Scripting.sleep(700);
   expect(panel.button.menu.isOpen && panel.detail.mapped, "The detail image must be visible inside the open menu");
+  expect(panel.button.menu.box.get_theme_node().get_border_width(0) === 0, "The popup must not have a bright border");
+  expect(panel.button.menu.actor.get_theme_node().get_length("-arrow-border-width") === 0, "The box pointer must not draw a border");
   const stream = Gio.File.new_for_path(`${root}/menu.png`).replace(null, false, Gio.FileCreateFlags.NONE, null);
   await new Shell.Screenshot().screenshot(false, stream);
   stream.close(null);

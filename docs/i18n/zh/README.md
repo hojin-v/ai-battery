@@ -1,5 +1,7 @@
 # AI Battery
 
+0.1.26：`setup` 保留并更新已有 Codex wrapper、PATH、状态栏和 tmux 集成，不删除运行中 shell 使用的路径或备份。移除 HUD 菜单亮色边框，默认示例改为 `ai-battery setup tmux`。
+
 0.1.25：新增 Ubuntu/Linux 面板 HUD，使用与 macOS 相同的设计。 帮助、诊断、设置结果和错误提示改为简洁的韩语/英语。不带参数运行会显示帮助，`show` 命令已移除。使用 `ai-battery reset` 恢复集成；旧命令 `reset settings` 和 `reset config` 仍受支持。
 
 [한국어](../../../README.md) · [English](../en/) · [日本語](../ja/) · [中文](../zh/) · [Español](../es/)
@@ -58,7 +60,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | `ai-battery --watch` | 支持 | 支持 | 支持 | 支持 | 在终端内周期性刷新。 |
 | Claude statusLine | 支持 | 支持 | 支持 | 支持 | 将 `node <script>` 命令保存到 Claude Code `statusLine`。 |
 | Codex terminal row | 支持 | 支持 | 支持 | 支持 | Windows: fullscreen PTY composition; WSL/Linux/macOS: POSIX PTY and Python 3. |
-| `ai-battery setup codex` | 支持 | 支持 | 支持 | 支持 | 解除旧 AI Battery wrapper。新 wrapper 和 Codex 配置修改需要显式选项。 |
+| `ai-battery setup codex` | 支持 | 支持 | 支持 | 支持 | 保留并更新已有 AI Battery wrapper。新 wrapper 和 Codex 配置修改需要显式选项。 |
 | `ai-battery hud` | 支持 | 支持 | 支持 | 支持 | Linux 需要 StatusNotifier 面板主机，已在 Ubuntu GNOME AppIndicators 上验证。 |
 
 运行中检测在 Linux/WSL 上使用 `/proc`，在 macOS 上使用 `ps`，在 Windows 上使用 PowerShell 进程列表。文本输出使用白色/灰色；macOS HUD 只用彩色电量条突出正在运行的项目，未运行项目则使用淡灰色显示。
@@ -87,7 +89,7 @@ npx ai-battery
    npm install -g ai-battery
    ```
 
-2. 配置 Claude statusLine，并解除旧 Codex wrapper。
+2. 配置 Claude statusLine，保留并更新已有 Codex wrapper 和 tmux 集成。
 
    ```bash
    ai-battery setup
@@ -154,7 +156,7 @@ ai-battery reset && npm uninstall -g ai-battery
 <a id="setup"></a>
 ## 设置
 
-`setup` 配置 Claude statusLine hook。Codex 默认独立运行，只恢复旧 AI Battery wrapper 和受管理配置。使用 `ai-battery --watch 2` 或支持平台上的 `ai-battery hud` 查看用量。
+`setup` 配置 Claude statusLine hook，保留并更新已有 Codex wrapper、PATH、设置和 tmux 集成。新安装需要显式选项才能启用 wrapper；使用 `reset` 解除集成。
 
 ```bash
 ai-battery setup
@@ -169,7 +171,7 @@ ai-battery setup codex
 ai-battery setup tmux
 ```
 
-这会向 `~/.tmux.conf` 添加受管理 block，在 status-right 中显示电量状态（每 10 秒刷新一次）；在该 tmux 内运行的 `codex` 会省略每个 pane 的电量行，使用完整 pane。Claude statusLine 在同一环境中也会折叠电量行，只显示 header（模型、目录、分支）一行，因为电量已经显示在 tmux bar 中。要应用配置，请运行 `tmux source-file ~/.tmux.conf` 后打开新的 pane。此 block 会覆盖现有 `status-right` 设置，因此它是 opt-in，不包含在 `setup all` 中。用 `ai-battery reset tmux` 可解除；如果希望在 tmux 内仍保留每个 pane 的状态行，请设置 `AI_BATTERY_TMUX=row`。Claude statusLine 属于 Claude Code 内部 UI，因此无论是否使用 tmux 都会显示。
+这会向 `~/.tmux.conf` 添加受管理 block，在 status-right 中显示电量状态（每 10 秒刷新一次）；在该 tmux 内运行的 `codex` 会省略每个 pane 的电量行，使用完整 pane。Claude statusLine 在同一环境中也会折叠电量行，只显示 header（模型、目录、分支）一行，因为电量已经显示在 tmux bar 中。在 tmux 内运行 setup 会应用到当前服务器；在 tmux 外需要启动 `tmux` 才能显示。新集成需显式选择，已有集成会在之后的 `setup` 中更新。用 `ai-battery reset tmux` 可解除；如果希望在 tmux 内仍保留每个 pane 的状态行，请设置 `AI_BATTERY_TMUX=row`。Claude statusLine 属于 Claude Code 内部 UI，因此无论是否使用 tmux 都会显示。
 
 如果看不到 Codex 下方状态行，请运行诊断。
 

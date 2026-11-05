@@ -1,69 +1,61 @@
 # npm release
 
-The prepared version is **0.1.25**. The npm `latest` version was 0.1.24 when checked on 2026-11-05. Preparing or pushing this release does not publish it to npm.
+The prepared version is **0.1.26**, following the published 0.1.25. Preparing or pushing this release does not publish it to npm.
 
-## Changes in 0.1.25
+## Fixes in 0.1.26
 
-- Ubuntu/Linux HUD shares the macOS panel artwork. On GNOME 45–50 a bundled display extension renders the same full-size detail SVG inside its native popup, followed by Refresh and Quit. First installation requires one sign-out/sign-in for extension discovery. Other desktops retain the StatusNotifier menu. Extension disable/disconnect restores the standard tray without duplicate icons; reset removes only owned extension files and settings. Snapshots run asynchronously, failures keep the last artwork with a retry message, and the service reconnects after unlock. XDG autostart, stop/status/reset and isolated state roots are supported; WSL continues to use the Windows HUD.
-- Help, diagnostics, setup/reset results and errors use concise Korean or English messages. Locale selection follows `LANGUAGE`, `LC_ALL`, `LC_MESSAGES`, `LANG`, then Node's default locale. Unsupported languages fall back to English. Technical terms, paths, commands and external errors remain intact.
-- Main help lists `setup`, `hud` and `on / off` first, with command and option headings. Detailed help only advertises relevant options and examples; native Windows HUD options are shown on Windows.
-- **CLI behavior change:** running `ai-battery` without arguments opens help, and the `show` command is removed. Use an integrated status line, HUD or `--watch` for continuous usage display. Existing flag-based JSON, tmux, runner and macOS menu outputs remain available to integrations.
-- `ai-battery reset` restores integrations and cleans owned files; targets can follow directly, for example `ai-battery reset claude`. `reset settings`, `reset config`, `teardown` and `uninstall` remain compatibility forms. Reset preserves npm packages and unrelated provider settings.
-- `doctor` summarizes status without treating optional Codex wrappers/status lines as missing requirements. `doctor --json` retains full diagnostic data. JSON report keys and message values remain independent of the display locale.
+- `setup` no longer invokes Codex teardown. It refreshes previously selected wrappers in place and preserves PATH blocks, built-in status lines, original-command backups and compatibility paths cached by existing shells. Wrapper replacement is atomic so an already-open script keeps its original bytes. Integration removal is explicit through `reset`.
+- POSIX setup persists the shell PATH block even when the current process already has the shim on PATH. A session-only environment no longer makes setup report success while fresh shells lose the integration.
+- A fresh install still leaves Codex independent until `--wrap-codex` or `--configure-codex-statusline` is requested. Setup explains how to enable terminal display instead of implying that standalone configuration creates a terminal row.
+- Previously selected tmux integration is refreshed by default setup, including after npm updates. Fully removed managed blocks can be installed again without discarding current user configuration. Partial/edited blocks and retargeted symlinks remain protected. tmux commands use the stable bin entrypoint and quote paths for the config parser.
+- Setup inside tmux applies owned status options to the running server without sourcing unrelated user configuration. Setup outside tmux reports `configured` and `Start: tmux`; doctor distinguishes configuration from being inside a tmux session.
+- The GNOME HUD popup removes both the content border and box-pointer border. Korean and English main/setup examples use `ai-battery setup tmux`.
 
-## Validation
-
-Run checks from this checkout and save release artifacts under `.cache/releases/0.1.25/`:
+## Validation and package preparation
 
 ```text
 npm run check
 npm run smoke:linux
+mkdir -p .cache/releases/0.1.26
 npm pack --dry-run --json
-npm pack --pack-destination .cache/releases/0.1.25 --json
+npm pack --pack-destination .cache/releases/0.1.26 --json
 ```
 
-The regression suite covers locale precedence, command help, no-argument help, removed commands, bare and targeted reset, compatibility forms, localized runtime messages, file preservation and locale-independent JSON reports. Linux HUD tests cover real GJS registration/menu export on a private session bus, snapshot refresh, provider visibility, stale-data recovery, reconnect, restart, stop/reset and literal desktop-entry argument handling. Native Linux tests require GJS and libdbusmenu; other platform tests are skipped where their runtime is unavailable. Native Windows, macOS and Windows ARM64 require their own runtime validation.
+The regression suite includes real PTYs: an already-running wrapped Codex remains interactive during setup, the same Bash command cache launches it again, a fresh shell displays the usage row, and an attached tmux client displays the bar after live setup. An open wrapper reader retains its old bytes, compatibility command paths and recovery backups survive, and user Codex/shell/tmux settings are compared exactly.
 
-On Ubuntu GNOME 50.1 / Wayland, the Linux HUD registered with the real AppIndicators host. A separate headless GNOME Shell session verifies the actual popup and saves a screenshot, checks full-size shared artwork, provider visibility/resizing, extension disable/enable, tray fallback and service shutdown. Private-bus tests also cover presenter ownership and automatic tray restoration after a display client disappears, plus extension installation/removal and foreign-file/symlink preservation.
+Also install 0.1.25 into an isolated npm prefix, open the PTY fixture, upgrade that prefix to the exact 0.1.26 tarball, and run default setup while the original terminal remains open. Save the lifecycle report, package manifest, SHA256 checksum, installed-package smoke report and publish dry-run under `.cache/releases/0.1.26/`.
 
-Inspect the package manifest for the core CLI help/message/output modules, platform modules, stable bin entrypoints and required PowerShell files. Exclude tests, logs, credentials, node_modules and `.cache`. Install the exact tarball into an isolated npm prefix, with lifecycle scripts disabled for the smoke check, and verify:
+The Linux GUI smoke test opens the actual popup in an isolated GNOME 50.1 Wayland session, verifies zero border width for the content and box pointer, and saves a screenshot. It also checks shared macOS SVG size, provider visibility, extension fallback/reconnect and shutdown. Native Windows/macOS runtime tests require their respective environments; platform-neutral regressions still run here.
 
-- npm bin links and `--version` report 0.1.25;
-- Korean and English main/command help show the intended commands and headings;
-- setup, doctor, on/off and targeted reset work with temporary provider homes;
-- invalid commands/configuration produce localized errors without changing the source file;
-- JSON reports retain the same schema and values across locales.
-
-Keep the tarball, manifest, checksum, test log, installed-package smoke report and publish dry-run output together. Publish that tested tarball rather than rebuilding it after validation.
+Inspect the tarball for runtime modules, stable bin entrypoints and required platform files. Exclude tests, logs, credentials, node_modules and `.cache`. Publish the exact tested tarball.
 
 ## Publish manually
 
-Publishing is a separate step. The current npm authentication check returned HTTP 401; authenticate before publishing:
-
 ```text
-npm login
 npm whoami
-npm publish .cache/releases/0.1.25/ai-battery-0.1.25.tgz --access public --tag latest
+npm publish .cache/releases/0.1.26/ai-battery-0.1.26.tgz --access public --tag latest
 npm view ai-battery version dist-tags --json
 ```
 
-Complete npm authentication/2FA when requested. If 0.1.25 is already published by then, increment the version and rebuild and verify the package. After successful publication, tag the tested commit `v0.1.25`.
+Authenticate with `npm login` if required, and complete npm 2FA when requested. If 0.1.26 is already published, increment the version and repeat verification. Tag the tested commit `v0.1.26` after publication.
 
-## Update or remove an installation
-
-Run separately for Windows, WSL and each Node installation:
+## Update and enable terminal display
 
 ```text
-npm install -g ai-battery@0.1.25
+npm install -g ai-battery@0.1.26
 ai-battery setup
+ai-battery setup tmux
+tmux
 ```
 
-Default Codex setup preserves independent execution. It does not install a wrapper or modify Codex settings unless explicitly requested with `--wrap-codex` or `--configure-codex-statusline`. Use a supported desktop HUD or `--watch` for usage display. There is no built-in `ai-battery update` command.
+For a Codex usage row outside tmux, enable it once with `ai-battery setup codex --wrap-codex` and run the printed source command in existing shells. New shells load it automatically. Subsequent setup calls preserve that choice. Re-running setup does not require closing running Codex sessions.
 
-Restore integrations before removing the package:
+GNOME caches loaded extension JavaScript. After its display code changes, sign out and back in when convenient, then start the HUD again. The terminal integration does not require a desktop restart.
+
+Restore integrations before explicitly removing the npm package:
 
 ```text
 ai-battery reset && npm uninstall -g ai-battery
 ```
 
-For local installs use `npm uninstall ai-battery`. Reset keeps edited/unrecognized files and incomplete recovery records, and never invokes npm uninstall. Existing Bash terminals may need `hash -r` (zsh: `rehash`) after a legacy wrapper is removed; sessions already using a wrapper keep their terminal row until they exit.
+Reset preserves edited/unrecognized files, incomplete recovery records and unrelated provider settings. It never invokes npm uninstall itself. Only explicit reset removes integrations; existing Bash terminals may then need `hash -r` (zsh: `rehash`).

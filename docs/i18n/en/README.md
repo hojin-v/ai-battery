@@ -1,5 +1,7 @@
 # AI Battery
 
+0.1.26: Setup now preserves and refreshes existing Codex wrappers, PATH, status lines and tmux integration without deleting paths cached by running shells. tmux setup distinguishes configured from active. The HUD popup has no bright border, and the main example is `ai-battery setup tmux`.
+
 0.1.25: Ubuntu/Linux now has a panel HUD with the same logos, battery bars and percentages as macOS. Help, diagnostics, setup results and errors use concise Korean/English messages. Running without a command opens help; `show` has been removed. Restore integrations with `ai-battery reset`; the previous `reset settings` and `reset config` forms remain supported.
 
 [한국어](../../../README.md) · [English](../en/) · [日本語](../ja/) · [中文](../zh/) · [Español](../es/)
@@ -55,7 +57,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | `ai-battery --watch` | Supported | Supported | Supported | Supported | Refreshes periodically inside the terminal. |
 | Claude statusLine | Supported | Supported | Supported | Supported | Saves a `node <script>` command to Claude Code `statusLine`. |
 | Codex fullscreen | Supported | Supported | Supported | Supported | Windows: fullscreen PTY composition; WSL/Linux/macOS: POSIX PTY and Python 3. |
-| `ai-battery setup codex` | Supported | Supported | Supported | Supported | Removes legacy AI Battery wrappers. New wrappers and Codex setting changes require explicit flags. |
+| `ai-battery setup codex` | Supported | Supported | Supported | Supported | Preserves and refreshes existing integrations. New wrappers and Codex setting changes require explicit flags. |
 | `ai-battery hud` | Supported | Supported | Supported | Supported | Ubuntu GNOME uses a dedicated panel display; other Linux desktops use a StatusNotifier host. |
 
 Runtime detection uses `/proc` on Linux/WSL, `ps` on macOS, and PowerShell process listings on Windows. Text output uses white/gray, while the macOS and Linux HUDs highlight only running items with colored battery bars and show inactive items in muted gray.
@@ -84,7 +86,7 @@ Run `ai-battery -h` for the main commands, or `ai-battery setup --help`, `ai-bat
    npm install -g ai-battery
    ```
 
-2. Configure the Claude statusLine and remove any legacy Codex wrapper.
+2. Refresh existing integrations and configure the Claude statusLine. Previously selected Codex wrappers and tmux integration stay enabled.
 
    ```bash
    ai-battery setup
@@ -163,7 +165,7 @@ A child CLI cannot clear its parent shell's cached command paths. Opening a new 
 
 ## Setup
 
-`setup` configures the Claude statusLine hook. Codex runs independently by default: setup restores legacy AI Battery integrations without adding a new wrapper, PATH entry or Codex configuration change.
+`setup` preserves and refreshes existing Codex wrappers, PATH, status lines and tmux integration, and configures the Claude statusLine hook. It never removes cached command paths or recovery backups. Fresh installs keep Codex independent until a wrapper or built-in status line is explicitly requested. Use `reset` to remove integrations.
 
 ```bash
 ai-battery setup
@@ -172,7 +174,7 @@ ai-battery setup
 You can configure only one side if needed.
 
 ```bash
-ai-battery setup claude
+ai-battery setup tmux
 ai-battery setup codex
 ```
 
@@ -184,7 +186,7 @@ In tmux, reserving a bottom row in every pane would duplicate the same global ba
 ai-battery setup tmux
 ```
 
-This adds a managed block to `~/.tmux.conf`, displays the battery in `status-right` with a 10-second refresh interval, and lets `codex` inside tmux use the full pane instead of adding a per-pane battery row. Claude statusLine also collapses the battery row in the same environment and shows only the header row (model, directory, branch), because the battery is already in the tmux bar. To apply it, run `tmux source-file ~/.tmux.conf` and open a new pane. This block overwrites the existing `status-right` setting, so it is opt-in and not included in `setup all`. Remove it with `ai-battery reset tmux`; set `AI_BATTERY_TMUX=row` if you want to keep per-pane rows inside tmux. Claude statusLine is part of the Claude Code internal UI, so it is displayed regardless of tmux.
+This adds a managed block to `~/.tmux.conf`, displays the battery in `status-right` with a 10-second refresh interval, and lets `codex` inside tmux use the full pane instead of adding a per-pane battery row. Claude statusLine also collapses the battery row in the same environment and shows only the header row (model, directory, branch), because the battery is already in the tmux bar. Setup inside tmux also updates the running server immediately. Outside tmux it prints `Start: tmux`; enter a tmux session to see the bar. Existing status-right text is retained. New tmux integration is opt-in; an existing integration is refreshed by later `setup` and `setup all` calls. Remove it with `ai-battery reset tmux`; set `AI_BATTERY_TMUX=row` if you want to keep per-pane rows inside tmux. Claude statusLine is part of the Claude Code internal UI, so it is displayed regardless of tmux.
 
 Run diagnostics if the Codex bottom row does not appear.
 

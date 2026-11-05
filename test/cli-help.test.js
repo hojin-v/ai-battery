@@ -58,6 +58,8 @@ for (const [language, marker] of [["ko", "사용법:"], ["en", "Usage:"]]) {
     assert.match(result.stdout, /reset\s+.+/);
     assert.doesNotMatch(result.stdout, /reset settings/);
     assert.match(result.stdout, /--help/);
+    assert.match(result.stdout, /ai-battery setup tmux/);
+    assert.doesNotMatch(result.stdout, /ai-battery setup claude/);
     assert.doesNotMatch(result.stdout, /--wrap-codex|--configure-codex-statusline/);
     assert.deepEqual(fs.readdirSync(f.root), []);
   });
@@ -91,6 +93,7 @@ for (const [language, marker] of [["ko", "사용법:"], ["en", "Usage:"]]) {
       if (command === "setup") {
         assert.doesNotMatch(result.stdout, /ai-battery-run/);
         assert.match(result.stdout, /ai-battery setup tmux/);
+        assert.doesNotMatch(result.stdout, /ai-battery setup claude/);
       }
       if (command === "--watch" || command === "capture-claude") {
         assert.doesNotMatch(result.stdout, /--menu-bar|--menu-detail-image|--hud-state/);

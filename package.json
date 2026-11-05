@@ -1,6 +1,6 @@
 {
   "name": "ai-battery",
-  "version": "0.1.25",
+  "version": "0.1.26",
   "description": "Tiny terminal battery meter for local Codex and Claude Code usage.",
   "type": "module",
   "keywords": [
