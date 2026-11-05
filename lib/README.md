@@ -9,7 +9,8 @@ implementation belongs under lib:
 - platforms/process-scanner.js: Windows, WSL, macOS, and Linux process scans.
 - platforms/macos: macOS menu bar integration.
 - platforms/linux: GJS StatusNotifierItem and native detail menu, sharing the
-  macOS panel artwork; Node snapshot worker and XDG login startup.
+  macOS panel artwork; GNOME display extension sharing the full-size macOS
+  detail image, Node snapshot worker, and owned XDG/extension setup and cleanup.
 - platforms/windows: Windows Codex runner, compositor, PATH integration, and
   HUD launcher.
 - platforms/windows/hud: WinForms modules. dock.ps1 owns terminal attachment

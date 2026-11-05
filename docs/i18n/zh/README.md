@@ -266,6 +266,8 @@ Windows autostart 会按用户注册到 `HKCU\Software\Microsoft\Windows\Current
 
 ### Ubuntu / Linux
 
+GNOME 45–50 的点击菜单也使用与 macOS 相同的全尺寸详细 SVG。首次运行会注册显示扩展，需要注销并重新登录一次；此前使用标准菜单。`ai-battery reset hud` 也会移除其拥有的显示扩展。
+
 `ai-battery hud` 在顶部面板使用与 macOS 相同的 SVG 标志、电量条和百分比。点击可查看 5h 重置时间、7d 剩余量，以及刷新和退出菜单。解锁屏幕后会自动重新连接。需要 GJS、libdbusmenu 和 StatusNotifier 主机（如 Ubuntu AppIndicators）。
 
 ```bash

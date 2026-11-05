@@ -266,6 +266,8 @@ Windows autostart は `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` に�
 
 ### Ubuntu / Linux
 
+GNOME 45–50 ではクリックメニューにも macOS と同じ詳細 SVG を原寸で表示します。初回は表示用拡張を自動登録するため、一度ログアウトして再ログインしてください。それまでは標準メニューを使用します。`ai-battery reset hud` は所有する表示用拡張も削除します。
+
 `ai-battery hud` は上部パネルに macOS と同じ SVG ロゴ、バー、割合を表示します。クリックすると 5h リセット時刻、7d 残量、更新・終了メニューを表示します。画面ロック解除後は自動で再接続します。GJS、libdbusmenu、StatusNotifier ホスト（Ubuntu AppIndicators など）が必要です。
 
 ```bash

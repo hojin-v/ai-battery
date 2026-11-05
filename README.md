@@ -56,7 +56,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | Claude statusLine        | 지원           | 지원 | 지원   | 지원  | Claude Code `statusLine`에 `node <script>` 명령을 저장합니다.                                                               |
 | Codex fullscreen         | 지원           | 지원 | 지원   | 지원  | Windows 기본값은 Fullscreen PTY 화면과 터미널 배터리 행을 합성합니다. WSL/Linux/macOS는 POSIX PTY와 `python3`를 사용합니다. |
 | `ai-battery setup codex` | 지원           | 지원 | 지원   | 지원  | 기존 AI Battery wrapper를 해제합니다. 새 wrapper나 Codex 설정 변경은 명시적 옵션이 필요합니다.                              |
-| `ai-battery hud`         | 지원           | 지원 | 지원   | 지원  | Linux는 StatusNotifier 패널 호스트가 필요합니다. Ubuntu GNOME의 AppIndicators에서 확인했습니다.                             |
+| `ai-battery hud`         | 지원           | 지원 | 지원   | 지원  | Ubuntu GNOME는 전용 패널 표시, 다른 Linux 데스크톱은 StatusNotifier 호스트를 사용합니다.                                    |
 
 실행 중 감지는 Linux/WSL은 `/proc`, macOS는 `ps`, Windows는 PowerShell 프로세스 목록을 사용합니다. 텍스트 출력은 흰색/회색으로, macOS와 Linux HUD는 실행 중인 항목만 색상 배터리바로 강조하고 비실행 항목은 흐린 회색 계열로 표시합니다.
 
@@ -292,7 +292,9 @@ HUD는 백그라운드에서 실행되고 터미널을 바로 돌려줍니다. W
 
 ### Ubuntu / Linux
 
-Ubuntu GNOME에서는 상단 패널에 macOS와 같은 SVG 로고·배터리 바·퍼센트를 표시합니다. 클릭 메뉴에서 5h 리셋 시각과 7d 잔량을 확인하고 새로고침하거나 종료할 수 있습니다. `ai-battery on/off` 설정도 바로 반영합니다. 화면 잠금이나 패널 재시작 후에는 자동으로 다시 연결됩니다.
+Ubuntu GNOME에서는 상단 패널과 클릭 메뉴 모두 macOS와 같은 SVG를 사용합니다. 클릭하면 도구명, 그래픽 배터리 바, 퍼센트, 5h 리셋 시각과 7d 잔량을 같은 크기와 정렬로 표시하며, 아래에 새로고침·종료 메뉴가 있습니다. `ai-battery on/off` 설정도 반영합니다. 화면 잠금이나 패널 재시작 후에는 자동으로 다시 연결됩니다.
+
+GNOME 45–50에서는 처음 실행할 때 전용 표시 확장을 `~/.local/share/gnome-shell/extensions/ai-battery@hnode.dev`에 설치하고 활성화합니다. `XDG_DATA_HOME`을 지정한 경우 해당 경로를 사용합니다. 새 확장을 읽으려면 최초 한 번 로그아웃·로그인이 필요합니다. 그 전이나 다른 데스크톱에서는 기본 StatusNotifier 메뉴를 사용합니다. 확장만 비활성화해도 기본 패널 아이콘으로 복귀합니다.
 
 GJS, libdbusmenu와 StatusNotifier 호스트가 필요합니다. 현재 Ubuntu 환경에서는 추가 설치 없이 실행됩니다. 구성 요소가 없다면 다음 명령으로 설치하고 Ubuntu AppIndicators 확장을 활성화하세요.
 
@@ -301,7 +303,9 @@ sudo apt install gjs gir1.2-dbusmenu-glib-0.4
 ai-battery hud
 ```
 
-`ai-battery hud autostart on`은 `~/.config/autostart/ai-battery-hud.desktop`에 로그인 자동 실행을 등록합니다. `XDG_CONFIG_HOME`이 있으면 해당 경로를 사용합니다. 기본 실행은 자동 실행을 등록하지 않습니다. `ai-battery reset hud`는 실행 중인 HUD를 종료하고 AI Battery 소유의 자동 실행 등록을 해제합니다.
+`ai-battery hud autostart on`은 `~/.config/autostart/ai-battery-hud.desktop`에 로그인 자동 실행을 등록합니다. `XDG_CONFIG_HOME`이 있으면 해당 경로를 사용합니다. 기본 실행은 자동 실행을 등록하지 않습니다. `ai-battery reset hud`는 실행 중인 HUD를 종료하고 AI Battery 소유의 자동 실행 등록과 GNOME 표시 확장을 제거합니다.
+
+GNOME 메뉴를 별도 Wayland 세션에서 검증하려면 `npm run smoke:linux`를 실행하세요. 결과와 실제 메뉴 캡처는 `.cache/linux-gnome-menu/`에 저장됩니다.
 
 ```text
 Codex  [battery:88] │ 5h 00:47 │ 7d 93%

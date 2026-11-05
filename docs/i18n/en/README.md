@@ -56,7 +56,7 @@ Codex 86% │ 5h 18:09 │ 7d 82%  ┃  Claude 4% │ 5h 18:10 │ 7d 71%
 | Claude statusLine | Supported | Supported | Supported | Supported | Saves a `node <script>` command to Claude Code `statusLine`. |
 | Codex fullscreen | Supported | Supported | Supported | Supported | Windows: fullscreen PTY composition; WSL/Linux/macOS: POSIX PTY and Python 3. |
 | `ai-battery setup codex` | Supported | Supported | Supported | Supported | Removes legacy AI Battery wrappers. New wrappers and Codex setting changes require explicit flags. |
-| `ai-battery hud` | Supported | Supported | Supported | Supported | Linux requires a StatusNotifier panel host; verified with Ubuntu GNOME AppIndicators. |
+| `ai-battery hud` | Supported | Supported | Supported | Supported | Ubuntu GNOME uses a dedicated panel display; other Linux desktops use a StatusNotifier host. |
 
 Runtime detection uses `/proc` on Linux/WSL, `ps` on macOS, and PowerShell process listings on Windows. Text output uses white/gray, while the macOS and Linux HUDs highlight only running items with colored battery bars and show inactive items in muted gray.
 
@@ -267,7 +267,9 @@ The HUD runs in the background and immediately returns control to the terminal. 
 
 ### Ubuntu / Linux
 
-On Ubuntu GNOME, the top panel uses the same SVG logos, battery bars and percentages as macOS. Click to see the 5h reset time, 7d remaining usage, Refresh and Quit. Provider visibility follows `ai-battery on/off`. The HUD reconnects after screen unlock or panel restart.
+On Ubuntu GNOME, both the panel and its click menu use the same SVGs as macOS. The detail view retains the provider names, graphical battery bars, percentages, 5h reset times and 7d remaining usage at the same size and alignment, followed by Refresh and Quit. Provider visibility follows `ai-battery on/off`. The HUD reconnects after screen unlock or panel restart.
+
+On GNOME 45–50, the first start installs and enables the display extension under `~/.local/share/gnome-shell/extensions/ai-battery@hnode.dev`, respecting `XDG_DATA_HOME`. Sign out and back in once for GNOME to discover the new extension. Until then, or on other desktops, the standard StatusNotifier menu remains available. Disabling the extension restores the standard tray icon.
 
 GJS, libdbusmenu and a StatusNotifier host are required. The tested Ubuntu environment already provides them. If needed, install the components below and enable the Ubuntu AppIndicators extension:
 
@@ -276,7 +278,9 @@ sudo apt install gjs gir1.2-dbusmenu-glib-0.4
 ai-battery hud
 ```
 
-`ai-battery hud autostart on` creates `~/.config/autostart/ai-battery-hud.desktop`, respecting `XDG_CONFIG_HOME`. A normal start does not enable autostart. `ai-battery reset hud` stops the HUD and removes its owned autostart entry.
+`ai-battery hud autostart on` creates `~/.config/autostart/ai-battery-hud.desktop`, respecting `XDG_CONFIG_HOME`. A normal start does not enable autostart. `ai-battery reset hud` stops the HUD and removes its owned autostart entry and GNOME display extension.
+
+Run `npm run smoke:linux` to verify the menu in an isolated Wayland session. Results and an actual menu screenshot are saved under `.cache/linux-gnome-menu/`.
 
 ```text
 Codex  [battery:88] │ 5h 00:47 │ 7d 93%

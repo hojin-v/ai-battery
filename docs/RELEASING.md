@@ -4,7 +4,7 @@ The prepared version is **0.1.25**. The npm `latest` version was 0.1.24 when che
 
 ## Changes in 0.1.25
 
-- Ubuntu/Linux HUD uses the same SVG logos, meters and percentages as the macOS menu bar. Its native panel menu includes usage/reset details, Refresh and Quit. GJS and libdbusmenu connect to a StatusNotifier host, including Ubuntu AppIndicators. Snapshots run asynchronously, failures keep the last artwork with a retry message, and the service reconnects after unlock. XDG autostart, stop/status/reset and isolated state roots are supported; WSL continues to use the Windows HUD.
+- Ubuntu/Linux HUD shares the macOS panel artwork. On GNOME 45–50 a bundled display extension renders the same full-size detail SVG inside its native popup, followed by Refresh and Quit. First installation requires one sign-out/sign-in for extension discovery. Other desktops retain the StatusNotifier menu. Extension disable/disconnect restores the standard tray without duplicate icons; reset removes only owned extension files and settings. Snapshots run asynchronously, failures keep the last artwork with a retry message, and the service reconnects after unlock. XDG autostart, stop/status/reset and isolated state roots are supported; WSL continues to use the Windows HUD.
 - Help, diagnostics, setup/reset results and errors use concise Korean or English messages. Locale selection follows `LANGUAGE`, `LC_ALL`, `LC_MESSAGES`, `LANG`, then Node's default locale. Unsupported languages fall back to English. Technical terms, paths, commands and external errors remain intact.
 - Main help lists `setup`, `hud` and `on / off` first, with command and option headings. Detailed help only advertises relevant options and examples; native Windows HUD options are shown on Windows.
 - **CLI behavior change:** running `ai-battery` without arguments opens help, and the `show` command is removed. Use an integrated status line, HUD or `--watch` for continuous usage display. Existing flag-based JSON, tmux, runner and macOS menu outputs remain available to integrations.
@@ -17,13 +17,14 @@ Run checks from this checkout and save release artifacts under `.cache/releases/
 
 ```text
 npm run check
+npm run smoke:linux
 npm pack --dry-run --json
 npm pack --pack-destination .cache/releases/0.1.25 --json
 ```
 
 The regression suite covers locale precedence, command help, no-argument help, removed commands, bare and targeted reset, compatibility forms, localized runtime messages, file preservation and locale-independent JSON reports. Linux HUD tests cover real GJS registration/menu export on a private session bus, snapshot refresh, provider visibility, stale-data recovery, reconnect, restart, stop/reset and literal desktop-entry argument handling. Native Linux tests require GJS and libdbusmenu; other platform tests are skipped where their runtime is unavailable. Native Windows, macOS and Windows ARM64 require their own runtime validation.
 
-On Ubuntu GNOME 50.1 / Wayland, the Linux HUD registered with the real AppIndicators host. While the desktop was locked, its waiting/reconnect state was verified; a private bus also verified host disappearance and return without changing the user's desktop.
+On Ubuntu GNOME 50.1 / Wayland, the Linux HUD registered with the real AppIndicators host. A separate headless GNOME Shell session verifies the actual popup and saves a screenshot, checks full-size shared artwork, provider visibility/resizing, extension disable/enable, tray fallback and service shutdown. Private-bus tests also cover presenter ownership and automatic tray restoration after a display client disappears, plus extension installation/removal and foreign-file/symlink preservation.
 
 Inspect the package manifest for the core CLI help/message/output modules, platform modules, stable bin entrypoints and required PowerShell files. Exclude tests, logs, credentials, node_modules and `.cache`. Install the exact tarball into an isolated npm prefix, with lifecycle scripts disabled for the smoke check, and verify:
 

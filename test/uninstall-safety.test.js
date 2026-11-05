@@ -26,6 +26,7 @@ function fixture(t) {
   for (const directory of [home, state, data, codex, claude, temp]) fs.mkdirSync(directory, { recursive: true });
   function write(file, text) { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); return file; }
   const env = { ...process.env, HOME: home, USERPROFILE: home, CODEX_HOME: codex,
+    XDG_CONFIG_HOME: path.join(root, "xdg-config"), XDG_DATA_HOME: path.join(root, "xdg-data"),
     LOCALAPPDATA: path.join(root, "localappdata"), APPDATA: path.join(root, "appdata"), TEMP: temp, TMP: temp, TMPDIR: temp,
     PATH: [path.dirname(process.execPath), ...(process.platform === "win32" ? [path.join(process.env.SystemRoot, "System32"), path.join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0")] : ["/usr/bin", "/bin"])].join(path.delimiter),
     AI_BATTERY_STATE_DIR: state, AI_BATTERY_DATA_DIR: data, AI_BATTERY_SHARED_USAGE_STATE_DIR: path.join(root, "shared"),

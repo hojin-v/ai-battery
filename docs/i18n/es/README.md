@@ -266,6 +266,8 @@ El autostart de Windows se registra por usuario en `HKCU\Software\Microsoft\Wind
 
 ### Ubuntu / Linux
 
+En GNOME 45–50, el menú también muestra el mismo SVG de detalle de macOS a tamaño completo. El primer inicio registra una extensión de visualización; cierra y vuelve a iniciar sesión una vez para activarla. Hasta entonces se conserva el menú estándar. `ai-battery reset hud` también elimina su extensión de visualización.
+
 `ai-battery hud` muestra los mismos logos SVG, barras y porcentajes de macOS en el panel superior. Al hacer clic aparecen la hora de reset 5h, el uso restante 7d y las acciones de actualizar y salir. Se reconecta al desbloquear la pantalla. Requiere GJS, libdbusmenu y un host StatusNotifier, como Ubuntu AppIndicators.
 
 ```bash

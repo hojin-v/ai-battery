@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { createLinuxHudPlatform, desktopExecArg, linuxHudBusName, linuxHudStateDir, parseLinuxHudArgs } from "../lib/platforms/linux/hud.js";
 import { cleanupBatteryArtifacts } from "../lib/core/uninstall.js";
+import { createGnomeHudIntegration, gnomeHudMetadata } from "../lib/platforms/linux/gnome.js";
 
 const source = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const linux = { skip: process.platform !== "linux" };
@@ -18,7 +19,7 @@ function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "ai-battery-linux-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const home = path.join(root, "home");
-  const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(root, "config"), AI_BATTERY_STATE_DIR: path.join(root, "state") };
+  const env = { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(root, "config"), XDG_DATA_HOME: path.join(root, "xdg-data"), AI_BATTERY_STATE_DIR: path.join(root, "state") };
   const hud = createLinuxHudPlatform({ home, env, scriptDir: path.join(source, "bin") });
   return { root, home, env, hud };
 }
@@ -89,15 +90,74 @@ test("Linux reset only removes owned panel artwork and logs", linux, (t) => {
   const state = f.env.AI_BATTERY_STATE_DIR;
   const icon = path.join(state, "linux-hud", `icon-${"a".repeat(64)}.svg`);
   const note = path.join(state, "linux-hud", "notes.svg");
+  const detail = path.join(state, "linux-hud", `detail-${"b".repeat(64)}.svg`);
   fs.mkdirSync(path.dirname(icon), { recursive: true });
   fs.writeFileSync(icon, "<svg/>");
+  fs.writeFileSync(detail, "<svg/>");
   fs.writeFileSync(note, "user content");
   fs.writeFileSync(path.join(state, "linux-hud.log"), "owned log");
   const result = cleanupBatteryArtifacts({ roots: [state], home: f.home });
   assert.deepEqual(result.errors, []);
   assert.equal(fs.existsSync(icon), false);
+  assert.equal(fs.existsSync(detail), false);
   assert.equal(fs.existsSync(path.join(state, "linux-hud.log")), false);
   assert.equal(fs.readFileSync(note, "utf8"), "user content");
+});
+
+function gnomeFixture(t, info = { available: true, version: "50.1", allowed: true, state: null }) {
+  const f = fixture(t);
+  const calls = [];
+  const integration = createGnomeHudIntegration({ home: f.home, env: { ...f.env, XDG_DATA_HOME: path.join(f.root, "data") },
+    run(_command, argv) {
+      calls.push(argv.at(-1));
+      return { status: 0, stdout: JSON.stringify({ ...info, accepted: info.state !== null }) };
+    } });
+  return { ...f, integration, calls, info };
+}
+
+test("GNOME menu integration installs once and removes only its own files", (t) => {
+  const f = gnomeFixture(t);
+  assert.equal(f.integration.prepare().pending, true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.integration.target, "metadata.json"), "utf8")), gnomeHudMetadata);
+  assert.match(fs.readFileSync(path.join(f.integration.target, "extension.js"), "utf8"), /AI Battery managed GNOME panel/);
+  f.info.state = 1;
+  assert.equal(f.integration.prepare().pending, false);
+  const note = path.join(f.integration.target, "notes.txt");
+  fs.writeFileSync(note, "user data");
+  assert.equal(f.integration.remove().changed, true);
+  assert.equal(fs.existsSync(path.join(f.integration.target, "extension.js")), false);
+  assert.equal(fs.readFileSync(note, "utf8"), "user data");
+  assert.equal(f.calls.at(-1), "disable");
+});
+
+test("GNOME menu integration preserves foreign files and symlink replacements", linux, (t) => {
+  const f = gnomeFixture(t);
+  fs.mkdirSync(f.integration.target, { recursive: true });
+  const metadata = path.join(f.integration.target, "metadata.json");
+  const code = path.join(f.integration.target, "extension.js");
+  fs.writeFileSync(metadata, JSON.stringify({ uuid: gnomeHudMetadata.uuid }));
+  fs.writeFileSync(code, "foreign code");
+  assert.throws(() => f.integration.prepare(), /ownership/);
+  assert.throws(() => f.integration.remove(), /ownership/);
+  assert.equal(fs.readFileSync(code, "utf8"), "foreign code");
+  fs.writeFileSync(metadata, JSON.stringify(gnomeHudMetadata));
+  const foreign = path.join(f.root, "foreign.js");
+  fs.writeFileSync(foreign, "keep this");
+  fs.unlinkSync(code);
+  fs.symlinkSync(foreign, code);
+  assert.throws(() => f.integration.prepare(), /ownership/);
+  assert.throws(() => f.integration.remove(), /ownership/);
+  assert.equal(fs.readFileSync(foreign, "utf8"), "keep this");
+  assert.ok(f.calls.every(action => action === "info"));
+});
+
+test("Other desktops retain their standard tray without installing a GNOME extension", (t) => {
+  for (const info of [{ available: false }, { available: true, version: "44.0" }]) {
+    const f = gnomeFixture(t, info);
+    assert.deepEqual(f.integration.prepare(), { supported: false });
+    assert.equal(fs.existsSync(f.integration.target), false);
+    assert.deepEqual(f.calls, ["info"]);
+  }
 });
 
 // A private session bus exercises the real GJS service without touching the user's panel.
@@ -112,7 +172,7 @@ async function linuxSessionScenario() {
   const { createLinuxHudPlatform } = await import(pathToFileURL(path.join(source, "lib/platforms/linux/hud.js")));
   const cli = path.join(source, "bin/ai-battery.js");
   const env = { ...process.env, HOME: path.join(root, "home"), CODEX_HOME: path.join(root, "codex"),
-    XDG_CONFIG_HOME: path.join(root, "config"), GIO_USE_VFS: "local",
+    XDG_CONFIG_HOME: path.join(root, "config"), XDG_DATA_HOME: path.join(root, "xdg-data"), GIO_USE_VFS: "local",
     AI_BATTERY_STATE_DIR: path.join(root, "state"), AI_BATTERY_DATA_DIR: path.join(root, "data"),
     AI_BATTERY_SHARED_USAGE_STATE_DIR: path.join(root, "shared"), DISPLAY: ":test", LANGUAGE: "ko", AI_BATTERY_NO_UPDATE_CHECK: "1" };
   fs.mkdirSync(path.join(env.CODEX_HOME, "sessions"), { recursive: true });
@@ -140,6 +200,7 @@ async function linuxSessionScenario() {
     let exported;const owner=Gio.bus_own_name(Gio.BusType.SESSION,'org.kde.StatusNotifierWatcher',Gio.BusNameOwnerFlags.NONE,c=>{exported=Gio.DBusExportedObject.wrapJSObject(xml,{RegisterStatusNotifierItem(){}});exported.export(c,'/StatusNotifierWatcher');},()=>{GLib.file_set_contents(ARGV[0],new TextEncoder().encode('ready'));},()=>{});
     new GLib.MainLoop(null,false).run();`);
   let watcher;
+  let presenter;
   const startWatcher = async () => {
     fs.rmSync(watcherReady, { force: true });
     watcher = spawn("gjs", ["-m", watcherPath, watcherReady], { env, stdio: "ignore" });
@@ -183,6 +244,23 @@ async function linuxSessionScenario() {
     const artwork = fs.readFileSync(initial.icon, "utf8");
     assert.match(artwork, /#315CFF/);
     assert.match(artwork, /#D97706/);
+    assert.equal(fs.readFileSync(initial.detailImage, "utf8"), fs.readFileSync(path.join(env.AI_BATTERY_STATE_DIR, "macos-menu-detail.svg"), "utf8"));
+    assert.match(fs.readFileSync(initial.detailImage, "utf8"), /width="392"/);
+    const presenterPath = path.join(root, "presenter.js");
+    const presenterReady = path.join(root, "presenter-ready");
+    fs.writeFileSync(presenterPath, `import Gio from 'gi://Gio';import GLib from 'gi://GLib';
+      Gio.DBus.session.call_sync(ARGV[0],'/org/hnode/AiBattery/Hud','org.hnode.AiBattery.Hud','Claim',null,null,Gio.DBusCallFlags.NONE,3000,null);
+      GLib.file_set_contents(ARGV[1],new TextEncoder().encode('ready'));new GLib.MainLoop(null,false).run();`);
+    presenter = spawn("gjs", ["-m", presenterPath, hud.busName, presenterReady], { env, stdio: "ignore" });
+    await wait(() => fs.existsSync(presenterReady));
+    assert.equal(status().presentation, "gnome");
+    assert.equal(probe().properties.Status, "Passive");
+    const presenterEnded = new Promise(resolve => presenter.once("exit", resolve));
+    presenter.kill("SIGTERM");
+    await presenterEnded;
+    presenter = null;
+    await wait(() => status().presentation === "status-notifier");
+    assert.equal(probe().properties.Status, "Active");
 
     fs.writeFileSync(mode, "error");
     hud.linuxHudControl("refresh");
@@ -218,6 +296,7 @@ async function linuxSessionScenario() {
     assert.equal(fs.existsSync(hud.desktopFile), false);
     process.stdout.write("Linux panel registration, menu, data refresh, stale recovery, visibility, unlock reconnect, restart and stop passed.\n");
   } finally {
+    presenter?.kill("SIGTERM");
     try { if (status().running) hud.linuxHudControl("quit"); } catch {}
     await stopWatcher();
   }
