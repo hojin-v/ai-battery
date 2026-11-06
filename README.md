@@ -1,5 +1,7 @@
 # AI Battery
 
+0.1.29: GNOME 확장 UUID를 `ai-battery@hnode`로 변경했습니다. 기존 `ai-battery@hnode.dev` 설치는 HUD 시작 시 자동 이전하며 reset은 두 UUID의 관리 파일을 정리합니다.
+
 0.1.28: `setup`만으로 Codex TUI가 연결되던 0.1.24의 기본 동작을 복원했습니다. 신규 설치·업데이트·reset 후 setup을 동일하게 처리합니다. `doctor`는 표시 설정(Visibility), TUI 연동 상태, 현재 세션을 구분하고 누락된 연동·PATH·의존성에 맞는 조치를 안내합니다. [회귀 원인과 검증](docs/SETUP-REGRESSION.md).
 
 0.1.27: 한글 오류 메시지가 포함된 하단 사용량 줄이 갱신될 때 Codex 화면에 여러 줄로 누적되던 문제를 수정했습니다. 화면 칸 수를 기준으로 너비를 제한하고 불필요한 공백 채우기를 제거했습니다. 하단 바의 데이터 없음 표시는 `Claude --%`처럼 간결하게 표시합니다.
@@ -304,7 +306,7 @@ HUD는 백그라운드에서 실행되고 터미널을 바로 돌려줍니다. W
 
 Ubuntu GNOME에서는 상단 패널과 클릭 메뉴 모두 macOS와 같은 SVG를 사용합니다. 클릭하면 도구명, 그래픽 배터리 바, 퍼센트, 5h 리셋 시각과 7d 잔량을 같은 크기와 정렬로 표시하며, 아래에 새로고침·종료 메뉴가 있습니다. `ai-battery on/off` 설정도 반영합니다. 화면 잠금이나 패널 재시작 후에는 자동으로 다시 연결됩니다.
 
-GNOME 45–50에서는 처음 실행할 때 전용 표시 확장을 `~/.local/share/gnome-shell/extensions/ai-battery@hnode.dev`에 설치하고 활성화합니다. `XDG_DATA_HOME`을 지정한 경우 해당 경로를 사용합니다. 새 확장을 읽으려면 최초 한 번 로그아웃·로그인이 필요합니다. 그 전이나 다른 데스크톱에서는 기본 StatusNotifier 메뉴를 사용합니다. 확장만 비활성화해도 기본 패널 아이콘으로 복귀합니다.
+GNOME 45–50에서는 처음 실행할 때 전용 표시 확장을 `~/.local/share/gnome-shell/extensions/ai-battery@hnode`에 설치하고 활성화합니다. `XDG_DATA_HOME`을 지정한 경우 해당 경로를 사용합니다. 새 확장을 읽으려면 최초 한 번 로그아웃·로그인이 필요합니다. 그 전이나 다른 데스크톱에서는 기본 StatusNotifier 메뉴를 사용합니다. 확장만 비활성화해도 기본 패널 아이콘으로 복귀합니다.
 
 GJS, libdbusmenu와 StatusNotifier 호스트가 필요합니다. 현재 Ubuntu 환경에서는 추가 설치 없이 실행됩니다. 구성 요소가 없다면 다음 명령으로 설치하고 Ubuntu AppIndicators 확장을 활성화하세요.
 

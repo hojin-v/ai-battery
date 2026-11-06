@@ -1,6 +1,10 @@
 # npm release
 
-The prepared version is **0.1.28**, following the published 0.1.27. Preparing or pushing this release does not publish it to npm.
+The prepared version is **0.1.29**, following the published 0.1.28. Preparing or pushing this release does not publish it to npm.
+
+## Fixes in 0.1.29
+
+- Change the GNOME extension UUID to `ai-battery@hnode`. Migrate the owned legacy `ai-battery@hnode.dev` directory and activation settings during HUD startup. Reset handles both identities and preserves unrelated files. GNOME may require a new login to discover the new UUID.
 
 ## Fixes in 0.1.28
 
@@ -28,16 +32,16 @@ The active runner keeps its Python code until the next launch. Updating the CLI 
 ```text
 npm run check
 npm run smoke:linux
-mkdir -p .cache/releases/0.1.28
+mkdir -p .cache/releases/0.1.29
 npm pack --dry-run --json
-npm pack --pack-destination .cache/releases/0.1.28 --json
+npm pack --pack-destination .cache/releases/0.1.29 --json
 ```
 
 The regression suite includes real PTYs: an already-running wrapped Codex remains interactive during setup, the same Bash command cache launches it again, a fresh shell displays the usage row, and an attached tmux client displays the bar after live setup. An open wrapper reader retains its old bytes, compatibility command paths and recovery backups survive, and user Codex/shell/tmux settings are compared exactly.
 
 POSIX screen regressions replay actual output into a terminal emulator and inspect the rendered rows, cursor and scrollback. They cover repeated Korean error rows, narrow widths, wide/combining characters, control sequences, shorter replacement text, resize and keyboard input through a live PTY.
 
-Also install each of 0.1.24 and 0.1.27 into an isolated npm prefix, open the PTY fixture, upgrade that prefix to the exact 0.1.28 tarball, and run default setup while the original terminal remains open. Save the lifecycle report, package manifest, SHA256 checksum, installed-package smoke report and publish dry-run under `.cache/releases/0.1.28/`.
+Also install each of 0.1.24 and 0.1.27 into an isolated npm prefix, open the PTY fixture, upgrade that prefix to the exact 0.1.29 tarball, and run default setup while the original terminal remains open. Save the lifecycle report, package manifest, SHA256 checksum, installed-package smoke report and publish dry-run under `.cache/releases/0.1.29/`.
 
 The Linux GUI smoke test opens the actual popup in an isolated GNOME 50.1 Wayland session, verifies zero border width for the content and box pointer, and saves a screenshot. It also checks shared macOS SVG size, provider visibility, extension fallback/reconnect and shutdown. Native Windows/macOS runtime tests require their respective environments; platform-neutral regressions still run here.
 
@@ -47,16 +51,16 @@ Inspect the tarball for runtime modules, stable bin entrypoints and required pla
 
 ```text
 npm whoami
-npm publish .cache/releases/0.1.28/ai-battery-0.1.28.tgz --access public --tag latest
+npm publish .cache/releases/0.1.29/ai-battery-0.1.29.tgz --access public --tag latest
 npm view ai-battery version dist-tags --json
 ```
 
-Authenticate with `npm login` if required, and complete npm 2FA when requested. If 0.1.28 is already published, increment the version and repeat verification. Tag the tested commit `v0.1.28` after publication.
+Authenticate with `npm login` if required, and complete npm 2FA when requested. If 0.1.29 is already published, increment the version and repeat verification. Tag the tested commit `v0.1.29` after publication.
 
 ## Update and enable terminal display
 
 ```text
-npm install -g ai-battery@0.1.28
+npm install -g ai-battery@0.1.29
 ai-battery setup
 ai-battery setup tmux
 tmux

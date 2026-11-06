@@ -1,5 +1,7 @@
 # AI Battery
 
+0.1.29: El UUID de la extensión GNOME cambia a `ai-battery@hnode`. El inicio del HUD migra la instalación administrada con el UUID anterior.
+
 0.1.28: Se restaura la configuración automática de la fila de Codex con setup, también tras reset y las actualizaciones. Doctor distingue visibilidad, integración y sesión actual, y muestra acciones de recuperación específicas.
 
 0.1.27: Se corrigen las filas de uso duplicadas en Codex cuando un mensaje en coreano se desbordaba en la última fila del terminal. POSIX limita el ancho por celdas de pantalla sin rellenar con espacios. Los proveedores sin datos muestran etiquetas breves como `Claude --%`.

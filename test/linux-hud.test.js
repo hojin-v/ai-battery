@@ -109,7 +109,7 @@ function gnomeFixture(t, info = { available: true, version: "50.1", allowed: tru
   const calls = [];
   const integration = createGnomeHudIntegration({ home: f.home, env: { ...f.env, XDG_DATA_HOME: path.join(f.root, "data") },
     run(_command, argv) {
-      calls.push(argv.at(-1));
+      calls.push(argv[2]);
       return { status: 0, stdout: JSON.stringify({ ...info, accepted: info.state !== null }) };
     } });
   return { ...f, integration, calls, info };
@@ -117,6 +117,7 @@ function gnomeFixture(t, info = { available: true, version: "50.1", allowed: tru
 
 test("GNOME menu integration installs once and removes only its own files", (t) => {
   const f = gnomeFixture(t);
+  assert.equal(gnomeHudMetadata.uuid, "ai-battery@hnode");
   assert.equal(f.integration.prepare().pending, true);
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(f.integration.target, "metadata.json"), "utf8")), gnomeHudMetadata);
   assert.match(fs.readFileSync(path.join(f.integration.target, "extension.js"), "utf8"), /AI Battery managed GNOME panel/);
@@ -128,6 +129,47 @@ test("GNOME menu integration installs once and removes only its own files", (t) 
   assert.equal(fs.existsSync(path.join(f.integration.target, "extension.js")), false);
   assert.equal(fs.readFileSync(note, "utf8"), "user data");
   assert.equal(f.calls.at(-1), "disable");
+});
+
+test("GNOME UUID migration removes the managed old identity and preserves unrelated files", (t) => {
+  const f = gnomeFixture(t);
+  const legacy = path.join(path.dirname(f.integration.target), "ai-battery@hnode.dev");
+  fs.mkdirSync(legacy, { recursive: true });
+  fs.writeFileSync(path.join(legacy, "metadata.json"), JSON.stringify({ ...gnomeHudMetadata, uuid: "ai-battery@hnode.dev" }));
+  fs.writeFileSync(path.join(legacy, "extension.js"), "old managed code");
+  fs.writeFileSync(path.join(legacy, "notes.txt"), "user content");
+  const result = f.integration.prepare();
+  assert.deepEqual(result.migrated, ["ai-battery@hnode.dev"]);
+  assert.equal(path.basename(result.path), "ai-battery@hnode");
+  assert.equal(fs.existsSync(path.join(legacy, "metadata.json")), false);
+  assert.equal(fs.existsSync(path.join(legacy, "extension.js")), false);
+  assert.equal(fs.readFileSync(path.join(legacy, "notes.txt"), "utf8"), "user content");
+  assert.deepEqual(f.calls, ["info", "disable", "enable"]);
+  assert.deepEqual(f.integration.prepare().migrated, []);
+  assert.equal(fs.readFileSync(path.join(legacy, "notes.txt"), "utf8"), "user content");
+});
+
+test("GNOME reset cleans a managed legacy UUID before it has been migrated", (t) => {
+  const f = gnomeFixture(t);
+  const legacy = path.join(path.dirname(f.integration.target), "ai-battery@hnode.dev");
+  fs.mkdirSync(legacy, { recursive: true });
+  fs.writeFileSync(path.join(legacy, "metadata.json"), JSON.stringify({ ...gnomeHudMetadata, uuid: "ai-battery@hnode.dev" }));
+  fs.writeFileSync(path.join(legacy, "extension.js"), "old managed code");
+  assert.equal(f.integration.remove().changed, true);
+  assert.equal(fs.existsSync(legacy), false);
+  assert.deepEqual(f.calls, ["disable"]);
+});
+
+test("GNOME migration preserves foreign legacy extensions before modifying the new installation", (t) => {
+  const f = gnomeFixture(t);
+  const legacy = path.join(path.dirname(f.integration.target), "ai-battery@hnode.dev");
+  fs.mkdirSync(legacy, { recursive: true });
+  fs.writeFileSync(path.join(legacy, "metadata.json"), JSON.stringify({ uuid: "ai-battery@hnode.dev" }));
+  fs.writeFileSync(path.join(legacy, "extension.js"), "foreign code");
+  assert.throws(() => f.integration.prepare(), /ownership/);
+  assert.equal(fs.existsSync(f.integration.target), false);
+  assert.equal(fs.readFileSync(path.join(legacy, "extension.js"), "utf8"), "foreign code");
+  assert.deepEqual(f.calls, ["info"]);
 });
 
 test("GNOME menu integration preserves foreign files and symlink replacements", linux, (t) => {

@@ -1,5 +1,7 @@
 # AI Battery
 
+0.1.29: The GNOME extension UUID is now `ai-battery@hnode`. HUD startup migrates the managed `ai-battery@hnode.dev` installation; reset handles both identities.
+
 0.1.28: Restored automatic Codex terminal display with plain setup, including after reset and upgrades. Doctor separates visibility, integration readiness and the current session, with specific recovery actions. The original executable, settings and sessions remain preserved.
 
 0.1.27: Fixed duplicate usage rows accumulating in Codex when Korean status text wrapped at the bottom of the terminal. POSIX rendering now clips by screen cells without space padding. Unavailable providers use compact labels such as `Claude --%` in bounded rows.
@@ -275,7 +277,7 @@ The HUD runs in the background and immediately returns control to the terminal. 
 
 On Ubuntu GNOME, both the panel and its click menu use the same SVGs as macOS. The detail view retains the provider names, graphical battery bars, percentages, 5h reset times and 7d remaining usage at the same size and alignment, followed by Refresh and Quit. Provider visibility follows `ai-battery on/off`. The HUD reconnects after screen unlock or panel restart.
 
-On GNOME 45–50, the first start installs and enables the display extension under `~/.local/share/gnome-shell/extensions/ai-battery@hnode.dev`, respecting `XDG_DATA_HOME`. Sign out and back in once for GNOME to discover the new extension. Until then, or on other desktops, the standard StatusNotifier menu remains available. Disabling the extension restores the standard tray icon.
+On GNOME 45–50, the first start installs and enables the display extension under `~/.local/share/gnome-shell/extensions/ai-battery@hnode`, respecting `XDG_DATA_HOME`. Sign out and back in once for GNOME to discover the new extension. Until then, or on other desktops, the standard StatusNotifier menu remains available. Disabling the extension restores the standard tray icon.
 
 GJS, libdbusmenu and a StatusNotifier host are required. The tested Ubuntu environment already provides them. If needed, install the components below and enable the Ubuntu AppIndicators extension:
 

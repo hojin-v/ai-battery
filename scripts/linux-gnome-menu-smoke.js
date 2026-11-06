@@ -32,7 +32,7 @@ export async function run() {
   const source = GLib.getenv("AI_BATTERY_MENU_SOURCE");
   const node = GLib.getenv("AI_BATTERY_MENU_NODE");
   const name = GLib.getenv("AI_BATTERY_MENU_BUS");
-  const uuid = "ai-battery@hnode.dev";
+  const uuid = GLib.getenv("AI_BATTERY_MENU_UUID");
   Main.overview.hide();
   const backend = Gio.Subprocess.new(["gjs", "-m", `${source}/lib/platforms/linux/panel.js`, "--bus-name", name,
     "--node", node, "--snapshot", `${source}/lib/platforms/linux/panel-snapshot.js`, "--state-dir", `${root}/state`, "--provider", "all"],
@@ -42,6 +42,15 @@ export async function run() {
     extension = Main.extensionManager.lookup(uuid)?.stateObj;
     return extension?._panels?.size === 1;
   });
+  // GNOME can retain the disabled old UUID after its directory was migrated.
+  // Exercise the real controller against Shell and dconf, not a command stub.
+  const settings = new Gio.Settings({ schema_id: "org.gnome.shell" });
+  const disabled = settings.get_strv("disabled-extensions").filter(value => value !== "ai-battery@hnode.dev");
+  settings.set_strv("disabled-extensions", [...disabled, "ai-battery@hnode.dev"]);
+  Gio.Settings.sync();
+  await command(["gjs", "-m", `${source}/lib/platforms/linux/gnome-control.js`, "enable", uuid]);
+  await until(() => !settings.get_strv("disabled-extensions").includes("ai-battery@hnode.dev"));
+  expect(settings.get_strv("disabled-extensions").join("\0") === disabled.join("\0"), "Migration must preserve unrelated disabled extensions");
   let panel = extension._panels.get(name);
   await until(() => panel.data.presentation === "gnome");
   expect(panel.detail.width === 392, "Detail artwork must retain the macOS width");
@@ -90,7 +99,7 @@ export async function run() {
   await call(name, "Quit");
   await until(() => extension._panels.size === 0);
   const result = { result: "passed", checks: ["Shared macOS detail SVG at full size", "Open GNOME menu renders artwork",
-    "Korean menu actions", "Provider visibility and image resizing", "Standard tray fallback on disable", "Enable/reconnect and service shutdown"],
+    "Korean menu actions", "Provider visibility and image resizing", "Legacy UUID settings cleanup", "Standard tray fallback on disable", "Enable/reconnect and service shutdown"],
   screenshot: `${root}/detail-menu.png`, fullScreenshot: `${root}/menu.png`, detailImage: detailPath };
   GLib.file_set_contents(`${root}/result.json`, new TextEncoder().encode(JSON.stringify(result, null, 2)));
   print(JSON.stringify(result));

@@ -29,6 +29,7 @@ const env = { ...process.env, HOME: home, CODEX_HOME: codex, LANGUAGE: "ko", GIO
   AI_BATTERY_STATE_DIR: path.join(root, "state"), AI_BATTERY_DATA_DIR: path.join(root, "data"),
   AI_BATTERY_SHARED_USAGE_STATE_DIR: path.join(root, "shared"), AI_BATTERY_NO_UPDATE_CHECK: "1",
   AI_BATTERY_MENU_ROOT: root, AI_BATTERY_MENU_SOURCE: runtime, AI_BATTERY_MENU_NODE: process.execPath,
+  AI_BATTERY_MENU_UUID: gnomeHudMetadata.uuid,
   AI_BATTERY_MENU_BUS: linuxHudBusName(path.join(root, "state")) };
 for (const key of ["DISPLAY", "WAYLAND_DISPLAY", "GNOME_KEYRING_CONTROL", "GNOME_SETUP_DISPLAY", "SESSION_MANAGER", "DBUS_STARTER_ADDRESS", "DBUS_STARTER_BUS_TYPE"]) delete env[key];
 const on = spawnSync(process.execPath, [path.join(runtime, "bin/ai-battery.js"), "on", "all"], { env, encoding: "utf8" });
